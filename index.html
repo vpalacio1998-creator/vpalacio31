@@ -9,10 +9,10 @@
 <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root{
-  --bg:#FFF6FA; --surface:#FFFFFF; --ink:#2A1330; --muted:#7A6280; --line:#F0DCE6;
-  --fresa:#E2336B; --mango:#F5A000; --menta:#1A9A72; --uva:#6B3FA0; --cielo:#2A82CC; --coral:#F06A4A;
-  --fresa-soft:#FFE3EC; --mango-soft:#FFF0CC; --menta-soft:#D9F5EA; --uva-soft:#ECE0FA; --cielo-soft:#DDEEFB; --coral-soft:#FFE4DC;
-  --danger:#C62828; --shadow:0 2px 0 rgba(42,19,48,.08);
+  --bg:#FCF0E6; --surface:#FFFAF4; --ink:#22362B; --muted:#6B7F72; --line:#EADCCB;
+  --marca:#3E7F5F; --mango:#5A9A6E; --menta:#2F7D5C; --uva:#4F8F7A; --cielo:#6FA37F; --coral:#3F8A6B; --logo:#8CBA9C; --on-marca:#FFFFFF;
+  --marca-soft:#DCEBE0; --mango-soft:#E6F1DE; --menta-soft:#D6EBE2; --uva-soft:#DCEBE0; --cielo-soft:#E3EEE0; --coral-soft:#D9EAD9;
+  --danger:#C62828; --danger-soft:#F8DDD8; --shadow:0 2px 0 rgba(34,54,43,.08);
   --display:"Fredoka", "Trebuchet MS", system-ui, sans-serif;
   --body:"Figtree", "Segoe UI", system-ui, -apple-system, sans-serif;
   box-sizing:border-box;
@@ -21,17 +21,19 @@
 }
 @media (prefers-color-scheme: dark){
   :root:not([data-theme="light"]){
-    --bg:#1A0F1D; --surface:#261729; --ink:#F8EAF2; --muted:#B79BBE; --line:#3A2640;
-    --fresa:#FF5C8D; --mango:#FFC247; --menta:#3CC99A; --uva:#A47BE0; --cielo:#5AAEF0; --coral:#FF8A6B;
-    --fresa-soft:#4A1A2E; --mango-soft:#46340F; --menta-soft:#123B2E; --uva-soft:#33204F; --cielo-soft:#16324A; --coral-soft:#4A2219;
-    --danger:#FF6B6B; --shadow:0 2px 0 rgba(0,0,0,.3);
+    --bg:#15201A; --surface:#1E2B23; --ink:#EAF3EA; --muted:#9DB3A4; --line:#2E4136;
+    --marca:#8CBA9C; --mango:#7FB48F; --menta:#6FCB9B; --uva:#78B5A0; --cielo:#98C7A6; --coral:#82BC98; --logo:#8CBA9C; --on-marca:#12201A;
+    --marca-soft:#24402F; --mango-soft:#2A4530; --menta-soft:#234038; --uva-soft:#24402F; --cielo-soft:#2C4634; --coral-soft:#284434;
+    --danger:#FF7B7B; --danger-soft:#4A2323; --shadow:0 2px 0 rgba(0,0,0,.3);
+    color-scheme:dark;
   }
 }
 :root[data-theme="dark"]{
-  --bg:#1A0F1D; --surface:#261729; --ink:#F8EAF2; --muted:#B79BBE; --line:#3A2640;
-  --fresa:#FF5C8D; --mango:#FFC247; --menta:#3CC99A; --uva:#A47BE0; --cielo:#5AAEF0; --coral:#FF8A6B;
-  --fresa-soft:#4A1A2E; --mango-soft:#46340F; --menta-soft:#123B2E; --uva-soft:#33204F; --cielo-soft:#16324A; --coral-soft:#4A2219;
-  --danger:#FF6B6B; --shadow:0 2px 0 rgba(0,0,0,.3);
+  --bg:#15201A; --surface:#1E2B23; --ink:#EAF3EA; --muted:#9DB3A4; --line:#2E4136;
+  --marca:#8CBA9C; --mango:#7FB48F; --menta:#6FCB9B; --uva:#78B5A0; --cielo:#98C7A6; --coral:#82BC98; --logo:#8CBA9C; --on-marca:#12201A;
+  --marca-soft:#24402F; --mango-soft:#2A4530; --menta-soft:#234038; --uva-soft:#24402F; --cielo-soft:#2C4634; --coral-soft:#284434;
+  --danger:#FF7B7B; --danger-soft:#4A2323; --shadow:0 2px 0 rgba(0,0,0,.3);
+  color-scheme:dark;
 }
 *,*::before,*::after{box-sizing:inherit}
 html{height:100%;scroll-padding-top:env(safe-area-inset-top,0px)}
@@ -42,7 +44,7 @@ button{cursor:pointer}
 img{max-width:100%}
 
 .top{position:sticky;top:env(safe-area-inset-top,0px);z-index:20;background:var(--bg);display:flex;align-items:center;gap:12px;padding:12px 16px 10px;border-bottom:1px solid var(--line)}
-.logo{font-family:var(--display);font-weight:700;font-size:30px;line-height:1;color:var(--fresa);letter-spacing:.5px}
+.logo{font-family:var(--display);font-weight:700;font-size:34px;line-height:1;color:var(--logo);letter-spacing:.5px}
 .top .when{flex:1;min-width:0}
 .top .when b{display:block;font-size:14px;font-weight:600;text-transform:capitalize}
 .top .when small{display:block;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -66,7 +68,7 @@ h3{font-family:var(--display);font-weight:600;font-size:18px;margin:20px 0 8px}
 .tile .n{font-weight:700;font-size:16px;line-height:1.2}
 .tile .p{font-family:var(--display);font-weight:600;font-size:20px;color:var(--t)}
 .tile .s{font-size:12px;color:var(--muted)}
-.tile .badge{position:absolute;top:10px;right:10px;background:var(--t);color:#fff;font-weight:700;font-size:13px;min-width:26px;height:26px;border-radius:13px;display:grid;place-items:center;padding:0 7px}
+.tile .badge{position:absolute;top:10px;right:10px;background:var(--t);color:var(--on-marca);font-weight:700;font-size:13px;min-width:26px;height:26px;border-radius:13px;display:grid;place-items:center;padding:0 7px}
 .tile:active{transform:translateY(1px)}
 
 .card{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:16px;margin-bottom:12px}
@@ -84,8 +86,8 @@ h3{font-family:var(--display);font-weight:600;font-size:18px;margin:20px 0 8px}
 .stat.neg b{color:var(--danger)}
 
 .btn{border:none;border-radius:14px;padding:12px 18px;font-weight:700;font-size:16px;background:var(--ink);color:var(--bg)}
-.btn.pri{background:var(--fresa);color:#fff}
-.btn.ok{background:var(--menta);color:#fff}
+.btn.pri{background:var(--marca);color:var(--on-marca)}
+.btn.ok{background:var(--menta);color:var(--on-marca)}
 .btn.ghost{background:transparent;color:var(--ink);border:1.5px solid var(--line)}
 .btn.danger{background:transparent;color:var(--danger);border:1.5px solid var(--line)}
 .btn.sm{padding:7px 12px;font-size:14px;border-radius:10px}
@@ -109,7 +111,7 @@ textarea.in{min-height:110px;resize:vertical}
 .tabs{position:fixed;left:0;right:0;bottom:0;z-index:30;background:var(--surface);border-top:1px solid var(--line);display:flex;padding-bottom:env(safe-area-inset-bottom,0px)}
 .tabs button{flex:1;border:none;background:none;padding:8px 2px 9px;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:12px;font-weight:600;color:var(--muted);min-height:64px}
 .tabs button span{font-size:21px;line-height:1.1}
-.tabs button[aria-current="page"]{color:var(--fresa)}
+.tabs button[aria-current="page"]{color:var(--marca)}
 
 .sheet{position:fixed;inset:0;z-index:50;display:flex;align-items:flex-end;justify-content:center}
 .sheet.hidden{display:none}
@@ -127,7 +129,7 @@ textarea.in{min-height:110px;resize:vertical}
 .sabor small{font-size:12px;color:var(--muted)}
 .sabor small.low{color:var(--mango);font-weight:700}
 .sabor small.out{color:var(--danger);font-weight:700}
-.sabor .badge{position:absolute;top:8px;right:8px;background:var(--fresa);color:#fff;font-weight:700;font-size:12px;min-width:22px;height:22px;border-radius:11px;display:grid;place-items:center;padding:0 6px}
+.sabor .badge{position:absolute;top:8px;right:8px;background:var(--marca);color:var(--on-marca);font-weight:700;font-size:12px;min-width:22px;height:22px;border-radius:11px;display:grid;place-items:center;padding:0 6px}
 
 .qty{display:flex;align-items:center;gap:6px}
 .qty button{width:34px;height:34px;border-radius:10px;border:1.5px solid var(--line);background:var(--bg);font-weight:700;font-size:18px}
@@ -135,11 +137,11 @@ textarea.in{min-height:110px;resize:vertical}
 
 .pill{display:inline-block;font-size:12px;font-weight:700;padding:2px 9px;border-radius:999px;background:var(--line);color:var(--ink)}
 .pill.low{background:var(--mango-soft);color:var(--mango)}
-.pill.out{background:var(--fresa-soft);color:var(--danger)}
+.pill.out{background:var(--danger-soft);color:var(--danger)}
 .pill.ok{background:var(--menta-soft);color:var(--menta)}
 
 .bar{height:10px;border-radius:5px;background:var(--line);overflow:hidden}
-.bar i{display:block;height:100%;background:var(--fresa);border-radius:5px}
+.bar i{display:block;height:100%;background:var(--marca);border-radius:5px}
 .bar.ok i{background:var(--menta)}
 .days .row{display:grid;grid-template-columns:62px 1fr 92px;gap:10px}
 
@@ -148,7 +150,7 @@ textarea.in{min-height:110px;resize:vertical}
 .notice{background:var(--mango-soft);border-radius:14px;padding:10px 14px;font-size:14px;margin-bottom:12px}
 .toast{position:fixed;left:50%;bottom:calc(150px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:60;background:var(--ink);color:var(--bg);padding:10px 18px;border-radius:14px;font-weight:600;max-width:90vw;opacity:0;pointer-events:none;transition:opacity .2s}
 .toast.on{opacity:1}
-.toast.err{background:var(--danger);color:#fff}
+.toast.err{background:var(--danger);color:var(--on-marca)}
 .sale-items{font-size:14px;color:var(--muted)}
 .split{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 </style>
@@ -192,7 +194,7 @@ const diaCorto = s => parse(s).toLocaleDateString("es-CO", {weekday: "short", da
 const METODOS = ["Efectivo", "QR Bancolombia", "Nequi", "Daviplata", "Transferencia", "Tarjeta"];
 const esDigital = m => m === "QR Bancolombia" || m === "Nequi" || m === "Daviplata" || m === "Transferencia";
 const CATS_GASTO = ["Pedido de producto", "Desechables e insumos", "Servicios", "Arriendo", "Nómina", "Impuestos", "Otro"];
-const TONOS = ["fresa", "mango", "menta", "uva", "cielo", "coral"];
+const TONOS = ["marca", "mango", "menta", "uva", "cielo", "coral"];
 const LOW = 3;
 
 const S = {
