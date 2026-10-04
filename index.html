@@ -9,7 +9,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 :root{
-  --bg:#FCF0E6; --surface:#FFFAF4; --ink:#22362B; --muted:#6B7F72; --line:#EADCCB;
+  --bg:#FFFFFF; --surface:#FFFFFF; --ink:#22362B; --muted:#66786C; --line:#DCE8DF;
   --marca:#3E7F5F; --mango:#5A9A6E; --menta:#2F7D5C; --uva:#4F8F7A; --cielo:#6FA37F; --coral:#3F8A6B; --logo:#8CBA9C; --on-marca:#FFFFFF;
   --marca-soft:#DCEBE0; --mango-soft:#E6F1DE; --menta-soft:#D6EBE2; --uva-soft:#DCEBE0; --cielo-soft:#E3EEE0; --coral-soft:#D9EAD9;
   --danger:#C62828; --danger-soft:#F8DDD8; --shadow:0 2px 0 rgba(34,54,43,.08);
@@ -110,7 +110,9 @@ textarea.in{min-height:110px;resize:vertical}
 
 .tabs{position:fixed;left:0;right:0;bottom:0;z-index:30;background:var(--surface);border-top:1px solid var(--line);display:flex;padding-bottom:env(safe-area-inset-bottom,0px)}
 .tabs button{flex:1;border:none;background:none;padding:8px 2px 9px;display:flex;flex-direction:column;align-items:center;gap:2px;font-size:12px;font-weight:600;color:var(--muted);min-height:64px}
+.tabs button{position:relative}
 .tabs button span{font-size:21px;line-height:1.1}
+.tabs button[data-n]::after{content:attr(data-n);position:absolute;top:4px;left:calc(50% + 8px);min-width:18px;height:18px;border-radius:9px;background:var(--marca);color:var(--on-marca);font-size:11px;font-weight:700;display:grid;place-items:center;padding:0 4px}
 .tabs button[aria-current="page"]{color:var(--marca)}
 
 .sheet{position:fixed;inset:0;z-index:50;display:flex;align-items:flex-end;justify-content:center}
@@ -168,6 +170,7 @@ textarea.in{min-height:110px;resize:vertical}
   <button data-tab="caja"><span>💵</span>Caja</button>
   <button data-tab="gastos"><span>🧾</span>Gastos</button>
   <button data-tab="inventario"><span>📦</span>Inventario</button>
+  <button data-tab="pedidos"><span>📋</span>Pedidos</button>
   <button data-tab="reportes"><span>📊</span>Reportes</button>
 </nav>
 <div class="sheet hidden" id="sheet"><div class="bg" data-close></div><div class="panel" role="dialog" aria-modal="true" id="panel"></div></div>
@@ -200,7 +203,7 @@ const LOW = 3;
 const S = {
   mode: "loading", db: null, user: null, uid: "local", canEdit: true, canWrite: true, downloads: null,
   today: ymd(), cfg: null, cfgLoaded: false, ventas: {}, gastos: {}, cierre: null,
-  tab: "vender", cat: "Todos", cart: [], metodo: "Efectivo", recibido: "", armed: null, periodo: "hoy", gastosMes: "este"
+  tab: "vender", cat: "Todos", cart: [], metodo: "Efectivo", recibido: "", armed: null, pedidos: {}, encargos: {}, pedTab: "prov", periodo: "hoy", gastosMes: "este"
 };
 
 /* ---------- toast & sheet ---------- */
@@ -220,13 +223,13 @@ document.addEventListener("keydown", e => { if (e.key === "Escape" && sheetRende
 const LSK = "oli-caja-v1";
 const local = {
   data: null,
-  load() { try { this.data = JSON.parse(localStorage.getItem(LSK)); } catch (e) {} if (!this.data) this.data = {config: null, ventas: {}, gastos: {}, cierres: {}}; },
+  load() { try { this.data = JSON.parse(localStorage.getItem(LSK)); } catch (e) {} if (!this.data) this.data = {config: null, ventas: {}, gastos: {}, cierres: {}}; for (const k of ["ventas", "gastos", "cierres", "pedidos", "encargos"]) if (!this.data[k]) this.data[k] = {}; },
   persist() { try { localStorage.setItem(LSK, JSON.stringify(this.data)); } catch (e) { toast("Este navegador no dejó guardar los datos", true); } }
 };
 function applyLocal() {
   const d = local.data;
   S.cfg = d.config ? normCfg(d.config) : normCfg(DEFAULT_CFG); S.cfgLoaded = true;
-  S.ventas = Object.assign({}, d.ventas); S.gastos = Object.assign({}, d.gastos);
+  S.ventas = Object.assign({}, d.ventas); S.gastos = Object.assign({}, d.gastos); S.pedidos = Object.assign({}, d.pedidos); S.encargos = Object.assign({}, d.encargos);
   S.cierre = d.cierres[S.today] || null;
   render();
 }
@@ -260,12 +263,14 @@ function deleteDoc(path) {
 function normCfg(d) {
   const productos = Array.isArray(d.productos) ? d.productos.map(p => ({
     id: String(p.id || newId()), nombre: String(p.nombre || "Producto"), cat: String(p.cat || "Otros"),
-    precio: Number(p.precio) || 0, costo: p.costo == null || p.costo === "" ? null : Number(p.costo),
+    objetivo: p.objetivo == null ? null : Number(p.objetivo), precio: Number(p.precio) || 0, costo: p.costo == null || p.costo === "" ? null : Number(p.costo),
     controla: !!p.controla, stock: p.stock == null ? null : Number(p.stock), stockT: Number(p.stockT) || 0,
     sabores: Array.isArray(p.sabores) ? p.sabores.map(s => ({n: String(s.n), stock: s.stock == null ? null : Number(s.stock), stockT: Number(s.stockT) || 0})) : []
   })) : [];
+  const insumos = Array.isArray(d.insumos) ? d.insumos.map(i => ({id: String(i.id || newId()), nombre: String(i.nombre || "Insumo"), unidad: String(i.unidad || "unidades"),
+    stock: i.stock == null ? null : Number(i.stock), min: i.min == null ? null : Number(i.min), objetivo: i.objetivo == null ? null : Number(i.objetivo)})) : [];
   const gastosFijos = Array.isArray(d.gastosFijos) ? d.gastosFijos.map(g => ({n: String(g.n || ""), v: Number(g.v) || 0})) : [];
-  return {productos, gastosFijos};
+  return {productos, gastosFijos, insumos};
 }
 /* Datos iniciales del negocio (OLI_negocio.xlsx). Se usan hasta que se guarde un cambio. */
 const DEFAULT_CFG = (() => {
@@ -290,6 +295,9 @@ const DEFAULT_CFG = (() => {
       prod("soda", "Soda", "Bebidas frías", 4000, 2300),
       ...granizados
     ],
+    insumos: [["Vasos 12 oz", "vasos", 100], ["Vasos 9 oz", "vasos", 100], ["Tapas", "tapas", 200], ["Pitillos", "pitillos", 200], ["Servilletas", "paquetes", 5],
+      ["Vasos para conos", "unidades", 50], ["Crema para conos", "unidades", 4], ["Jabón de manos", "unidades", 2], ["Papel higiénico", "rollos", 6], ["Toallas de mano", "paquetes", 2]]
+      .map(([nombre, unidad, objetivo], i) => ({id: "ins" + i, nombre, unidad, stock: null, min: null, objetivo})),
     gastosFijos: [{n: "Arriendo", v: 1500000}, {n: "Trabajadoras", v: 3000000}, {n: "Luz", v: 0}, {n: "Agua", v: 0},
       {n: "Industria y comercio", v: 70000}, {n: "Internet", v: 0}]
   };
@@ -347,6 +355,7 @@ async function start() {
     }
     db.doc("config/negocio").onSnapshot(s => { S.cfg = s.exists ? normCfg(s.data()) : normCfg(DEFAULT_CFG); S.cfgLoaded = true; ensureVentasSub(); render(); }, dbErr);
     ensureVentasSub(); subDay();
+    for (const col of ["pedidos", "encargos"]) db.collection(col).onSnapshot(qs => { const m = {}; qs.docs.forEach(doc => { m[doc.id] = doc.data(); }); S[col] = m; render(); }, dbErr);
   } else {
     S.mode = "local"; local.load(); applyLocal();
   }
@@ -463,6 +472,153 @@ function guardarCierre(patch) {
   return writeDoc("cierres/" + S.today, next).catch(writeErr);
 }
 
+/* ---------- insumos, pedidos y encargos ---------- */
+const MIN_INS = 5, OBJ_PROD = 10, OBJ_INS = 20;
+const insMin = i => i.min == null ? MIN_INS : i.min;
+function insPill(i) {
+  if (i.stock == null) return '<span class="pill">Sin contar</span>';
+  if (i.stock <= 0) return '<span class="pill out">Agotado</span>';
+  if (i.stock <= insMin(i)) return `<span class="pill low">Quedan ${i.stock}</span>`;
+  return `<span class="pill ok">${i.stock}</span>`;
+}
+/* Todas las cosas que se pueden pedir: sabores/productos con inventario e insumos */
+function itemsPedibles() {
+  const out = [], c = cfgOrEmpty();
+  for (const p of c.productos.filter(x => x.controla)) {
+    const filas = p.sabores.length ? p.sabores.map(s => ({sab: s.n, n: p.nombre + " " + s.n})) : [{sab: null, n: p.nombre}];
+    for (const f of filas) {
+      const st = stockDe(p, f.sab), ob = p.objetivo || OBJ_PROD;
+      out.push({k: "p|" + p.id + "|" + (f.sab || ""), n: f.n, st, c: p.costo, unidad: "uds", sug: st != null && st <= LOW ? Math.max(1, ob - Math.max(st, 0)) : 0});
+    }
+  }
+  for (const i of c.insumos) {
+    const ob = i.objetivo || OBJ_INS;
+    out.push({k: "i|" + i.id, n: i.nombre, st: i.stock, c: null, unidad: i.unidad, sug: i.stock != null && i.stock <= insMin(i) ? Math.max(1, ob - Math.max(i.stock, 0)) : 0});
+  }
+  return out;
+}
+const porPedir = () => itemsPedibles().filter(x => x.sug > 0);
+const encargosPend = () => Object.entries(S.encargos).map(([id, e]) => Object.assign({id}, e)).filter(e => e.estado === "pendiente").sort((a, b) => (a.fecha || "").localeCompare(b.fecha || ""));
+function avisosPedidos() { return porPedir().length + encargosPend().filter(e => e.fecha <= addDays(S.today, 1)).length; }
+
+async function addVentaDirecta(m, total, items, ref) {
+  const today = S.today, docId = today + "_" + S.uid;
+  const venta = {id: newId(), t: Date.now(), m, total, items, ...(esDigital(m) ? {pend: true, ref: ref || ""} : {})};
+  const cur = S.ventas[docId];
+  const next = {fecha: today, uid: S.uid, ventas: (cur && cur.ventas ? cur.ventas.slice() : []).concat([venta])};
+  S.ventas = Object.assign({}, S.ventas, {[docId]: next});
+  return writeDoc("ventas/" + docId, next).catch(writeErr);
+}
+const metodoSelect = id => `<select class="in" id="${id}">${METODOS.map(m => `<option>${m}</option>`).join("")}</select>`;
+
+function vPedidos() {
+  const tab = S.pedTab;
+  return `<h2>Pedidos</h2>
+  <div class="chips" role="group" aria-label="Tipo de pedido"><button class="chip" data-act="pedtab" data-v="prov" aria-pressed="${tab === "prov"}">Para reponer</button><button class="chip" data-act="pedtab" data-v="cli" aria-pressed="${tab === "cli"}">Encargos de clientes</button></div>
+  ${tab === "prov" ? vPedProv() : vPedCli()}`;
+}
+function vPedProv() {
+  const sug = porPedir(), sinContar = itemsPedibles().filter(x => x.st == null).length;
+  const todos = Object.entries(S.pedidos).map(([id, o]) => Object.assign({id}, o)).sort((a, b) => b.t - a.t);
+  const abiertos = todos.filter(o => o.estado === "pedido"), hist = todos.filter(o => o.estado !== "pedido").slice(0, 8);
+  const lineasTxt = ls => ls.map(l => `${l.q} ${esc(l.n)}`).join(", ");
+  return `<div class="card" style="${sug.length ? "border-color:var(--mango)" : ""}"><h3 style="margin-top:0">Por pedir</h3>
+    ${sug.length ? `<p class="small muted" style="margin-top:0">Esto se está acabando. Las cantidades sugeridas te dejan en la cantidad ideal.</p>
+      ${sug.map(x => `<div class="row"><div class="l"><b>${esc(x.n)}</b><div class="small muted">Quedan ${Math.max(x.st, 0)}</div></div><div class="r">Pedir ${x.sug}</div></div>`).join("")}`
+      : '<p class="muted small" style="margin:0">Nada se está acabando por ahora.</p>'}
+    ${sinContar ? `<p class="small muted">${sinContar} cosas sin contar todavía. Cuéntalas en Inventario para que te avise.</p>` : ""}
+    ${S.canWrite ? `<button class="btn pri wide" style="margin-top:10px" data-act="newped" data-sug="${sug.length ? 1 : 0}">${sug.length ? "Crear pedido con esto" : "Crear pedido"}</button>` : ""}</div>
+  <h3>Pedidos hechos</h3>
+  ${abiertos.length ? abiertos.map(o => `<div class="card"><div class="row" style="padding-top:0"><div class="l"><b>${esc(o.prov || "Sin proveedor")}</b><div class="small muted">${esc(diaCorto(o.fecha))} · ${o.lineas.length} cosas</div></div><div class="r">${fmt(o.total)}</div></div>
+    <div class="small">${lineasTxt(o.lineas)}</div>${o.nota ? `<div class="small muted">${esc(o.nota)}</div>` : ""}
+    ${S.canWrite ? `<div class="btns" style="margin-top:10px"><button class="btn danger sm" data-act="cancped" data-id="${esc(o.id)}">${S.armed === "cp" + o.id ? "¿Seguro?" : "Cancelar"}</button><button class="btn ok sm" style="flex:1" data-act="recped" data-id="${esc(o.id)}">Ya llegó</button></div>` : ""}</div>`).join("")
+    : '<p class="muted small">No tienes pedidos esperando.</p>'}
+  ${hist.length ? `<h3>Historial</h3><div class="card">${hist.map(o => `<div class="row"><div class="l"><b>${esc(o.prov || "Sin proveedor")}</b> <span class="pill ${o.estado === "recibido" ? "ok" : "out"}">${o.estado === "recibido" ? "Recibido" : "Cancelado"}</span><div class="small muted">${esc(diaCorto(o.fecha))} · ${lineasTxt(o.estado === "recibido" && o.recibidas ? o.recibidas : o.lineas)}</div></div><div class="r">${fmt(o.pagado != null ? o.pagado : o.total)}</div></div>`).join("")}</div>` : ""}`;
+}
+function sheetNuevoPedido(soloSug) {
+  return () => {
+    const its = itemsPedibles(), rel = its.filter(x => x.sug > 0), resto = its.filter(x => x.sug === 0);
+    const fila = (x, i) => `<div class="row"><div class="l"><b>${esc(x.n)}</b><div class="small muted">${x.st == null ? "Sin contar" : "Hay " + Math.max(x.st, 0)}</div></div>
+      <input class="in" style="width:84px;text-align:center" id="nq-${i}" data-lk="${esc(x.k)}" data-n="${esc(x.n)}" data-c="${x.c == null ? "" : x.c}" inputmode="numeric" placeholder="0" value="${x.sug || ""}"></div>`;
+    return `<div class="head"><h2>Nuevo pedido</h2><button class="btn ghost sm" data-close>Cancelar</button></div>
+    <label class="f" for="np">¿A quién le pides?</label><input class="in" id="np" placeholder="Ej: Distribuidora de paletas" value="${esc(S.ultimoProv || "")}">
+    <h3>${soloSug && rel.length ? "Lo que se acaba" : "Cantidades"}</h3>
+    ${(soloSug && rel.length ? rel : its).map((x) => fila(x, its.indexOf(x))).join("")}
+    ${soloSug && rel.length && resto.length ? `<details><summary class="small muted" style="padding:10px 0">Agregar otras cosas (${resto.length})</summary>${resto.map(x => fila(x, its.indexOf(x))).join("")}</details>` : ""}
+    <label class="f" for="nn">Nota (opcional)</label><input class="in" id="nn" placeholder="Ej: entregar el viernes">
+    <button class="btn pri wide" style="margin-top:14px" data-act="saveped">Guardar pedido</button>`;
+  };
+}
+function sheetRecibir(oid) {
+  return () => {
+    const o = S.pedidos[oid]; if (!o) return "";
+    return `<div class="head"><h2>Llegó el pedido</h2><button class="btn ghost sm" data-close>Cancelar</button></div>
+    <p class="small muted" style="margin-top:0">Corrige lo que de verdad llegó. Se suma solo al inventario.</p>
+    ${o.lineas.map((l, i) => `<div class="row"><div class="l"><b>${esc(l.n)}</b><div class="small muted">Pediste ${l.q}</div></div><input class="in" style="width:84px;text-align:center" id="rq-${i}" data-rk="${esc(l.k)}" data-n="${esc(l.n)}" data-c="${l.c == null ? "" : l.c}" inputmode="numeric" value="${l.q}"></div>`).join("")}
+    <label class="f" for="rc">¿Cuánto pagaste en total?</label><input class="in" id="rc" inputmode="numeric" value="${o.total ? esc(fmt(o.total)) : ""}" placeholder="$0">
+    <label class="check"><input type="checkbox" id="rg" checked> Registrar el pago en Gastos</label>
+    <label class="f" for="rm">Pagado con</label>${metodoSelect("rm")}
+    <button class="btn pri wide" style="margin-top:14px" data-act="doreciv" data-id="${esc(oid)}">Guardar y sumar al inventario</button>`;
+  };
+}
+function vPedCli() {
+  const lista = encargosPend();
+  const pill = f => f < S.today ? '<span class="pill out">Atrasado</span>' : f === S.today ? '<span class="pill low">Hoy</span>' : f === addDays(S.today, 1) ? '<span class="pill low">Mañana</span>' : "";
+  const hechos = Object.entries(S.encargos).map(([id, e]) => Object.assign({id}, e)).filter(e => e.estado !== "pendiente").sort((a, b) => (b.entregadoT || b.t) - (a.entregadoT || a.t)).slice(0, 6);
+  return `${S.canWrite ? '<button class="btn pri wide" data-act="newenc" style="margin-bottom:12px">Nuevo encargo</button>' : ""}
+  ${lista.length ? lista.map(e => `<div class="card"><div class="row" style="padding-top:0"><div class="l"><b>${esc(e.nombre)}</b> ${pill(e.fecha)}<div class="small muted">Entrega ${esc(diaCorto(e.fecha))}${e.hora ? " " + esc(e.hora) : ""}${e.tel ? " · " + esc(e.tel) : ""}</div></div><div class="r">${fmt(e.total)}</div></div>
+    <div class="small">${esc(e.desc)}</div>
+    <div class="small muted" style="margin-top:4px">Abono ${fmt(e.abono)} · <b>Falta cobrar ${fmt(Math.max(0, e.total - e.abono))}</b></div>
+    ${S.canWrite ? `<div class="btns" style="margin-top:10px"><button class="btn danger sm" data-act="cancenc" data-id="${esc(e.id)}">${S.armed === "ce" + e.id ? "¿Seguro?" : "Cancelar"}</button><button class="btn ok sm" style="flex:1" data-act="entenc" data-id="${esc(e.id)}">Entregar y cobrar</button></div>` : ""}</div>`).join("")
+    : '<div class="empty"><p>No hay encargos pendientes. Anota aquí los pedidos para eventos o cumpleaños, con fecha y abono.</p></div>'}
+  ${hechos.length ? `<h3>Últimos</h3><div class="card">${hechos.map(e => `<div class="row"><div class="l"><b>${esc(e.nombre)}</b> <span class="pill ${e.estado === "entregado" ? "ok" : "out"}">${e.estado === "entregado" ? "Entregado" : "Cancelado"}</span><div class="small muted">${esc(e.desc)}</div></div><div class="r">${fmt(e.total)}</div></div>`).join("")}</div>` : ""}`;
+}
+function sheetEncargo() {
+  return () => `<div class="head"><h2>Nuevo encargo</h2><button class="btn ghost sm" data-close>Cancelar</button></div>
+  <label class="f" for="en">Nombre del cliente</label><input class="in" id="en" placeholder="Ej: Laura">
+  <div class="split"><div><label class="f" for="et">Teléfono</label><input class="in" id="et" inputmode="tel" placeholder="Opcional"></div>
+  <div><label class="f" for="ef">Fecha de entrega</label><input class="in" type="date" id="ef" value="${addDays(S.today, 1)}"></div></div>
+  <label class="f" for="ed">¿Qué pidió?</label><textarea class="in" id="ed" placeholder="Ej: 40 paletas surtidas para cumpleaños, 10 granizados de lulo"></textarea>
+  <div class="split"><div><label class="f" for="eto">Valor total</label><input class="in" id="eto" inputmode="numeric" placeholder="$0"></div>
+  <div><label class="f" for="eab">Abono recibido</label><input class="in" id="eab" inputmode="numeric" placeholder="$0"></div></div>
+  <label class="f" for="eam">Abono pagado con</label>${metodoSelect("eam")}
+  <button class="btn pri wide" style="margin-top:14px" data-act="saveenc">Guardar encargo</button>`;
+}
+function sheetEntregar(eid) {
+  return () => { const e = S.encargos[eid]; if (!e) return ""; const saldo = Math.max(0, e.total - e.abono);
+    return `<div class="head"><h2>Entregar encargo</h2><button class="btn ghost sm" data-close>Cancelar</button></div>
+    <p style="margin-top:0"><b>${esc(e.nombre)}</b><br><span class="small">${esc(e.desc)}</span></p>
+    <div class="row"><div class="l">Total</div><div class="r">${fmt(e.total)}</div></div><div class="row"><div class="l">Abono</div><div class="r">${fmt(e.abono)}</div></div>
+    <div class="row"><div class="l"><b>Falta cobrar</b></div><div class="r big" style="font-size:24px">${fmt(saldo)}</div></div>
+    ${saldo ? `<label class="f" for="edm">Paga con</label>${metodoSelect("edm")}` : ""}
+    <button class="btn pri wide" style="margin-top:14px" data-act="doent" data-id="${esc(eid)}">${saldo ? "Cobrar y entregar" : "Marcar entregado"}</button>`; };
+}
+
+/* insumos (en Inventario) */
+function vInsumos() {
+  const ins = cfgOrEmpty().insumos;
+  return `<h2 style="margin-top:22px">Insumos</h2><p class="muted small" style="margin-top:0">Vasos, pitillos, servilletas, aseo. No se descuentan solos: cuéntalos de vez en cuando.</p>
+  <div class="card">${ins.map(i => `<div class="row"><div class="l"><b>${esc(i.nombre)}</b><br>${insPill(i)}</div>
+    ${S.canWrite ? `<div class="btns"><button class="btn ghost sm" data-act="insent" data-id="${esc(i.id)}">Llegaron</button><button class="btn ghost sm" data-act="inscont" data-id="${esc(i.id)}">Contar</button><button class="btn ghost sm" data-act="insedit" data-id="${esc(i.id)}" aria-label="Editar">✎</button></div>` : ""}</div>`).join("") || '<p class="muted small">Aún no hay insumos.</p>'}
+  ${S.canWrite ? '<button class="btn wide" style="margin-top:10px" data-act="insedit" data-id="">Agregar insumo</button>' : ""}</div>`;
+}
+function sheetInsStock(id, tipo) {
+  return () => { const i = cfgOrEmpty().insumos.find(x => x.id === id); if (!i) return "";
+    return `<div class="head"><h2>${tipo === "insent" ? "Llegaron" : "Contar"}</h2><button class="btn ghost sm" data-close>Cancelar</button></div>
+    <p style="margin-top:0"><b>${esc(i.nombre)}</b><br><span class="muted small">Ahora: ${i.stock == null ? "sin contar" : i.stock + " " + esc(i.unidad)}</span></p>
+    <label class="f" for="isq">${tipo === "insent" ? "¿Cuántos llegaron?" : "¿Cuántos hay de verdad?"}</label><input class="in" id="isq" inputmode="numeric" autofocus>
+    <button class="btn pri wide" style="margin-top:14px" data-act="saveinsstock" data-id="${esc(id)}" data-tipo="${tipo}">Guardar</button>`; };
+}
+function sheetInsumo(id) {
+  return () => { const i = id ? cfgOrEmpty().insumos.find(x => x.id === id) : null;
+    return `<div class="head"><h2>${i ? "Editar insumo" : "Nuevo insumo"}</h2><button class="btn ghost sm" data-close>Cancelar</button></div>
+    <label class="f" for="in-n">Nombre</label><input class="in" id="in-n" value="${i ? esc(i.nombre) : ""}" placeholder="Ej: Vasos 12 oz">
+    <label class="f" for="in-u">Se cuenta en</label><input class="in" id="in-u" value="${i ? esc(i.unidad) : ""}" placeholder="vasos, paquetes, rollos">
+    <div class="split"><div><label class="f" for="in-m">Avisar cuando queden</label><input class="in" id="in-m" inputmode="numeric" value="${i && i.min != null ? i.min : ""}" placeholder="${MIN_INS}"></div>
+    <div><label class="f" for="in-o">Cantidad ideal</label><input class="in" id="in-o" inputmode="numeric" value="${i && i.objetivo != null ? i.objetivo : ""}" placeholder="${OBJ_INS}"></div></div>
+    <div class="btns" style="margin-top:16px">${i ? `<button class="btn danger" data-act="delins" data-id="${esc(i.id)}">${S.armed === "di" + i.id ? "¿Seguro? Toca otra vez" : "Borrar"}</button>` : ""}<button class="btn pri" style="flex:1" data-act="saveins" data-id="${i ? esc(i.id) : ""}">Guardar</button></div>`; };
+}
+
 /* ---------- views ---------- */
 function render() { if (render.q) return; render.q = requestAnimationFrame(() => { render.q = 0; draw(); }); }
 function draw() {
@@ -471,9 +627,10 @@ function draw() {
   document.querySelectorAll("#tabs button").forEach(b => b.setAttribute("aria-current", b.dataset.tab === S.tab ? "page" : "false"));
   const v = $("#view");
   if (S.mode === "loading" || !S.cfgLoaded) { v.innerHTML = '<div class="empty"><div class="big">Abriendo la caja…</div></div>'; $("#cartbar").innerHTML = ""; return; }
-  const views = {vender: vVender, caja: vCaja, gastos: vGastos, inventario: vInventario, reportes: vReportes, ajustes: vAjustes};
+  const views = {vender: vVender, caja: vCaja, gastos: vGastos, inventario: vInventario, pedidos: vPedidos, reportes: vReportes, ajustes: vAjustes};
   let banner = "";
   if (S.tab === "vender") { const n = ventasEn(prevMonthFirst(S.today), S.today).filter(x => x.pend).length; if (n) banner = `<button class="card" style="width:100%;text-align:left;border-color:var(--mango);background:var(--mango-soft)" data-act="go" data-tab="caja"><b>${n} ${n === 1 ? "pago" : "pagos"} por confirmar</b><div class="small muted">Toca para revisar si ya llegaron.</div></button>`; }
+  const nAv = avisosPedidos(); const tb = document.querySelector('#tabs [data-tab="pedidos"]'); if (tb) { if (nAv) tb.dataset.n = nAv; else delete tb.dataset.n; }
   v.innerHTML = banner + (views[S.tab] || vVender)();
   drawCartbar();
   if (sheetRender) drawSheet();
@@ -608,7 +765,7 @@ function vGastos() {
 
 function vInventario() {
   const ps = cfgOrEmpty().productos.filter(p => p.controla);
-  if (!ps.length) return `<h2>Inventario</h2><div class="empty"><p>Ningún producto tiene control de inventario. Actívalo al editar un producto en Ajustes.</p>${S.canEdit ? '<button class="btn" data-act="go" data-tab="ajustes">Ir a Ajustes</button>' : ""}</div>`;
+  if (!ps.length) return `<h2>Inventario</h2><div class="empty"><p>Ningún producto tiene control de inventario. Actívalo al editar un producto en Ajustes.</p>${S.canEdit ? '<button class="btn" data-act="go" data-tab="ajustes">Ir a Ajustes</button>' : ""}</div>` + vInsumos();
   let valor = 0, bajos = 0;
   const bloques = ps.map(p => {
     const filas = p.sabores.length ? p.sabores.map(s => ({n: s.n, sab: s.n, st: stockDe(p, s.n)})) : [{n: p.nombre, sab: null, st: stockDe(p)}];
@@ -620,7 +777,7 @@ function vInventario() {
   }).join("");
   return `<h2>Inventario</h2>
   <div class="stats"><div class="stat"><span>Valor en bodega (a costo)</span><b>${fmt(valor)}</b></div><div class="stat ${bajos ? "neg" : ""}"><span>Por acabarse</span><b>${bajos}</b></div></div>
-  <p class="muted small">Cada venta descuenta sola. Usa "Llegaron" cuando recibas pedido y "Contar" para corregir con lo que hay en la nevera.</p>${bloques}`;
+  <p class="muted small">Cada venta descuenta sola. Usa "Llegaron" cuando recibas pedido y "Contar" para corregir con lo que hay en la nevera.</p>${bloques}${vInsumos()}`;
 }
 function sheetStock(pid, sab, tipo) {
   return () => {
@@ -702,6 +859,7 @@ function sheetProd(pid) {
     <div><label class="f" for="pk">Lo que te cuesta</label><input class="in" id="pk" inputmode="numeric" value="${p && p.costo != null ? esc(fmt(p.costo)) : ""}" placeholder="Déjalo vacío si no sabes"></div></div>
     <label class="f" for="ps">Sabores (uno por línea, opcional)</label><textarea class="in" id="ps" placeholder="Milky&#10;Maracuyá">${p ? esc(p.sabores.map(s => s.n).join("\n")) : ""}</textarea>
     <label class="check"><input type="checkbox" id="pi" ${p && p.controla ? "checked" : ""}> Llevar inventario de este producto</label>
+    <label class="f" for="po">Cantidad ideal por sabor (para sugerirte pedidos)</label><input class="in" id="po" inputmode="numeric" value="${p && p.objetivo != null ? p.objetivo : ""}" placeholder="${OBJ_PROD}">
     <div class="btns" style="margin-top:16px">${p ? `<button class="btn danger" data-act="delprod" data-id="${esc(p.id)}">${S.armed === "dp" + p.id ? "¿Seguro? Toca otra vez" : "Borrar"}</button>` : ""}<button class="btn pri" style="flex:1" data-act="saveprod" data-id="${p ? esc(p.id) : ""}">Guardar</button></div>`;
   };
 }
@@ -767,6 +925,86 @@ document.addEventListener("click", e => {
       closeSheet(); saveCfg(cfg).then(() => toast(d.tipo === "entrada" ? "Entrada guardada" : "Conteo guardado"));
       break;
     }
+    case "pedtab": S.pedTab = d.v; render(); break;
+    case "newped": openSheet(sheetNuevoPedido(d.sug === "1")); break;
+    case "saveped": {
+      const lineas = []; let total = 0;
+      document.querySelectorAll("#panel [data-lk]").forEach(inp => { const q = num(inp.value); if (q > 0) { const c = inp.dataset.c === "" ? null : Number(inp.dataset.c); lineas.push({k: inp.dataset.lk, n: inp.dataset.n, q, c}); total += q * (c || 0); } });
+      if (!lineas.length) { toast("Escribe cuántos vas a pedir de algo", true); return; }
+      const prov = $("#np").value.trim(); S.ultimoProv = prov;
+      const o = {t: Date.now(), fecha: S.today, prov, nota: $("#nn").value.trim(), estado: "pedido", lineas, total}, id = newId();
+      S.pedidos = Object.assign({}, S.pedidos, {[id]: o}); closeSheet(); render();
+      writeDoc("pedidos/" + id, o).then(() => toast("Pedido guardado")).catch(writeErr); break;
+    }
+    case "cancped": {
+      if (S.armed !== "cp" + d.id) { armar("cp" + d.id); return; } S.armed = null;
+      const o = Object.assign({}, S.pedidos[d.id], {estado: "cancelado"}); S.pedidos = Object.assign({}, S.pedidos, {[d.id]: o}); render();
+      writeDoc("pedidos/" + d.id, o).catch(writeErr); break;
+    }
+    case "recped": openSheet(sheetRecibir(d.id)); break;
+    case "doreciv": {
+      const o0 = S.pedidos[d.id]; if (!o0) return;
+      const rec = []; document.querySelectorAll("#panel [data-rk]").forEach(inp => { const q = num(inp.value); if (q > 0) rec.push({k: inp.dataset.rk, n: inp.dataset.n, q, c: inp.dataset.c === "" ? null : Number(inp.dataset.c)}); });
+      const pagado = num($("#rc").value), conGasto = $("#rg").checked, metodo = $("#rm").value;
+      const cfg = JSON.parse(JSON.stringify(cfgOrEmpty())), ahora = Date.now();
+      for (const l of rec) {
+        const parts = l.k.split("|");
+        if (parts[0] === "p") { const p = cfg.productos.find(x => x.id === parts[1]); if (!p) continue; const sab = parts[2] || null; const o = sab ? p.sabores.find(x => x.n === sab) : p; if (!o) continue;
+          const actual = stockDe(prod(parts[1]), sab); o.stock = (actual == null ? 0 : Math.max(0, actual)) + l.q; o.stockT = ahora; }
+        else { const i = cfg.insumos.find(x => x.id === parts[1]); if (i) i.stock = (i.stock == null ? 0 : i.stock) + l.q; }
+      }
+      const o = Object.assign({}, o0, {estado: "recibido", recT: ahora, recibidas: rec, pagado});
+      S.pedidos = Object.assign({}, S.pedidos, {[d.id]: o}); closeSheet();
+      saveCfg(cfg).then(() => writeDoc("pedidos/" + d.id, o)).then(() => toast("Inventario actualizado")).catch(writeErr);
+      if (conGasto && pagado > 0) { const g = {concepto: "Pedido" + (o0.prov ? " " + o0.prov : ""), valor: pagado, m: metodo, cat: "Pedido de producto", fecha: S.today, t: ahora, uid: S.uid}, gid = newId();
+        S.gastos = Object.assign({}, S.gastos, {[gid]: g}); writeDoc("gastos/" + gid, g).catch(writeErr); }
+      break;
+    }
+    case "newenc": openSheet(sheetEncargo()); break;
+    case "saveenc": {
+      const nombre = $("#en").value.trim(), desc = $("#ed").value.trim(), total = num($("#eto").value), abono = num($("#eab").value), fecha = $("#ef").value;
+      if (!nombre || !desc || !total || !fecha) { toast("Faltan el nombre, la fecha, qué pidió y el valor", true); return; }
+      if (abono > total) { toast("El abono no puede ser más que el total", true); return; }
+      const e = {t: Date.now(), nombre, tel: $("#et").value.trim(), fecha, desc, total, abono, estado: "pendiente"}, id = newId(), mAb = $("#eam").value;
+      S.encargos = Object.assign({}, S.encargos, {[id]: e}); closeSheet(); render();
+      writeDoc("encargos/" + id, e).then(() => toast("Encargo guardado")).catch(writeErr);
+      if (abono > 0) addVentaDirecta(mAb, abono, [{pid: null, n: "Abono encargo " + nombre, s: null, q: 1, p: abono, c: null}], nombre);
+      break;
+    }
+    case "cancenc": {
+      if (S.armed !== "ce" + d.id) { armar("ce" + d.id); return; } S.armed = null;
+      const e = Object.assign({}, S.encargos[d.id], {estado: "cancelado"}); S.encargos = Object.assign({}, S.encargos, {[d.id]: e}); render();
+      writeDoc("encargos/" + d.id, e).then(() => toast(e.abono ? "Cancelado. Si devolviste el abono, borra esa venta en Caja" : "Cancelado")).catch(writeErr); break;
+    }
+    case "entenc": openSheet(sheetEntregar(d.id)); break;
+    case "doent": {
+      const e0 = S.encargos[d.id]; if (!e0) return; const saldo = Math.max(0, e0.total - e0.abono), m = $("#edm") ? $("#edm").value : "Efectivo";
+      const e = Object.assign({}, e0, {estado: "entregado", entregadoT: Date.now()}); S.encargos = Object.assign({}, S.encargos, {[d.id]: e}); closeSheet(); render();
+      writeDoc("encargos/" + d.id, e).then(() => toast("Encargo entregado")).catch(writeErr);
+      if (saldo > 0) addVentaDirecta(m, saldo, [{pid: null, n: "Encargo " + e0.nombre, s: null, q: 1, p: saldo, c: null}], e0.nombre);
+      break;
+    }
+    case "insent": case "inscont": openSheet(sheetInsStock(d.id, act)); break;
+    case "saveinsstock": {
+      const raw = $("#isq").value; if (raw.trim() === "" || num(raw) < 0) { toast("Escribe un número", true); return; }
+      const cfg = JSON.parse(JSON.stringify(cfgOrEmpty())), i = cfg.insumos.find(x => x.id === d.id); if (!i) return;
+      i.stock = d.tipo === "insent" ? (i.stock || 0) + num(raw) : num(raw);
+      closeSheet(); saveCfg(cfg).then(() => toast("Guardado")); break;
+    }
+    case "insedit": openSheet(sheetInsumo(d.id || null)); break;
+    case "saveins": {
+      const nombre = $("#in-n").value.trim(); if (!nombre) { toast("Ponle nombre al insumo", true); return; }
+      const cfg = JSON.parse(JSON.stringify(cfgOrEmpty())), old = d.id ? cfg.insumos.find(x => x.id === d.id) : null;
+      const ni = {id: old ? old.id : newId(), nombre, unidad: $("#in-u").value.trim() || "unidades", stock: old ? old.stock : null,
+        min: $("#in-m").value.trim() === "" ? null : num($("#in-m").value), objetivo: num($("#in-o").value) || null};
+      if (old) cfg.insumos[cfg.insumos.indexOf(old)] = ni; else cfg.insumos.push(ni);
+      closeSheet(); saveCfg(cfg).then(() => toast("Insumo guardado")); break;
+    }
+    case "delins": {
+      if (S.armed !== "di" + d.id) { armar("di" + d.id); return; } S.armed = null;
+      const cfg = JSON.parse(JSON.stringify(cfgOrEmpty())); cfg.insumos = cfg.insumos.filter(x => x.id !== d.id);
+      closeSheet(); saveCfg(cfg).then(() => toast("Insumo borrado")); break;
+    }
     case "per": S.periodo = d.v; render(); break;
     case "editprod": openSheet(sheetProd(d.id || null)); break;
     case "saveprod": {
@@ -777,7 +1015,7 @@ document.addEventListener("click", e => {
       const kRaw = $("#pk").value.trim();
       const np = {
         id: old ? old.id : newId(), nombre, cat: $("#pc").value.trim() || "Otros",
-        precio: num($("#pp").value), costo: kRaw ? num(kRaw) : null, controla: $("#pi").checked,
+        precio: num($("#pp").value), costo: kRaw ? num(kRaw) : null, controla: $("#pi").checked, objetivo: num($("#po").value) || null,
         stock: old ? old.stock : null, stockT: old ? old.stockT : 0,
         sabores: sabNames.map(n => { const ex = old && old.sabores.find(s => s.n === n); return ex || {n, stock: null, stockT: 0}; })
       };
