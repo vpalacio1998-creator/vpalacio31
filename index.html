@@ -222,7 +222,7 @@ const local = {
 };
 function applyLocal() {
   const d = local.data;
-  S.cfg = d.config ? normCfg(d.config) : null; S.cfgLoaded = true;
+  S.cfg = d.config ? normCfg(d.config) : normCfg(DEFAULT_CFG); S.cfgLoaded = true;
   S.ventas = Object.assign({}, d.ventas); S.gastos = Object.assign({}, d.gastos);
   S.cierre = d.cierres[S.today] || null;
   render();
@@ -264,7 +264,34 @@ function normCfg(d) {
   const gastosFijos = Array.isArray(d.gastosFijos) ? d.gastosFijos.map(g => ({n: String(g.n || ""), v: Number(g.v) || 0})) : [];
   return {productos, gastosFijos};
 }
-const cfgOrEmpty = () => S.cfg || {productos: [], gastosFijos: []};
+/* Datos iniciales del negocio (OLI_negocio.xlsx). Se usan hasta que se guarde un cambio. */
+const DEFAULT_CFG = (() => {
+  const prod = (id, nombre, cat, precio, costo) => ({id, nombre, cat, precio, costo, controla: false, stock: null, stockT: 0, sabores: []});
+  const pal = (id, nombre, precio, costo, sabores) => ({id, nombre, cat: "Paletas", precio, costo, controla: true, stock: null, stockT: 0, sabores: sabores.map(([n, stock]) => ({n, stock, stockT: 0}))});
+  const gran = [["mango", "Mango biche", 6500, 5000, 1950, 1425], ["rojos", "Frutos rojos", 7500, 5500, 2200, 1600],
+    ["coco", "Limonada de coco", 8000, 6000, 2289, 1663], ["lulo", "Lulo", 7000, 5500, 2093, 1525]];
+  const granizados = [];
+  for (const [k, n, p12, p9, c12, c9] of gran) {
+    granizados.push(prod("gra12-" + k, "Granizado " + n + " 12 oz", "Granizados", p12, c12));
+    granizados.push(prod("gra9-" + k, "Granizado " + n + " 9 oz", "Granizados", p9, c9));
+  }
+  return {
+    productos: [
+      pal("paleta", "Paleta", 11000, 7255, [["Arequipe queso", 15], ["Bocadillo queso", 15], ["Milky", 10], ["Quimbaya", 5], ["Yogurt y frutos rojos", 8],
+        ["Yogurt y frutas exóticas", 7], ["Arequipe coco", 6], ["Brownie", 6], ["Maracuyá", 6], ["Queso mora", 6]]),
+      pal("paleta-light", "Paleta light", 12000, 7650, [["Queso arequipe", 5], ["Yogurt maracuyá", 5]]),
+      prod("galleta", "Galleta", "Snacks", 4000, 2000),
+      prod("cafe", "Café", "Bebidas calientes", 3500, null), prod("capuchino", "Capuchino", "Bebidas calientes", 8500, null),
+      prod("latte", "Latte", "Bebidas calientes", 6000, null), prod("milo", "Milo", "Bebidas calientes", 6000, null),
+      prod("michelada", "Michelada de frutas", "Bebidas frías", 9000, 3000), prod("agua", "Botella de agua", "Bebidas frías", 2000, 700),
+      prod("soda", "Soda", "Bebidas frías", 4000, 2300),
+      ...granizados
+    ],
+    gastosFijos: [{n: "Arriendo", v: 1500000}, {n: "Trabajadoras", v: 3000000}, {n: "Luz", v: 0}, {n: "Agua", v: 0},
+      {n: "Industria y comercio", v: 70000}, {n: "Internet", v: 0}]
+  };
+})();
+const cfgOrEmpty = () => S.cfg || normCfg(DEFAULT_CFG);
 function saveCfg(cfg) { S.cfg = cfg; render(); return writeDoc("config/negocio", JSON.parse(JSON.stringify(cfg))).catch(writeErr); }
 
 /* ---------- db subscriptions ---------- */
@@ -315,7 +342,7 @@ async function start() {
         S.canWrite = cw === null ? true : (!!cw || S.canEdit);
       } catch (e) {}
     }
-    db.doc("config/negocio").onSnapshot(s => { S.cfg = s.exists ? normCfg(s.data()) : null; S.cfgLoaded = true; ensureVentasSub(); render(); }, dbErr);
+    db.doc("config/negocio").onSnapshot(s => { S.cfg = s.exists ? normCfg(s.data()) : normCfg(DEFAULT_CFG); S.cfgLoaded = true; ensureVentasSub(); render(); }, dbErr);
     ensureVentasSub(); subDay();
   } else {
     S.mode = "local"; local.load(); applyLocal();
