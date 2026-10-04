@@ -189,7 +189,8 @@ const hora = t => new Date(t).toLocaleTimeString("es-CO", {hour: "numeric", minu
 const diaLargo = s => parse(s).toLocaleDateString("es-CO", {weekday: "long", day: "numeric", month: "long"});
 const diaCorto = s => parse(s).toLocaleDateString("es-CO", {weekday: "short", day: "numeric"});
 
-const METODOS = ["Efectivo", "Nequi", "Daviplata", "Tarjeta", "Transferencia"];
+const METODOS = ["Efectivo", "QR Bancolombia", "Nequi", "Daviplata", "Transferencia", "Tarjeta"];
+const esDigital = m => m === "QR Bancolombia" || m === "Nequi" || m === "Daviplata" || m === "Transferencia";
 const CATS_GASTO = ["Pedido de producto", "Desechables e insumos", "Servicios", "Arriendo", "Nómina", "Impuestos", "Otro"];
 const TONOS = ["fresa", "mango", "menta", "uva", "cielo", "coral"];
 const LOW = 3;
@@ -197,7 +198,7 @@ const LOW = 3;
 const S = {
   mode: "loading", db: null, user: null, uid: "local", canEdit: true, canWrite: true, downloads: null,
   today: ymd(), cfg: null, cfgLoaded: false, ventas: {}, gastos: {}, cierre: null,
-  tab: "vender", cat: "Todos", cart: [], metodo: "Efectivo", recibido: "", periodo: "hoy", gastosMes: "este"
+  tab: "vender", cat: "Todos", cart: [], metodo: "Efectivo", recibido: "", armed: null, periodo: "hoy", gastosMes: "este"
 };
 
 /* ---------- toast & sheet ---------- */
@@ -400,9 +401,10 @@ function gastosEn(a, b) {
   return Object.entries(S.gastos).map(([id, g]) => Object.assign({id}, g)).filter(g => g.fecha >= a && g.fecha <= b).sort((x, y) => (y.t || 0) - (x.t || 0));
 }
 function resumen(vs) {
-  const r = {total: 0, costo: 0, n: vs.length, sinCosto: 0, metodo: {}, prods: {}, dias: {}};
+  const r = {total: 0, costo: 0, n: vs.length, sinCosto: 0, metodo: {}, prods: {}, dias: {}, pend: 0, pendN: 0, digOk: 0};
   for (const v of vs) {
     r.metodo[v.m] = (r.metodo[v.m] || 0) + (v.total || 0);
+    if (esDigital(v.m)) { if (v.pend) { r.pend += v.total || 0; r.pendN++; } else r.digOk += v.total || 0; }
     r.dias[v.fecha] = r.dias[v.fecha] || {total: 0, bruta: 0};
     for (const it of (v.items || [])) {
       const sub = it.p * it.q, cst = it.c == null ? 0 : it.c * it.q;
@@ -422,6 +424,7 @@ async function cobrar() {
   if (!S.cart.length || !S.canWrite) return;
   const today = S.today, docId = today + "_" + S.uid, path = "ventas/" + docId;
   const venta = {id: newId(), t: Date.now(), m: S.metodo, total: cartTotal(),
+    ...(esDigital(S.metodo) ? {pend: true, ref: ($("#ref") ? $("#ref").value.trim().slice(0, 60) : "")} : {}),
     items: S.cart.map(c => ({pid: c.pid, n: c.n, s: c.s, q: c.q, p: c.p, c: c.c == null ? null : c.c}))};
   const cur = S.ventas[docId];
   const next = {fecha: today, uid: S.uid, ventas: (cur && cur.ventas ? cur.ventas.slice() : []).concat([venta])};
@@ -429,7 +432,7 @@ async function cobrar() {
   S.ventas = Object.assign({}, S.ventas, {[docId]: next});
   const recibido = num(S.recibido);
   S.cart = []; S.recibido = ""; closeSheet(); render();
-  toast(S.metodo === "Efectivo" && recibido > venta.total ? `Venta guardada. Cambio: ${fmt(recibido - venta.total)}` : `Venta guardada: ${fmt(venta.total)}`);
+  toast(venta.pend ? `Venta guardada. Falta confirmar que llegó ${fmt(venta.total)}` : S.metodo === "Efectivo" && recibido > venta.total ? `Venta guardada. Cambio: ${fmt(recibido - venta.total)}` : `Venta guardada: ${fmt(venta.total)}`);
   try { await writeDoc(path, next); }
   catch (e) {
     const d = S.ventas[docId];
@@ -437,12 +440,20 @@ async function cobrar() {
     S.cart = backup; render(); writeErr(e);
   }
 }
+function armar(key) { S.armed = key; render(); drawSheet(); clearTimeout(armar.t); armar.t = setTimeout(() => { if (S.armed === key) { S.armed = null; render(); drawSheet(); } }, 4000); }
 function borrarVenta(docId, vid) {
   const d = S.ventas[docId]; if (!d) return;
-  if (!confirm("¿Borrar esta venta? Se descuenta de los totales y vuelve al inventario.")) return;
+  if (S.armed !== "del" + vid) { armar("del" + vid); return; }
+  S.armed = null;
   const next = Object.assign({}, d, {ventas: (d.ventas || []).filter(v => v.id !== vid)});
   S.ventas = Object.assign({}, S.ventas, {[docId]: next}); render();
   writeDoc("ventas/" + docId, next).then(() => toast("Venta borrada")).catch(writeErr);
+}
+function confirmarPago(docId, vid) {
+  const d = S.ventas[docId]; if (!d || !S.canWrite) return;
+  const next = Object.assign({}, d, {ventas: (d.ventas || []).map(v => v.id === vid ? Object.assign({}, v, {pend: false, conf: Date.now()}) : v)});
+  S.ventas = Object.assign({}, S.ventas, {[docId]: next}); render();
+  writeDoc("ventas/" + docId, next).then(() => toast("Pago confirmado")).catch(writeErr);
 }
 function guardarCierre(patch) {
   const next = Object.assign({fecha: S.today}, S.cierre || {}, patch);
@@ -459,7 +470,9 @@ function draw() {
   const v = $("#view");
   if (S.mode === "loading" || !S.cfgLoaded) { v.innerHTML = '<div class="empty"><div class="big">Abriendo la caja…</div></div>'; $("#cartbar").innerHTML = ""; return; }
   const views = {vender: vVender, caja: vCaja, gastos: vGastos, inventario: vInventario, reportes: vReportes, ajustes: vAjustes};
-  v.innerHTML = (views[S.tab] || vVender)();
+  let banner = "";
+  if (S.tab === "vender") { const n = ventasEn(prevMonthFirst(S.today), S.today).filter(x => x.pend).length; if (n) banner = `<button class="card" style="width:100%;text-align:left;border-color:var(--mango);background:var(--mango-soft)" data-act="go" data-tab="caja"><b>${n} ${n === 1 ? "pago" : "pagos"} por confirmar</b><div class="small muted">Toca para revisar si ya llegaron.</div></button>`; }
+  v.innerHTML = banner + (views[S.tab] || vVender)();
   drawCartbar();
   if (sheetRender) drawSheet();
 }
@@ -516,7 +529,11 @@ function sheetCheckout() {
   <input class="in" id="rec" inputmode="numeric" placeholder="Con cuánto paga" value="${S.recibido ? esc(fmt(rec)) : ""}">
   <div class="btns" style="margin-top:8px">${sugeridos.map(x => `<button class="btn ghost sm" data-act="rec" data-v="${x}">${x === total ? "Exacto" : fmt(x)}</button>`).join("")}</div>
   <p id="cambio" style="font-weight:700;margin:12px 0 0">${rec >= total && rec ? `Cambio: <span class="big" style="font-size:26px;color:var(--menta)">${fmt(rec - total)}</span>` : rec ? `<span style="color:var(--danger)">Faltan ${fmt(total - rec)}</span>` : ""}</p>` : ""}
-  <div class="btns" style="margin-top:16px"><button class="btn danger" data-act="vaciar">Vaciar</button><button class="btn pri" style="flex:1" data-act="cobrar">Cobrar ${fmt(total)}</button></div>`;
+  ${esDigital(S.metodo) ? `<div class="card" style="margin:12px 0 0;background:var(--cielo-soft)"><b>Pago digital: ${S.metodo === "QR Bancolombia" ? "pídele que escanee el QR" : "pásale la llave o el número"} por ${fmt(total)}.</b>
+  <p class="small" style="margin:6px 0 10px">La venta queda <b>por confirmar</b> hasta que veas el aviso del pago en el celular del negocio. Entonces tocas "Ya llegó".</p>
+  <label class="f" for="ref">Nombre de quien paga o últimos números del comprobante (opcional)</label>
+  <input class="in" id="ref" maxlength="60" placeholder="Ej: Laura, 4821"></div>` : ""}
+  <div class="btns" style="margin-top:16px"><button class="btn danger" data-act="vaciar">Vaciar</button><button class="btn pri" style="flex:1" data-act="cobrar">${esDigital(S.metodo) ? "Registrar" : "Cobrar"} ${fmt(total)}</button></div>`;
 }
 
 function vCaja() {
@@ -525,7 +542,14 @@ function vCaja() {
   const base = S.cierre && S.cierre.base != null ? S.cierre.base : null;
   const esperado = (base || 0) + (r.metodo["Efectivo"] || 0) - gEf;
   const contado = S.cierre && S.cierre.contado != null ? S.cierre.contado : null;
+  const pends = ventasEn(prevMonthFirst(t), t).filter(v => v.pend);
+  const banco = S.cierre && S.cierre.banco != null ? S.cierre.banco : null;
   return `<h2>Caja de hoy</h2>
+  ${pends.length ? `<div class="card" style="border-color:var(--mango);background:var(--mango-soft)"><h3 style="margin-top:0">Pagos por confirmar (${pends.length})</h3>
+    <p class="small muted" style="margin-top:0">Mira el aviso en el celular del negocio. Si ya llegó, toca "Ya llegó". Si no llegó, bórrala.</p>
+    ${pends.map(v => `<div class="row"><div class="l"><b>${fmt(v.total)}</b> <span class="pill">${esc(v.m)}</span>
+      <div class="small muted">${v.fecha === t ? "" : esc(v.fecha) + " "}${hora(v.t)}${v.ref ? " · " + esc(v.ref) : ""}</div></div>
+      <div class="r">${S.canWrite ? `<button class="btn ok sm" data-act="confpago" data-doc="${esc(v.docId)}" data-id="${esc(v.id)}">Ya llegó</button><br><button class="btn danger sm" style="margin-top:4px" data-act="delventa" data-doc="${esc(v.docId)}" data-id="${esc(v.id)}">${S.armed === "del" + v.id ? "¿Seguro?" : "No llegó"}</button>` : ""}</div></div>`).join("")}</div>` : ""}
   <div class="stats">
     <div class="stat"><span>Vendido</span><b>${fmt(r.total)}</b></div>
     <div class="stat"><span>Ventas</span><b>${r.n}</b></div>
@@ -534,6 +558,13 @@ function vCaja() {
   </div>
   <div class="card"><h3 style="margin-top:0">Por forma de pago</h3>
     ${METODOS.filter(m => r.metodo[m]).map(m => `<div class="row"><div class="l">${m}</div><div class="r">${fmt(r.metodo[m])}</div></div>`).join("") || '<p class="muted small">Aún no hay ventas hoy.</p>'}
+  </div>
+  <div class="card"><h3 style="margin-top:0">Pagos por QR y transferencia</h3>
+    <div class="row"><div class="l">Confirmados (ya llegaron)</div><div class="r">${fmt(r.digOk)}</div></div>
+    <div class="row"><div class="l">Por confirmar</div><div class="r" style="color:${r.pend ? "var(--danger)" : "inherit"}">${fmt(r.pend)}</div></div>
+    <label class="f" for="banco">Al cerrar, ¿cuánto recibiste según la app del banco hoy?</label>
+    <div style="display:flex;gap:8px"><input class="in" id="banco" inputmode="numeric" placeholder="$0" value="${banco != null ? esc(fmt(banco)) : ""}" ${S.canWrite ? "" : "disabled"}><button class="btn sm" data-act="banco" ${S.canWrite ? "" : "disabled"}>Guardar</button></div>
+    ${banco != null ? (() => { const dif = banco - r.digOk - r.pend; return `<p style="margin:10px 0 0;font-weight:700;color:${dif === 0 ? "var(--menta)" : "var(--danger)"}">${dif === 0 ? "Los pagos digitales cuadran con el banco." : dif > 0 ? `Al banco le llegaron ${fmt(dif)} más de lo registrado. Falta registrar una venta.` : `Registraste ${fmt(-dif)} más de lo que llegó. Revisa las ventas digitales.`}</p>`; })() : ""}
   </div>
   <div class="card"><h3 style="margin-top:0">Efectivo en la caja</h3>
     <label class="f" for="base">Base con la que abriste</label>
@@ -546,9 +577,9 @@ function vCaja() {
     ${contado != null ? (() => { const dif = contado - esperado; return `<p style="margin:10px 0 0;font-weight:700;color:${dif === 0 ? "var(--menta)" : "var(--danger)"}">${dif === 0 ? "La caja cuadra." : dif > 0 ? `Sobran ${fmt(dif)}` : `Faltan ${fmt(-dif)}`}${S.cierre.cerradoT ? ` <span class="muted small" style="font-weight:500">Cerrada a las ${hora(S.cierre.cerradoT)}</span>` : ""}</p>`; })() : ""}
   </div>
   <h3>Ventas de hoy</h3>
-  ${vs.length ? `<div class="card">${vs.map(v => `<div class="row"><div class="l"><b>${hora(v.t)}</b> <span class="pill">${esc(v.m)}</span>
+  ${vs.length ? `<div class="card">${vs.map(v => `<div class="row"><div class="l"><b>${hora(v.t)}</b> <span class="pill">${esc(v.m)}</span>${v.pend ? ' <span class="pill" style="background:var(--mango-soft);color:var(--ink)">Por confirmar</span>' : v.conf ? ` <span class="pill" style="background:var(--menta-soft);color:var(--ink)">Llegó ${hora(v.conf)}</span>` : ""}${v.ref ? ` <span class="small muted">${esc(v.ref)}</span>` : ""}
     <div class="sale-items">${(v.items || []).map(i => `${i.q} ${esc(i.n)}${i.s ? " (" + esc(i.s) + ")" : ""}`).join(", ")}</div></div>
-    <div class="r">${fmt(v.total)}${S.canWrite ? `<br><button class="btn danger sm" style="margin-top:4px" data-act="delventa" data-doc="${esc(v.docId)}" data-id="${esc(v.id)}">Borrar</button>` : ""}</div></div>`).join("")}</div>`
+    <div class="r">${fmt(v.total)}${S.canWrite ? `<br><button class="btn danger sm" style="margin-top:4px" data-act="delventa" data-doc="${esc(v.docId)}" data-id="${esc(v.id)}">${S.armed === "del" + v.id ? "¿Seguro?" : "Borrar"}</button>` : ""}</div></div>`).join("")}</div>`
     : '<div class="empty"><p>Cuando cobres, las ventas aparecen aquí.</p></div>'}`;
 }
 
@@ -569,7 +600,7 @@ function vGastos() {
   <div class="stats"><div class="stat"><span>Total gastado</span><b>${fmt(tot)}</b></div><div class="stat"><span>Registros</span><b>${gs.length}</b></div></div>
   ${Object.keys(porCat).length ? `<div class="card">${Object.entries(porCat).sort((x, y) => y[1] - x[1]).map(([c, v]) => `<div class="row"><div class="l">${esc(c)}</div><div class="r">${fmt(v)}</div></div>`).join("")}</div>` : ""}
   ${gs.length ? `<div class="card">${gs.map(g => `<div class="row"><div class="l"><b>${esc(g.concepto)}</b><div class="small muted">${diaCorto(g.fecha)}, ${esc(g.cat)}, ${esc(g.m)}</div></div>
-    <div class="r">${fmt(g.valor)}${S.canWrite ? `<br><button class="btn danger sm" style="margin-top:4px" data-act="delgasto" data-id="${esc(g.id)}">Borrar</button>` : ""}</div></div>`).join("")}</div>`
+    <div class="r">${fmt(g.valor)}${S.canWrite ? `<br><button class="btn danger sm" style="margin-top:4px" data-act="delgasto" data-id="${esc(g.id)}">${S.armed === "dg" + g.id ? "¿Seguro?" : "Borrar"}</button>` : ""}</div></div>`).join("")}</div>`
     : '<div class="empty"><p>No hay gastos registrados en este mes.</p></div>'}`;
 }
 
@@ -669,7 +700,7 @@ function sheetProd(pid) {
     <div><label class="f" for="pk">Lo que te cuesta</label><input class="in" id="pk" inputmode="numeric" value="${p && p.costo != null ? esc(fmt(p.costo)) : ""}" placeholder="Déjalo vacío si no sabes"></div></div>
     <label class="f" for="ps">Sabores (uno por línea, opcional)</label><textarea class="in" id="ps" placeholder="Milky&#10;Maracuyá">${p ? esc(p.sabores.map(s => s.n).join("\n")) : ""}</textarea>
     <label class="check"><input type="checkbox" id="pi" ${p && p.controla ? "checked" : ""}> Llevar inventario de este producto</label>
-    <div class="btns" style="margin-top:16px">${p ? `<button class="btn danger" data-act="delprod" data-id="${esc(p.id)}">Borrar</button>` : ""}<button class="btn pri" style="flex:1" data-act="saveprod" data-id="${p ? esc(p.id) : ""}">Guardar</button></div>`;
+    <div class="btns" style="margin-top:16px">${p ? `<button class="btn danger" data-act="delprod" data-id="${esc(p.id)}">${S.armed === "dp" + p.id ? "¿Seguro? Toca otra vez" : "Borrar"}</button>` : ""}<button class="btn pri" style="flex:1" data-act="saveprod" data-id="${p ? esc(p.id) : ""}">Guardar</button></div>`;
   };
 }
 
@@ -704,6 +735,8 @@ document.addEventListener("click", e => {
     case "vaciar": S.cart = []; S.recibido = ""; closeSheet(); render(); break;
     case "cobrar": cobrar(); break;
     case "delventa": borrarVenta(d.doc, d.id); break;
+    case "confpago": confirmarPago(d.doc, d.id); break;
+    case "banco": { const v = $("#banco").value; if (!v.trim()) return; guardarCierre({banco: num(v)}).then(() => toast("Guardado")); break; }
     case "base": { const v = $("#base").value; if (!v.trim()) return; guardarCierre({base: num(v)}).then(() => toast("Base guardada")); break; }
     case "cerrar": { const v = $("#contado").value; if (!v.trim()) { toast("Escribe cuánto efectivo contaste", true); return; } guardarCierre({contado: num(v), cerradoT: Date.now()}).then(() => toast("Caja cerrada")); break; }
     case "gmes": S.gastosMes = d.v; render(); break;
@@ -716,7 +749,7 @@ document.addEventListener("click", e => {
       break;
     }
     case "delgasto": {
-      if (!confirm("¿Borrar este gasto?")) return;
+      if (S.armed !== "dg" + d.id) { armar("dg" + d.id); return; } S.armed = null;
       const m = Object.assign({}, S.gastos); delete m[d.id]; S.gastos = m; render();
       deleteDoc("gastos/" + d.id).catch(writeErr); break;
     }
@@ -750,7 +783,7 @@ document.addEventListener("click", e => {
       closeSheet(); saveCfg(cfg).then(() => toast("Producto guardado")); break;
     }
     case "delprod": {
-      if (!confirm("¿Borrar este producto? Las ventas que ya hiciste se conservan.")) return;
+      if (S.armed !== "dp" + d.id) { armar("dp" + d.id); return; } S.armed = null;
       const cfg = JSON.parse(JSON.stringify(cfgOrEmpty())); cfg.productos = cfg.productos.filter(x => x.id !== d.id);
       closeSheet(); saveCfg(cfg).then(() => toast("Producto borrado")); break;
     }
