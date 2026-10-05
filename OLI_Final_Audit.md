@@ -121,7 +121,9 @@ Antes de llegar a 11/11, la misma prueba encontró **3 fallos reales** (sección
 
 ---
 
-## 4b. Incidente del 5/10/2026 (provocado por mí, ya corregido)
+## 4b. Incidente del 5/10/2026 (provocado por mí, ya resuelto)
+
+> **Actualización:** el dueño confirmó que esa venta y esa caja eran **una prueba suya**, no ventas del negocio. A su pedido se borraron del servidor. Producción quedó con 0 ventas, 0 cajas, 94 unidades y 2 cuentas.
 
 Al limpiar los datos de prueba de las grabaciones del video, borré por error una **venta real** hecha desde el "Computador": `Computador #1`, $24.500 con tarjeta (1 Paleta Milky, 1 Capuchino, 1 Granizado Mango 9 oz). También borré la apertura de caja de esa sesión ($200.000) y sus registros de auditoría.
 
