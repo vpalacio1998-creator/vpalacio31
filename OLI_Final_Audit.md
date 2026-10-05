@@ -117,7 +117,10 @@ Antes de llegar a 11/11, la misma prueba encontró **3 fallos reales** (sección
 5. Las funciones internas tenían `search_path` variable (aviso del asesor de Supabase). Corregido.
 
 6. **No había forma de crear cuentas de empleados desde la app.** La función del servidor (`invite-user`) existía, pero ningún botón la usaba. Ahora Equipo tiene **"Crear cuenta"** (correo, contraseña y rol). Además, la ayuda ya no menciona el botón "Compartir" de Claude cuando OLI corre en su propio servidor.
-7. **Botón "Instalar OLI"** con los pasos según el equipo (iPad/Safari, Samsung Internet, Chrome Android, computador).
+7. **Punto de equilibrio corregido:** los gastos registrados como Arrendamiento, Nómina o Servicios ya no se restan dos veces (ya están en los gastos fijos), y los días que quedan se cuentan desde la fecha del calendario. Probado 4/4.
+8. **Cobro en efectivo:** botón "Otro valor" con teclado y sugerencias de redondeo (antes solo exacto o billetes grandes). Probado 7/7.
+9. **Cerrar sesión** en el menú, en Más opciones y en la Ayuda. Probado con el simulador de servidor 7/7.
+10. **Botón "Instalar OLI"** con los pasos según el equipo (iPad/Safari, Samsung Internet, Chrome Android, computador).
 
 ---
 

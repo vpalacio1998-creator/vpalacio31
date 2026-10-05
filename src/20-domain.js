@@ -113,6 +113,9 @@ function serieDiaria(a, b) {
 const configNeg = () => col("config").negocio || {};
 const gastosFijosPlan = () => (configNeg().gastosFijos || []);
 const totalFijos = () => sum(gastosFijosPlan(), g => g.v);
+/* arriendo, nómina y servicios ya están dentro de los gastos fijos del mes: si además se registran como gasto, no se restan dos veces */
+const CATS_FIJAS = ["Arrendamiento", "Nómina", "Servicios"];
+const gastosVariables = (a, b) => { const fijas = totalFijos() > 0 ? CATS_FIJAS : []; return sum(gastosEn(a, b).filter(g => g.cat !== BASE_COSTO && !fijas.includes(g.cat)), g => g.valor); };
 const margenObjetivo = () => (configNeg().margenObjetivo != null ? configNeg().margenObjetivo : 0.6);
 
 /* ---------- rangos de fecha para filtros ---------- */

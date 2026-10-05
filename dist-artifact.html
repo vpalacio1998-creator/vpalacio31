@@ -292,7 +292,7 @@ details.help span{display:block;font-weight:500;font-size:13px;line-height:1.35;
 <div class="sheet hidden" id="sheet"><div class="bg"></div><div class="panel" role="dialog" aria-modal="true" id="panel"></div></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script>window.OLI_BUILD="af063f13";</script>
+<script>window.OLI_BUILD="9b8d88b4";</script>
 <script>
 (function(){
 "use strict";
@@ -1015,6 +1015,9 @@ function serieDiaria(a, b) {
 const configNeg = () => col("config").negocio || {};
 const gastosFijosPlan = () => (configNeg().gastosFijos || []);
 const totalFijos = () => sum(gastosFijosPlan(), g => g.v);
+/* arriendo, nómina y servicios ya están dentro de los gastos fijos del mes: si además se registran como gasto, no se restan dos veces */
+const CATS_FIJAS = ["Arrendamiento", "Nómina", "Servicios"];
+const gastosVariables = (a, b) => { const fijas = totalFijos() > 0 ? CATS_FIJAS : []; return sum(gastosEn(a, b).filter(g => g.cat !== BASE_COSTO && !fijas.includes(g.cat)), g => g.valor); };
 const margenObjetivo = () => (configNeg().margenObjetivo != null ? configNeg().margenObjetivo : 0.6);
 
 /* ---------- rangos de fecha para filtros ---------- */
@@ -2200,7 +2203,7 @@ function bDinero() {
       <div class="seg" style="margin-top:10px">${MODOS_COMP.map(([k, l]) => `<button data-act="comp" data-v="${k}" aria-pressed="${S.comp === k}">${l}</button>`).join("")}</div></div>
     <div><div class="muted small" style="font-weight:700;letter-spacing:.05em">UTILIDAD ESTIMADA ${ayuda("Ventas menos el costo de lo vendido y los gastos de hoy. No incluye gastos fijos del mes (arriendo, nómina).")}</div><div class="big" style="font-size:36px;color:${f.utilidad < 0 ? "var(--danger)" : "var(--marca-d)"}">${fmt(f.utilidad)}</div>
       <div class="small muted">Margen ${pct(f.margen, 1)}${f.sinCosto ? " · " + f.sinCosto + " unidades sin costo" : ""}</div>
-      <div class="row" style="padding:6px 0;margin-top:8px"><span class="small">Venta</span><b class="small">${fmt(f.ventas)}</b></div><div class="row" style="padding:6px 0"><span class="small">− Costo de lo vendido</span><b class="small">${fmt(f.cogs)}</b></div><div class="row" style="padding:6px 0"><span class="small">= Utilidad bruta</span><b class="small">${fmt(f.bruta)}</b></div><div class="row" style="padding:6px 0"><span class="small">− Gastos de hoy</span><b class="small">${fmt(f.gastos)}</b></div>${totalFijos() ? `<div class="row" style="padding:6px 0"><span class="small">− Gastos fijos del día ${ayuda("Arriendo, trabajadoras, servicios, impuestos: el total mensual dividido entre los días del mes.")}</span><b class="small">${fmt(fijoDia())}</b></div><div class="row" style="padding:6px 0"><b class="small">= Lo que queda hoy</b><b class="small" style="color:${f.utilidad - fijoDia() < 0 ? "var(--danger)" : "var(--marca-d)"}">${fmt(f.utilidad - fijoDia())}</b></div>` : ""}</div></div>
+      <div class="row" style="padding:6px 0;margin-top:8px"><span class="small">Venta</span><b class="small">${fmt(f.ventas)}</b></div><div class="row" style="padding:6px 0"><span class="small">− Costo de lo vendido</span><b class="small">${fmt(f.cogs)}</b></div><div class="row" style="padding:6px 0"><span class="small">= Utilidad bruta</span><b class="small">${fmt(f.bruta)}</b></div>${totalFijos() ? (() => { const gv = gastosVariables(S.today, S.today), q = f.bruta - gv - fijoDia(); return `<div class="row" style="padding:6px 0"><span class="small">− Otros gastos de hoy ${ayuda("Gastos del día que no son arriendo, nómina ni servicios: esos ya están en los gastos fijos.")}</span><b class="small">${fmt(gv)}</b></div><div class="row" style="padding:6px 0"><span class="small">− Gastos fijos del día ${ayuda("Arriendo, trabajadoras, servicios, impuestos: el total mensual dividido entre los días del mes.")}</span><b class="small">${fmt(fijoDia())}</b></div><div class="row" style="padding:6px 0"><b class="small">= Lo que queda hoy</b><b class="small" style="color:${q < 0 ? "var(--danger)" : "var(--marca-d)"}">${fmt(q)}</b></div>`; })() : `<div class="row" style="padding:6px 0"><span class="small">− Gastos de hoy</span><b class="small">${fmt(f.gastos)}</b></div>`}</div></div>
     <hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
     <div class="two" style="gap:20px"><div>${bEquilibrio()}</div>
       <div><b>CIERRE ESTIMADO</b>${est.ok ? `<div class="big" style="font-size:26px;margin:4px 0">${fmtK(est.est)}</div><div class="small">Rango probable: <b>${fmtK(est.lo)} – ${fmtK(est.hi)}</b></div><div class="xs muted">Estimación basada en el comportamiento de hoy y en ${est.n} ${DOW[dowOf(S.today)]}s anteriores. No es una promesa.</div>` : `<p class="muted small" style="margin:6px 0 0">${esc(est.motivo)}</p>`}</div></div></div>`;
@@ -2213,8 +2216,8 @@ const fijoDia = () => Math.round(totalFijos() / diasMes());
 function equilibrio() {
   // el ritmo se mide desde el primer día con ventas del mes (si el negocio abrió a mitad de mes, no se cuentan días sin operar)
   const fijos = totalFijos(), mes = finanzas(firstOfMonth(S.today), S.today), hoy = finanzas(S.today, S.today), dm = diasMes(), ini = ventasOk().filter(v => v.fecha >= firstOfMonth(S.today)).map(v => v.fecha).sort()[0] || S.today, dia = diffDays(S.today, ini) + 1 + (parse(ini).getDate() - 1) * 0;
-  const bruta = mes.bruta - mes.gastos, falta = Math.max(0, fijos - bruta), uds = mes.uds || 0, gU = uds ? mes.bruta / uds : 0, quedan = Math.max(1, dm - dia + 1);
-  return {fijos, bruta, falta, avance: fijos ? clamp(bruta / fijos, 0, 1) : 0, esperado: fijos ? dia / (dm - parse(ini).getDate() + 1) : 0, diasOp: dm - parse(ini).getDate() + 1, hoyBruta: hoy.bruta - hoy.gastos, cuota: Math.round(fijos / dm), porDia: Math.ceil(falta / quedan), udsDia: gU > 0 ? Math.ceil(falta / quedan / gU) : null, dia, dm};
+  const bruta = mes.bruta - gastosVariables(firstOfMonth(S.today), S.today), falta = Math.max(0, fijos - bruta), uds = mes.uds || 0, gU = uds ? mes.bruta / uds : 0, quedan = Math.max(1, dm - parse(S.today).getDate() + 1);   // días de calendario que quedan, contando hoy
+  return {fijos, bruta, falta, avance: fijos ? clamp(bruta / fijos, 0, 1) : 0, esperado: fijos ? dia / (dm - parse(ini).getDate() + 1) : 0, diasOp: dm - parse(ini).getDate() + 1, hoyBruta: hoy.bruta - gastosVariables(S.today, S.today), cuota: Math.round(fijos / dm), porDia: Math.ceil(falta / quedan), udsDia: gU > 0 ? Math.ceil(falta / quedan / gU) : null, dia, dm};
 }
 function bEquilibrio() {
   const e = equilibrio();
