@@ -92,7 +92,7 @@ function connInfo() {
   if (e === "offline") return {k: "offline", txt: "Sin conexión" + (pv ? " · " + pv + " por enviar" : ""), cls: "warn", ic: "alerta"};
   if (e === "sincronizando") return {k: "sync", txt: "Enviando " + Math.min(SYNC.hecho + 1, SYNC.total) + "/" + SYNC.total, cls: "ok", ic: "rayo"};
   if (e === "error") return {k: "error", txt: "Hay datos que revisar", cls: "bad", ic: "alerta"};
-  if (e === "pendiente") return {k: "pend", txt: pv ? pv + " ventas por enviar" : "Enviando cambios", cls: "warn", ic: "rayo"};
+  if (e === "pendiente") return {k: "pend", txt: pv ? pv + (pv === 1 ? " venta por enviar" : " ventas por enviar") : "Enviando cambios", cls: "warn", ic: "rayo"};
   return {k: "ok", txt: "Conectado", cls: "ok", ic: "ok"};
 }
 function connPill() { const c = connInfo(); return `<button class="pill ${c.cls}" data-act="verEnvio" style="min-height:36px;border:0" aria-label="Estado de conexión: ${esc(c.txt)}"><span class="dot ${c.cls === "ok" ? "" : c.cls === "bad" ? "bad" : "off"}" style="${c.cls === "warn" ? "background:var(--warn)" : ""}"></span>${esc(c.txt)}</button>`; }
