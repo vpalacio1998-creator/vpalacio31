@@ -292,7 +292,7 @@ details.help span{display:block;font-weight:500;font-size:13px;line-height:1.35;
 <div class="sheet hidden" id="sheet"><div class="bg"></div><div class="panel" role="dialog" aria-modal="true" id="panel"></div></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script>window.OLI_BUILD="714f36a1";</script>
+<script>window.OLI_BUILD="af063f13";</script>
 <script>
 (function(){
 "use strict";
@@ -1873,13 +1873,16 @@ Object.assign(S, {desc: 0, descModo: "", cliente: null, mas: false});
 function totalConDesc() { return totalCarrito() - clamp(S.desc, 0, totalCarrito()); }
 function cobroHTML() {
   const sub = totalCarrito(), total = totalConDesc(), rec = num(S.recibido) || (S.metodo === "Efectivo" ? total : 0), cambio = S.metodo === "Efectivo" ? rec - total : 0;
-  const billetes = uniq([total].concat(BILLETES.filter(b => b >= total).slice(0, 4)));
+  // sugerencias: exacto, redondeos útiles (siguiente mil, cinco mil y diez mil) y billetes grandes; además "Otro valor" para escribir lo que entregó
+  const billetes = uniq([total, Math.ceil(total / 1000) * 1000, Math.ceil(total / 5000) * 5000, Math.ceil(total / 10000) * 10000].concat(BILLETES.filter(b => b >= total))).filter(b => b >= total).sort((a, b) => a - b).slice(0, 5);
+  const otro = S.recOtro || (S.recibido !== "" && !billetes.includes(num(S.recibido)));
   return head("Cobrar", "Volver al pedido") + `
   <div style="text-align:center;margin:4px 0 14px"><span class="muted">TOTAL A PAGAR</span><div class="big" style="font-size:46px">${fmt(total)}</div>${S.desc > 0 ? `<span class="pill ok">Descuento ${fmt(S.desc)}</span>` : ""}</div>
   <label class="f">¿Cómo paga?</label>
   <div class="paygrid">${METODOS.map(m => `<button data-act="metodo" data-v="${esc(m)}" aria-pressed="${m === S.metodo}" style="min-height:58px;font-size:15px">${esc(m)}</button>`).join("")}</div>
-  ${S.metodo === "Efectivo" ? `<label class="f">¿Con cuánto paga?</label><div class="btns">${billetes.map(b => `<button class="btn ${rec === b ? "pri" : "ghost"}" style="flex:1;min-width:30%" data-act="recibido" data-v="${b}">${b === total ? "Exacto" : fmt(b)}</button>`).join("")}</div>
-    <div class="row" style="border:0;margin-top:6px"><b>Cambio</b><span class="big" style="font-size:30px;color:${cambio < 0 ? "var(--danger)" : "var(--marca-d)"}">${cambio < 0 ? "Faltan " + fmt(-cambio) : fmt(cambio)}</span></div>`
+  ${S.metodo === "Efectivo" ? `<label class="f">¿Con cuánto paga?</label><div class="btns">${billetes.map(b => `<button class="btn ${!otro && rec === b ? "pri" : "ghost"}" style="flex:1;min-width:30%" data-act="recibido" data-v="${b}">${b === total ? "Exacto" : fmt(b)}</button>`).join("")}<button class="btn ${otro ? "pri" : "ghost"}" style="flex:1;min-width:30%" data-act="recibidoOtro">Otro valor</button></div>
+    ${otro ? `<label class="f" for="rc-v">Valor que entregó el cliente</label><input class="in money" id="rc-v" inputmode="numeric" autocomplete="off" value="${S.recibido !== "" ? fmt(num(S.recibido)) : ""}" placeholder="$0" style="font-size:24px;min-height:56px">${teclado("rc-v")}` : ""}
+    <div class="row" style="border:0;margin-top:6px"><b>Cambio</b><span class="big" id="rc-cambio" style="font-size:30px;color:${cambio < 0 ? "var(--danger)" : "var(--marca-d)"}">${cambio < 0 ? "Faltan " + fmt(-cambio) : fmt(cambio)}</span></div>`
   : esDigital(S.metodo) ? `<div class="notice ok" style="margin-top:12px">Cuando veas el aviso de que llegó el pago, toca <b>CONFIRMAR</b>. Si aún no llega, el administrador lo verá como “por confirmar”.</div>` : ""}
   <details style="margin:14px 0"${S.mas ? " open" : ""}><summary class="small" style="font-weight:700;cursor:pointer;min-height:40px;display:flex;align-items:center" data-act="masOpc">Más opciones</summary>
     <label class="f">Descuento</label><div class="btns">${[0, 5, 10].map(p => `<button class="btn ${S.descModo === String(p) ? "pri" : "ghost"} sm" data-act="descuento" data-p="${p}">${p === 0 ? "Sin descuento" : p + "%"}</button>`).join("")}</div>
@@ -1893,11 +1896,12 @@ ACT.cobrar = () => {
   if (!S.cart.length) { toast("Toca un producto para empezar.", true); return; }
   if (!DS.canWrite) { toast("Tienes acceso de solo lectura.", true); return; }
   const c = cajaHoy(), st = cajaEstado(c); if (st === "sin") { ACT.abrirCaja(); return; } if (st === "cerrada") { toast("La caja de hoy está cerrada.", true); return; }
-  S.recibido = ""; S.desc = 0; S.descModo = ""; S.cliente = null; S.mas = false; S.metodo = "Efectivo";   // cada venta empieza en efectivo (no hereda el método de la anterior)
+  S.recibido = ""; S.recOtro = false; S.desc = 0; S.descModo = ""; S.cliente = null; S.mas = false; S.metodo = "Efectivo";   // cada venta empieza en efectivo (no hereda el método de la anterior)
   abrir(() => cobroHTML());
 };
-ACT.metodo = (el, d) => { S.metodo = d.v; if (d.v !== "Efectivo") S.recibido = ""; redrawSheet(true); };
-ACT.recibido = (el, d) => { S.recibido = d.v; redrawSheet(true); };
+ACT.metodo = (el, d) => { S.metodo = d.v; if (d.v !== "Efectivo") { S.recibido = ""; S.recOtro = false; } redrawSheet(true); };
+ACT.recibido = (el, d) => { S.recibido = d.v; S.recOtro = false; redrawSheet(true); };
+ACT.recibidoOtro = () => { S.recOtro = true; S.recibido = ""; redrawSheet(true); const i = $("#rc-v"); if (i) i.focus(); };
 ACT.descuento = (el, d) => { const p = Number(d.p); S.descModo = String(p); S.desc = Math.round(totalCarrito() * p / 100); S.mas = true; redrawSheet(true); };
 document.addEventListener("change", e => {
   if (e.target.id === "pidefactura") { S.cliente = e.target.checked ? {doc: "", nombre: "", correo: ""} : null; S.mas = true; redrawSheet(true); }
@@ -1911,7 +1915,7 @@ ACT.confirmarVenta = async () => {
   cobrando = true; redrawSheet(true);
   try {
     const v = await registrarVenta({m: S.metodo, desc: S.desc, recibido: rec, cliente: S.cliente});
-    S.cart = []; saveCart(); S.cliente = null; S.desc = 0; S.recibido = "";
+    S.cart = []; saveCart(); S.cliente = null; S.desc = 0; S.recibido = ""; S.recOtro = false;
     const off = DS.mode === "db" && !SYNC.online;
     abrir(() => `<div class="done" data-v="${esc(v.id)}"><div class="tick">${ic("ok", 52)}</div><h2 style="margin:14px 0 4px">Venta realizada</h2><div class="big">${fmt(v.total)}</div><p class="muted" style="margin:6px 0 0">${esc(v.m)}${v.m === "Efectivo" && v.cambio > 0 ? " · Cambio: <b>" + fmt(v.cambio) + "</b>" : ""}</p>${off ? '<p class="small muted">Guardada en este equipo. Se enviará sola cuando vuelva Internet.</p>' : ""}<button class="btn pri xl wide" style="margin-top:16px" data-act="cerrar" autofocus>Nueva venta</button></div>`);
     clearTimeout(doneTimer); const vid = v.id; doneTimer = setTimeout(() => { const el = $("#panel .done"); if (sheetFn && el && el.dataset.v === vid) cerrar(); }, 2600); draw();
@@ -1983,6 +1987,8 @@ ACT.cerrarCaja = (el, d) => { S.cierreId = (d && d.id) || (cajaHoy() || {}).id |
   <div id="ci-dif" style="margin:10px 0"></div><div id="ci-obs"></div>
   <button class="btn pri xl wide" data-act="doCerrar">${ic("lock", 22)} CERRAR CAJA</button>`; }); };
 document.addEventListener("input", e => {
+  if (e.target.id === "rc-v") { S.recibido = e.target.value.trim() === "" ? "" : String(num(e.target.value)); const total = totalConDesc(), rec = num(S.recibido) || total, c = rec - total, el = $("#rc-cambio");
+    if (el) { el.textContent = c < 0 ? "Faltan " + fmt(-c) : fmt(c); el.style.color = c < 0 ? "var(--danger)" : "var(--marca-d)"; } return; }
   if (e.target.id === "ci-monto") { const cs = cajaSel(); if (!cs) return; const k = cajaCalc(cs), v = num(e.target.value), dif = v - k.esperado, has = e.target.value.trim() !== "";
     $("#ci-dif").innerHTML = has ? `<div class="notice ${dif === 0 ? "ok" : "bad"}"><b>${dif === 0 ? "La caja cuadra" : dif > 0 ? "Sobran " + fmt(dif) : "Faltan " + fmt(-dif)}</b></div>` : "";
     $("#ci-obs").innerHTML = has && dif !== 0 ? `<label class="f">¿Qué pasó?</label>${sel("ci-mot", ["Error de cambio", "Gasto sin anotar", "Retiro sin anotar", "No sé"], "")}<label class="f" for="ci-nota">Detalle (opcional)</label><input class="in plain" id="ci-nota">` : ""; }
