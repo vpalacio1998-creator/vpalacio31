@@ -31,6 +31,7 @@ const S = {today: ymd(), tab: "vender", cat: "Todas", q: "", cart: [], metodo: "
 const OUT = {};                    // cola de salida (espejo en memoria de IndexedDB): path -> operación
 const SYNC = {estado: "offline", online: false, hecho: 0, total: 0, ultima: 0, error: "", rechazadas: 0, enCurso: ""};
 const DEV = {id: "", nombre: "", seq: 0, listo: false};
+const REMOTE = {kind: "none", apply: null, subscribe: null, desc: ""};   // adaptador del servidor: claude | supabase
 
 /* ---------- permisos ---------- */
 function reglaDe(col) {
@@ -52,13 +53,16 @@ const memo = (k, fn) => { const m = memo.c; if (m.v !== DS.v || m.d0 !== S.today
 memo.c = {v: -1, d: {}, d0: ""};
 
 /* ---------- almacenamiento local robusto: IndexedDB (con respaldo en localStorage) ---------- */
+/* Migraciones de IndexedDB: nunca se borran datos; cada versión nueva agrega un paso (así una actualización no pierde ventas pendientes). */
+const IDB_VERSION = 1;
+const IDB_MIGRATIONS = {1: d => { for (const s of ["docs", "outbox", "kv"]) d.createObjectStore(s); }};
 const IDB = {
   db: null, ok: false, mem: {docs: {}, outbox: {}, kv: {}},
   open() {
     return new Promise(res => {
       try {
-        const r = indexedDB.open("oli-v1", 1);
-        r.onupgradeneeded = () => { const d = r.result; for (const s of ["docs", "outbox", "kv"]) d.createObjectStore(s); };
+        const r = indexedDB.open("oli-v1", IDB_VERSION);
+        r.onupgradeneeded = e => { const d = r.result; for (let v = e.oldVersion + 1; v <= IDB_VERSION; v++) (IDB_MIGRATIONS[v] || (() => {}))(d, r.transaction); };
         r.onsuccess = () => { this.db = r.result; this.ok = true; this.db.onversionchange = () => this.db.close(); res(true); };
         r.onerror = () => res(this.fallback()); r.onblocked = () => res(this.fallback());
       } catch (e) { res(this.fallback()); }
@@ -91,10 +95,12 @@ const setDevNombre = async n => { DEV.nombre = n; await IDB.kvSet("dev.nombre", 
 async function nextSeq() { DEV.seq++; await IDB.kvSet("dev.seq", DEV.seq); return DEV.seq; }
 
 /* ---------- escritura offline-first ---------- */
+let opSeq = 0;
+const newOpId = path => DEV.id + ":" + Date.now().toString(36) + ":" + (++opSeq) + ":" + path;
 async function put(colName, id, data) {
   if (!puede(colName, "write")) { const e = new Error("denied"); e.code = "denied"; throw e; }
   const doc = Object.assign({sede: SEDE}, data), path = pathOf(colName, id), prev = (DS.c[colName] || {})[id], prevOp = OUT[path];
-  const op = {path, col: colName, id, data: doc, t: Date.now(), estado: "pendiente", ids: idsDe(doc)};
+  const op = {path, col: colName, id, data: doc, t: Date.now(), opId: newOpId(path), estado: "pendiente", ids: idsDe(doc)};
   DS.c[colName] = Object.assign({}, DS.c[colName], {[id]: doc}); OUT[path] = op; changed();
   try { await IDB.tx([["docs", "put", path, {col: colName, id, data: doc}], ["outbox", "put", path, op]]); }
   catch (e) { const m = Object.assign({}, DS.c[colName]); if (prev === undefined) delete m[id]; else m[id] = prev; DS.c[colName] = m; if (prevOp) OUT[path] = prevOp; else delete OUT[path]; changed(); throw e; }
@@ -104,7 +110,7 @@ async function put(colName, id, data) {
 async function remove(colName, id) {
   if (!puede(colName, "write")) { const e = new Error("denied"); e.code = "denied"; throw e; }
   const path = pathOf(colName, id), m = Object.assign({}, DS.c[colName]); delete m[id]; DS.c[colName] = m;
-  const op = {path, col: colName, id, del: true, t: Date.now(), estado: "pendiente", ids: []}; OUT[path] = op; changed();
+  const op = {path, col: colName, id, del: true, t: Date.now(), opId: newOpId(path), estado: "pendiente", ids: []}; OUT[path] = op; changed();
   await IDB.tx([["docs", "del", path], ["outbox", "put", path, op]]);
   if (DS.mode === "db") kickSync(); else { delete OUT[path]; IDB.tx([["outbox", "del", path]]).catch(() => {}); }
 }
@@ -156,8 +162,7 @@ async function syncNow() {
       if (!conRed()) break;
       SYNC.enCurso = op.path; changed();
       try {
-        const ref = DS.dbh.doc(op.path);
-        await withTimeout(op.del ? ref.delete() : ref.set(op.data), 12000);
+        await withTimeout(REMOTE.apply(op), 12000);
         const still = OUT[op.path];
         const acks = DS.acks || (DS.acks = {}); acks[op.path] = (op.ids || []).slice(-600);
         const ops2 = [["kv", "put", "acks", acks]];
@@ -205,7 +210,7 @@ function subscribeAudit(uid) {
   if (!uid || auditSubs.has(uid) || !DS.isAdmin || DS.mode !== "db") return; auditSubs.add(uid);
   DS.subs.push(DS.dbh.collection("data/users/" + uid).onSnapshot(snap => { const m = Object.assign({}, DS.c.audit || {}); snap.docs.forEach(d => { m[uid + "__" + d.id] = d.data(); }); DS.c.audit = m; changed(); }, () => {}));
 }
-function syncAuditSubs() { if (DS.mode !== "db" || !DS.isAdmin) return; if (DS.uid) subscribeAudit(DS.uid); for (const d of Object.values(DS.c.dispositivos || {})) if (d.uid) subscribeAudit(d.uid); for (const d of Object.values(DS.c.ventas || {})) if (d.uid) subscribeAudit(d.uid); }
+function syncAuditSubs() { if (DS.mode !== "db" || DS.backend !== "claude" || !DS.isAdmin) return; if (DS.uid) subscribeAudit(DS.uid); for (const d of Object.values(DS.c.dispositivos || {})) if (d.uid) subscribeAudit(d.uid); for (const d of Object.values(DS.c.ventas || {})) if (d.uid) subscribeAudit(d.uid); }
 
 /* ---------- arranque ---------- */
 async function bootData() {
@@ -213,6 +218,7 @@ async function bootData() {
   const docs = await IDB.getAll("docs"), outbox = await IDB.getAll("outbox"), ident = await IDB.get("kv", "ident");
   for (const x of Object.values(docs)) (DS.c[x.col] = DS.c[x.col] || {})[x.id] = x.data;
   for (const [p, op] of Object.entries(outbox)) { OUT[p] = op; if (op.estado === "rechazada") SYNC.rechazadas++; if (op.del) { if (DS.c[op.col]) delete DS.c[op.col][op.id]; } else (DS.c[op.col] = DS.c[op.col] || {})[op.id] = op.data; }
+  if (window.OLI_CONFIG && window.OLI_CONFIG.supabaseUrl && typeof window.bootSupabase === "function") { await window.bootSupabase(ident); return; }
   let db = null, user = null;
   try { if (window.claude && typeof window.claude.use === "function") [db, user] = await Promise.all([window.claude.use("db"), window.claude.use("user")]); } catch (e) {}
   if (ident && !user) { DS.uid = ident.uid; DS.isAdmin = ident.isAdmin; }
@@ -220,7 +226,8 @@ async function bootData() {
     DS.mode = "local"; try { DS.localRole = localStorage.getItem("oli-local-role") || "admin"; } catch (e) {}
     DS.isAdmin = DS.localRole === "admin"; DS.uid = "local"; for (const n of SHARED_COLS.concat(ADMIN_COLS)) DS.ready[n] = true; DS.fromCache = false; recalcEstado(); changed(); return;
   }
-  DS.mode = "db"; DS.dbh = db;
+  DS.mode = "db"; DS.dbh = db; DS.backend = "claude"; REMOTE.kind = "claude"; REMOTE.desc = "Claude";
+  REMOTE.apply = op => op.del ? DS.dbh.doc(op.path).delete() : DS.dbh.doc(op.path).set(op.data);
   for (const n of SHARED_COLS) if (Object.keys(DS.c[n] || {}).length || ident) DS.ready[n] = true;      // con datos guardados, ya se puede operar sin esperar a la red
   try { if (user) { const me = await user.me(); DS.uid = me.id; DS.nombre = me.name || ""; DS.isAdmin = !!(await user.canEdit()); const cw = await user.can("data.write"); DS.canWrite = cw === null ? true : !!cw || DS.isAdmin; await IDB.kvSet("ident", {uid: DS.uid, isAdmin: DS.isAdmin}); } } catch (e) {}
   SHARED_COLS.forEach(subscribe); if (DS.isAdmin) ADMIN_COLS.forEach(subscribe);
@@ -229,13 +236,13 @@ async function bootData() {
   setInterval(() => { if (pendientes().length) { netFail = false; kickSync(); } }, 20000);
   setInterval(() => heartbeat(), 45000);
 }
-const listo = () => DS.mode !== "loading" && ["productos", "meta"].every(n => DS.ready[n]);
+const listo = () => DS.mode !== "loading" && !DS.needsLogin && !DS.needsOrg && ["productos", "meta"].every(n => DS.ready[n]);
 
 /* ---------- dispositivos (para el administrador) ---------- */
 let lastHb = 0;
 function heartbeat(force) {
   if (DS.mode !== "db" || !DEV.listo || !DEV.nombre || !conRed()) return;
-  if (!force && Date.now() - lastHb < 40000) return; lastHb = Date.now();
+  if (Date.now() - lastHb < (force ? 15000 : 40000)) return; lastHb = Date.now();
   put("dispositivos", DEV.id, {dev: DEV.id, nombre: DEV.nombre, uid: DS.uid || "", rol: DS.isAdmin ? "admin" : "empleado", vis: Date.now(), pend: pendientes().length, ventasPend: ventasPendientes(), v: 2}).catch(() => {});
 }
 

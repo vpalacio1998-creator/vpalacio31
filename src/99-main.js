@@ -7,7 +7,7 @@ function onboardingHTML() {
     <button class="btn pri xl wide" data-act="empezarOLI" style="margin-bottom:10px">${ic("paleta", 22)} Empezar con el catálogo de OLI</button>
     <button class="btn ghost xl wide" data-act="empezarDemo" style="margin-bottom:10px">${ic("analisis", 22)} Explorar con datos de demostración</button>
     <button class="btn ghost wide" data-act="empezarVacio">Empezar desde cero</button>
-    <div class="card flat" style="text-align:left;margin-top:18px"><b>Para empezar, solo 5 pasos</b><ol style="margin:8px 0 0;padding-left:20px"><li>Revisa tus productos y precios.</li><li>Pon el inventario de lo que tienes.</li><li>Define tus gastos fijos en Ajustes.</li><li>Da acceso a tu equipo con el botón Compartir.</li><li>Abre tu primera caja y vende.</li></ol><p class="small muted" style="margin:8px 0 0">No tienes que completar todo hoy.</p></div></div></div>`;
+    <div class="card flat" style="text-align:left;margin-top:18px"><b>Para empezar, solo 5 pasos</b><ol style="margin:8px 0 0;padding-left:20px"><li>Revisa tus productos y precios.</li><li>Pon el inventario de lo que tienes.</li><li>Define tus gastos fijos en Ajustes.</li><li>Da acceso a tu equipo con el botón Compartir.</li><li>Abre tu primera caja y vende.</li></ol><p class="small muted" style="margin:8px 0 0">No tienes que completar todo hoy.</p></div><p class="credit">Software by <b>VP Visual Project</b></p></div></div>`;
 }
 ACT.reintentar = () => { changed(); };
 ACT.empezarOLI = async () => { toast("Preparando OLI…"); await guardar(() => cargarCatalogoOLI(), "Listo. Revisa tus productos."); S.tab = "productos"; draw(); };
@@ -33,15 +33,33 @@ function banners() {
   if (DS.error) h += `<div class="notice bad" style="margin:0 0 12px">${esc(DS.error)}</div>`;
   el.innerHTML = h;
 }
+function loginHTML() {
+  return `<div class="gate"><div class="box"><div class="logo">OLI</div><h2>Bienvenido</h2><p>Ingresa para empezar.</p>
+    <label class="f" for="lg-mail" style="text-align:left">Correo</label><input class="in plain" id="lg-mail" type="email" autocomplete="username" inputmode="email" placeholder="tucorreo@ejemplo.com">
+    <label class="f" for="lg-pass" style="text-align:left">Contraseña</label><input class="in plain" id="lg-pass" type="password" autocomplete="current-password">
+    <div id="lg-err" role="alert" style="color:var(--danger);min-height:22px;margin:8px 0;font-size:14px"></div>
+    <button class="btn pri xl wide" data-act="login">INGRESAR</button>
+    <p class="small muted" style="margin-top:14px">¿Olvidaste tu contraseña? Pídele al administrador que te ayude a cambiarla.</p><p class="credit">Desarrollado por <b>VP Visual Project</b></p></div></div>`;
+}
+function orgHTML() {
+  return `<div class="gate"><div class="box"><div class="logo">OLI</div><h2>Crea tu negocio</h2><p>Esta cuenta aún no pertenece a ningún negocio. Si eres empleado, pídele al administrador que te agregue. Si eres el dueño, crea tu negocio.</p>
+    <label class="f" for="og-n" style="text-align:left">Nombre del negocio</label><input class="in plain" id="og-n" value="OLI"><div id="lg-err" role="alert" style="color:var(--danger);min-height:22px;margin:8px 0;font-size:14px"></div>
+    <button class="btn pri xl wide" data-act="crearNegocio">CREAR MI NEGOCIO</button><button class="btn ghost wide" style="margin-top:10px" data-act="logout">Salir</button></div></div>`;
+}
+ACT.login = async () => { const b = $("#lg-err"); b.textContent = ""; const m = $("#lg-mail").value.trim(), p = $("#lg-pass").value; if (!m || !p) { b.textContent = "Escribe tu correo y tu contraseña."; return; }
+  try { await sbLogin(m, p); } catch (e) { b.textContent = navigator.onLine === false ? "No hay conexión a Internet para ingresar por primera vez." : (e.message || "No pudimos ingresar."); } };
+ACT.crearNegocio = async () => { const n = $("#og-n").value.trim(); if (!n) return; try { await sbCrearNegocio(n); } catch (e) { $("#lg-err").textContent = e.message; } };
+ACT.logout = async () => { if (pendientes().length && !(await confirmar({titulo: "Hay ventas sin enviar", texto: "Si sales ahora, quedan guardadas en este equipo y se enviarán cuando vuelvas a ingresar. ¿Salir de todos modos?", si: "Sí, salir", no: "No"}))) return; await sbSalir(); };
 function renderView() {
+  if (DS.needsLogin) return loginHTML(); if (DS.needsOrg) return orgHTML();
   if (!listo()) return splash();
   const meta = col("meta").app; if (!meta) return onboardingHTML();
   const f = VIEWS[S.tab] || VIEWS.vender; try { return f(); } catch (e) { console.error(e); return vacio("alerta", "Algo no salió bien al mostrar esta pantalla", "Vuelve a Inicio e inténtalo otra vez.", '<button class="btn pri" data-act="ir" data-r="' + (esAdmin() ? "hoy" : "vender") + '">Volver al inicio</button>'); }
 }
 function draw() {
-  const root = $("#app"), meta = listo() ? col("meta").app : null;
+  const root = $("#app"), meta = listo() && !DS.needsLogin ? col("meta").app : null;
   if (!rutaOk(S.tab)) S.tab = "vender";
-  const gate = !listo() || !meta; root.classList.toggle("gate-mode", gate);
+  const gate = DS.needsLogin || DS.needsOrg || !listo() || !meta; root.classList.toggle("gate-mode", gate);
   $("#view").innerHTML = renderView();
   if (gate) { $("#ticket").innerHTML = ""; $("#cartbar").innerHTML = ""; $("#tabs").innerHTML = ""; $("#rail").innerHTML = ""; $("#banners").innerHTML = ""; return; }
   syncAuditSubs(); pedirNombres(Object.values(col("ventas")).map(d => d.uid));

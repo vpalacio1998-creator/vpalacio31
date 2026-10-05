@@ -1,0 +1,17 @@
+# Configuración para Supabase CLI (supabase start / supabase db push). Ajusta project_id al tuyo.
+project_id = "oli"
+
+[api]
+port = 54321
+schemas = ["public"]
+
+[db]
+port = 54322
+major_version = 15
+
+[auth]
+enable_signup = false           # las cuentas las crea el administrador (Edge Function invite-user) o el dueño desde el panel
+minimum_password_length = 8
+
+[functions.invite-user]
+verify_jwt = true

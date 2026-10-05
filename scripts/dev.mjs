@@ -1,0 +1,5 @@
+// Servidor local para probar la PWA: node scripts/dev.mjs  ->  http://localhost:8080  (service workers funcionan en localhost)
+import http from "node:http"; import fs from "node:fs"; import path from "node:path"; import { execSync } from "node:child_process";
+execSync("node scripts/build.mjs", { stdio: "inherit" });
+const D = path.join(process.cwd(), "dist"), T = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json", ".webmanifest": "application/manifest+json", ".svg": "image/svg+xml", ".png": "image/png" };
+http.createServer((q, r) => { let p = decodeURIComponent(new URL(q.url, "http://x").pathname); if (p === "/") p = "/index.html"; const f = path.join(D, p); if (!f.startsWith(D) || !fs.existsSync(f)) { r.writeHead(404); return r.end("no encontrado"); } r.writeHead(200, { "content-type": T[path.extname(f)] || "application/octet-stream", "cache-control": p === "/sw.js" ? "no-cache" : "no-cache" }); fs.createReadStream(f).pipe(r); }).listen(8080, () => console.log("OLI en http://localhost:8080"));

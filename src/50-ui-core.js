@@ -1,7 +1,5 @@
 /* ============ 50 · interfaz: base (navegación, ventanas, componentes) ============
    Principios: una acción principal por pantalla, botones grandes, texto humano, ícono + texto, errores recuperables. */
-const ACT = {};
-const VIEWS = {};
 const RUTAS = {
   hoy: {t: "Inicio", i: "hoy", rol: "admin"}, vender: {t: "Vender", i: "vender", rol: "all"}, caja: {t: "Caja", i: "caja", rol: "all"}, inventario: {t: "Inventario", i: "inventario", rol: "all"},
   compras: {t: "Compras", i: "compras", rol: "admin"}, productos: {t: "Productos", i: "productos", rol: "admin"}, analisis: {t: "Análisis", i: "analisis", rol: "admin"}, finanzas: {t: "Dinero", i: "finanzas", rol: "admin"},
@@ -139,6 +137,7 @@ function drawNav() {
   $("#tabs").innerHTML = mobile.map(r => navBtn(r, "")).join("") + (adm ? `<button data-act="mas" aria-current="${["productos", "analisis", "finanzas", "contabilidad", "reportes", "equipo", "ajustes", "caja"].includes(S.tab) ? "page" : "false"}"${nm ? ` data-n="${nm}"` : ""}>${ic("mas", 22)}<span>Más</span></button>` : "");
   const items = adm ? `${navBtn("hoy", "nv")}${GRUPOS_ADMIN.map(([g, rs]) => `<div class="grp">${g}</div>${rs.map(r => navBtn(r, "nv")).join("")}`).join("")}` : ["vender", "caja", "inventario"].map(r => navBtn(r, "nv")).join("");
   $("#rail").innerHTML = `<div class="logo">OLI</div>${items}<div class="sp"></div><button class="nv" data-act="ayuda" style="display:flex;align-items:center;gap:12px;border:0;background:none;padding:10px 12px;font-weight:600;color:var(--muted);border-radius:12px">${ic("info", 22)}<span>¿Necesitas ayuda?</span></button>
+    <button class="foot-link" data-act="acerca" style="text-align:left;padding:2px 12px">Acerca de OLI</button>
     <div class="meta">${connPill()}</div>${DS.mode === "local" ? `<button class="btn ghost sm" style="margin:8px 10px 0" data-act="rolLocal">Ver como: ${esAdmin() ? "Administrador" : "Empleado"}</button>` : ""}<div class="meta" style="padding-top:2px"><span class="xs">${esc(DEV.nombre || "")}</span></div>`;
 }
 ACT.mas = () => abrir(() => {

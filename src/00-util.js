@@ -1,4 +1,6 @@
 /* ============ 00 · utilidades, iconos e ilustraciones ============ */
+const ACT = {};      // acciones de la interfaz (data-act)
+const VIEWS = {};    // pantallas
 const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));

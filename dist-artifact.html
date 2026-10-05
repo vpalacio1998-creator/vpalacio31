@@ -1,6 +1,7 @@
+<!-- OLI · Software propiedad de VP Visual Project · Creado por Víctor Palacio · © 2026 VP Visual Project. Todos los derechos reservados. -->
 <title>OLI</title>
-<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
+<meta name="author" content="Víctor Palacio"><meta name="copyright" content="VP Visual Project"><meta name="description" content="OLI · Sistema inteligente de gestión y punto de venta. Software propiedad de VP Visual Project · Creado por Víctor Palacio"><meta name="generator" content="OLI">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">
 <style>
 /* OLI — sistema de diseño. Crema cálido + verde menta. Layout: rail ≥900px, barra inferior en celular, ticket a la derecha ≥1100px. */
 :root{
@@ -238,6 +239,14 @@ details.help span{display:block;font-weight:500;font-size:13px;line-height:1.35;
 .chart{max-height:260px}
 @media print{.rail,.top,.tabs,.cartbar,.ticket,.toast,.sheet{display:none!important}main{padding:0}}
 
+/* ---- propiedad / marca VP: discreta ---- */
+.foot{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:4px 12px;max-width:1180px;margin:0 auto;padding:14px 16px 150px;font-size:12px;color:var(--muted);text-align:center}
+.foot b{font-family:var(--display);color:var(--menta);letter-spacing:.06em}
+.foot-link{border:0;background:none;color:var(--muted);text-decoration:underline;font-size:12px;cursor:pointer;min-height:32px}
+@media (min-width:900px){.foot{padding-bottom:28px}}
+.gate .credit{margin-top:22px;font-size:12px;color:var(--muted)}
+.gate .credit b{color:var(--menta)}
+
 </style>
 <div class="app" id="app">
   <aside class="rail" id="rail" aria-label="Menú principal"></aside>
@@ -251,6 +260,7 @@ details.help span{display:block;font-weight:500;font-size:13px;line-height:1.35;
     </header>
     <div style="max-width:1180px;margin:0 auto;padding:12px 14px 0"><div id="banners"></div></div>
     <main id="view" aria-live="polite"></main>
+    <footer class="foot" id="foot"><b>OLI</b><span>Software propiedad de VP Visual Project · Creado por Víctor Palacio</span><button data-act="acerca" class="foot-link">Acerca de OLI</button></footer>
   </div>
   <aside class="ticket" id="ticket" aria-label="Pedido actual"></aside>
 </div>
@@ -259,11 +269,14 @@ details.help span{display:block;font-weight:500;font-size:13px;line-height:1.35;
 <div class="sheet hidden" id="sheet"><div class="bg"></div><div class="panel" role="dialog" aria-modal="true" id="panel"></div></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
+<script>window.OLI_BUILD="66899d1d";</script>
 <script>
 (function(){
 "use strict";
 /* >>> 00-util.js */
 /* ============ 00 · utilidades, iconos e ilustraciones ============ */
+const ACT = {};      // acciones de la interfaz (data-act)
+const VIEWS = {};    // pantallas
 const $ = s => document.querySelector(s);
 const $$ = s => Array.from(document.querySelectorAll(s));
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
@@ -371,6 +384,35 @@ function prodArt(p, h = 78) {
   return `<span style="color:${c};display:grid;place-items:center">${ic(ico, h * .56)}</span>`;
 }
 
+/* >>> 05-brand.js */
+/* ============ 05 · marca, propiedad y versión ============
+   OLI es la marca del producto. VP Visual Project es el propietario/desarrollador; Víctor Palacio es el creador.
+   La marca VP nunca compite con OLI: aparece solo en pie de página, "Acerca de", inicio de sesión, informes y metadatos. */
+const BRAND = {
+  producto: "OLI", tagline: "Sistema inteligente de gestión y punto de venta", frase: "Sistema inteligente para la operación de tu negocio",
+  empresa: "VP Visual Project", creador: "Víctor Palacio", anio: 2026, version: "1.0.0",
+  texto: "Software propiedad de VP Visual Project · Creado por Víctor Palacio",
+  copyright: "© 2026 VP Visual Project. Todos los derechos reservados.",
+  soporte: {sitio: "", correo: "", canal: "", terminos: "", privacidad: ""}                  // se llenan cuando existan
+};
+const APP_BUILD = (typeof window !== "undefined" && window.OLI_BUILD) || "dev";
+const versionTxt = () => "OLI v" + BRAND.version + (APP_BUILD !== "dev" ? " (" + APP_BUILD + ")" : "");
+const footerHTML = () => `<footer class="foot"><b>OLI</b><span>${esc(BRAND.texto)}</span></footer>`;
+function diagnostico() {
+  return ["Producto: OLI", "Versión: " + BRAND.version + " · build " + APP_BUILD, "Desarrollador: " + BRAND.empresa, "Creador: " + BRAND.creador, "Servidor: " + (REMOTE.desc || (DS.mode === "local" ? "solo este equipo" : "—")),
+    "Conexión: " + (SYNC ? SYNC.estado : "—"), "Equipo: " + (DEV.nombre || DEV.id), "Almacenamiento: " + (IDB.ok ? "IndexedDB" : "respaldo"), "Rol: " + (esAdmin() ? "administrador" : "empleado"), "Navegador: " + (navigator.userAgent || "").slice(0, 90), "Fecha: " + new Date().toISOString()].join("\n");
+}
+ACT.acerca = () => abrir(() => {
+  const s = BRAND.soporte, item = (t, v) => `<div class="row"><span>${t}</span><b>${v ? esc(v) : '<span class="muted" style="font-weight:500">Próximamente</span>'}</b></div>`;
+  return head("Acerca de OLI") + `<div style="text-align:center;padding:6px 0 14px"><div class="logo" style="font-size:54px">OLI</div><div class="muted">${esc(BRAND.tagline)}</div></div>
+    <div class="card flat"><div class="row" style="padding-top:0"><span>Desarrollado y propiedad de</span><b>${esc(BRAND.empresa)}</b></div><div class="row"><span>Creado por</span><b>${esc(BRAND.creador)}</b></div><div class="row"><span>Versión</span><b>${esc(BRAND.version)}</b></div><div class="row"><span>Año</span><b>${BRAND.anio}</b></div></div>
+    <p class="small muted" style="text-align:center;margin:0 0 12px">${esc(BRAND.copyright)}</p>
+    <div class="card flat"><h3>Soporte</h3>${item("Sitio web", s.sitio)}${item("Correo", s.correo)}${item("Canal de soporte", s.canal)}${item("Términos de uso", s.terminos)}${item("Política de privacidad", s.privacidad)}</div>
+    <details class="card flat"><summary style="font-weight:700;cursor:pointer;min-height:40px;display:flex;align-items:center">Información del sistema</summary><pre style="white-space:pre-wrap;font-size:12px;margin:8px 0">${esc(diagnostico())}</pre><button class="btn ghost sm" data-act="copiarDiag">${ic("copiar", 16)} Copiar</button></details>
+    <button class="btn pri wide xl" data-act="cerrar">Cerrar</button>`;
+});
+ACT.copiarDiag = async () => { try { await navigator.clipboard.writeText(diagnostico()); toast("Copiado"); } catch (e) { toast("No se pudo copiar", true); } };
+
 /* >>> 10-data.js */
 /* ============ 10 · datos: offline-first, cola de sincronización, identidad y permisos ============
    Autenticación: la maneja claude.ai (cada persona entra con su cuenta).
@@ -405,6 +447,7 @@ const S = {today: ymd(), tab: "vender", cat: "Todas", q: "", cart: [], metodo: "
 const OUT = {};                    // cola de salida (espejo en memoria de IndexedDB): path -> operación
 const SYNC = {estado: "offline", online: false, hecho: 0, total: 0, ultima: 0, error: "", rechazadas: 0, enCurso: ""};
 const DEV = {id: "", nombre: "", seq: 0, listo: false};
+const REMOTE = {kind: "none", apply: null, subscribe: null, desc: ""};   // adaptador del servidor: claude | supabase
 
 /* ---------- permisos ---------- */
 function reglaDe(col) {
@@ -426,13 +469,16 @@ const memo = (k, fn) => { const m = memo.c; if (m.v !== DS.v || m.d0 !== S.today
 memo.c = {v: -1, d: {}, d0: ""};
 
 /* ---------- almacenamiento local robusto: IndexedDB (con respaldo en localStorage) ---------- */
+/* Migraciones de IndexedDB: nunca se borran datos; cada versión nueva agrega un paso (así una actualización no pierde ventas pendientes). */
+const IDB_VERSION = 1;
+const IDB_MIGRATIONS = {1: d => { for (const s of ["docs", "outbox", "kv"]) d.createObjectStore(s); }};
 const IDB = {
   db: null, ok: false, mem: {docs: {}, outbox: {}, kv: {}},
   open() {
     return new Promise(res => {
       try {
-        const r = indexedDB.open("oli-v1", 1);
-        r.onupgradeneeded = () => { const d = r.result; for (const s of ["docs", "outbox", "kv"]) d.createObjectStore(s); };
+        const r = indexedDB.open("oli-v1", IDB_VERSION);
+        r.onupgradeneeded = e => { const d = r.result; for (let v = e.oldVersion + 1; v <= IDB_VERSION; v++) (IDB_MIGRATIONS[v] || (() => {}))(d, r.transaction); };
         r.onsuccess = () => { this.db = r.result; this.ok = true; this.db.onversionchange = () => this.db.close(); res(true); };
         r.onerror = () => res(this.fallback()); r.onblocked = () => res(this.fallback());
       } catch (e) { res(this.fallback()); }
@@ -465,10 +511,12 @@ const setDevNombre = async n => { DEV.nombre = n; await IDB.kvSet("dev.nombre", 
 async function nextSeq() { DEV.seq++; await IDB.kvSet("dev.seq", DEV.seq); return DEV.seq; }
 
 /* ---------- escritura offline-first ---------- */
+let opSeq = 0;
+const newOpId = path => DEV.id + ":" + Date.now().toString(36) + ":" + (++opSeq) + ":" + path;
 async function put(colName, id, data) {
   if (!puede(colName, "write")) { const e = new Error("denied"); e.code = "denied"; throw e; }
   const doc = Object.assign({sede: SEDE}, data), path = pathOf(colName, id), prev = (DS.c[colName] || {})[id], prevOp = OUT[path];
-  const op = {path, col: colName, id, data: doc, t: Date.now(), estado: "pendiente", ids: idsDe(doc)};
+  const op = {path, col: colName, id, data: doc, t: Date.now(), opId: newOpId(path), estado: "pendiente", ids: idsDe(doc)};
   DS.c[colName] = Object.assign({}, DS.c[colName], {[id]: doc}); OUT[path] = op; changed();
   try { await IDB.tx([["docs", "put", path, {col: colName, id, data: doc}], ["outbox", "put", path, op]]); }
   catch (e) { const m = Object.assign({}, DS.c[colName]); if (prev === undefined) delete m[id]; else m[id] = prev; DS.c[colName] = m; if (prevOp) OUT[path] = prevOp; else delete OUT[path]; changed(); throw e; }
@@ -478,7 +526,7 @@ async function put(colName, id, data) {
 async function remove(colName, id) {
   if (!puede(colName, "write")) { const e = new Error("denied"); e.code = "denied"; throw e; }
   const path = pathOf(colName, id), m = Object.assign({}, DS.c[colName]); delete m[id]; DS.c[colName] = m;
-  const op = {path, col: colName, id, del: true, t: Date.now(), estado: "pendiente", ids: []}; OUT[path] = op; changed();
+  const op = {path, col: colName, id, del: true, t: Date.now(), opId: newOpId(path), estado: "pendiente", ids: []}; OUT[path] = op; changed();
   await IDB.tx([["docs", "del", path], ["outbox", "put", path, op]]);
   if (DS.mode === "db") kickSync(); else { delete OUT[path]; IDB.tx([["outbox", "del", path]]).catch(() => {}); }
 }
@@ -530,8 +578,7 @@ async function syncNow() {
       if (!conRed()) break;
       SYNC.enCurso = op.path; changed();
       try {
-        const ref = DS.dbh.doc(op.path);
-        await withTimeout(op.del ? ref.delete() : ref.set(op.data), 12000);
+        await withTimeout(REMOTE.apply(op), 12000);
         const still = OUT[op.path];
         const acks = DS.acks || (DS.acks = {}); acks[op.path] = (op.ids || []).slice(-600);
         const ops2 = [["kv", "put", "acks", acks]];
@@ -579,7 +626,7 @@ function subscribeAudit(uid) {
   if (!uid || auditSubs.has(uid) || !DS.isAdmin || DS.mode !== "db") return; auditSubs.add(uid);
   DS.subs.push(DS.dbh.collection("data/users/" + uid).onSnapshot(snap => { const m = Object.assign({}, DS.c.audit || {}); snap.docs.forEach(d => { m[uid + "__" + d.id] = d.data(); }); DS.c.audit = m; changed(); }, () => {}));
 }
-function syncAuditSubs() { if (DS.mode !== "db" || !DS.isAdmin) return; if (DS.uid) subscribeAudit(DS.uid); for (const d of Object.values(DS.c.dispositivos || {})) if (d.uid) subscribeAudit(d.uid); for (const d of Object.values(DS.c.ventas || {})) if (d.uid) subscribeAudit(d.uid); }
+function syncAuditSubs() { if (DS.mode !== "db" || DS.backend !== "claude" || !DS.isAdmin) return; if (DS.uid) subscribeAudit(DS.uid); for (const d of Object.values(DS.c.dispositivos || {})) if (d.uid) subscribeAudit(d.uid); for (const d of Object.values(DS.c.ventas || {})) if (d.uid) subscribeAudit(d.uid); }
 
 /* ---------- arranque ---------- */
 async function bootData() {
@@ -587,6 +634,7 @@ async function bootData() {
   const docs = await IDB.getAll("docs"), outbox = await IDB.getAll("outbox"), ident = await IDB.get("kv", "ident");
   for (const x of Object.values(docs)) (DS.c[x.col] = DS.c[x.col] || {})[x.id] = x.data;
   for (const [p, op] of Object.entries(outbox)) { OUT[p] = op; if (op.estado === "rechazada") SYNC.rechazadas++; if (op.del) { if (DS.c[op.col]) delete DS.c[op.col][op.id]; } else (DS.c[op.col] = DS.c[op.col] || {})[op.id] = op.data; }
+  if (window.OLI_CONFIG && window.OLI_CONFIG.supabaseUrl && typeof window.bootSupabase === "function") { await window.bootSupabase(ident); return; }
   let db = null, user = null;
   try { if (window.claude && typeof window.claude.use === "function") [db, user] = await Promise.all([window.claude.use("db"), window.claude.use("user")]); } catch (e) {}
   if (ident && !user) { DS.uid = ident.uid; DS.isAdmin = ident.isAdmin; }
@@ -594,7 +642,8 @@ async function bootData() {
     DS.mode = "local"; try { DS.localRole = localStorage.getItem("oli-local-role") || "admin"; } catch (e) {}
     DS.isAdmin = DS.localRole === "admin"; DS.uid = "local"; for (const n of SHARED_COLS.concat(ADMIN_COLS)) DS.ready[n] = true; DS.fromCache = false; recalcEstado(); changed(); return;
   }
-  DS.mode = "db"; DS.dbh = db;
+  DS.mode = "db"; DS.dbh = db; DS.backend = "claude"; REMOTE.kind = "claude"; REMOTE.desc = "Claude";
+  REMOTE.apply = op => op.del ? DS.dbh.doc(op.path).delete() : DS.dbh.doc(op.path).set(op.data);
   for (const n of SHARED_COLS) if (Object.keys(DS.c[n] || {}).length || ident) DS.ready[n] = true;      // con datos guardados, ya se puede operar sin esperar a la red
   try { if (user) { const me = await user.me(); DS.uid = me.id; DS.nombre = me.name || ""; DS.isAdmin = !!(await user.canEdit()); const cw = await user.can("data.write"); DS.canWrite = cw === null ? true : !!cw || DS.isAdmin; await IDB.kvSet("ident", {uid: DS.uid, isAdmin: DS.isAdmin}); } } catch (e) {}
   SHARED_COLS.forEach(subscribe); if (DS.isAdmin) ADMIN_COLS.forEach(subscribe);
@@ -603,13 +652,13 @@ async function bootData() {
   setInterval(() => { if (pendientes().length) { netFail = false; kickSync(); } }, 20000);
   setInterval(() => heartbeat(), 45000);
 }
-const listo = () => DS.mode !== "loading" && ["productos", "meta"].every(n => DS.ready[n]);
+const listo = () => DS.mode !== "loading" && !DS.needsLogin && !DS.needsOrg && ["productos", "meta"].every(n => DS.ready[n]);
 
 /* ---------- dispositivos (para el administrador) ---------- */
 let lastHb = 0;
 function heartbeat(force) {
   if (DS.mode !== "db" || !DEV.listo || !DEV.nombre || !conRed()) return;
-  if (!force && Date.now() - lastHb < 40000) return; lastHb = Date.now();
+  if (Date.now() - lastHb < (force ? 15000 : 40000)) return; lastHb = Date.now();
   put("dispositivos", DEV.id, {dev: DEV.id, nombre: DEV.nombre, uid: DS.uid || "", rol: DS.isAdmin ? "admin" : "empleado", vis: Date.now(), pend: pendientes().length, ventasPend: ventasPendientes(), v: 2}).catch(() => {});
 }
 
@@ -638,6 +687,126 @@ function newSalesFeed(name) {
     if (d.dev !== DEV.id && Date.now() - v.t < 180000) { FEED.unshift({t: Date.now(), tipo: "venta", v, uid: d.uid, dev: d.dev}); FEED.splice(30); if (window.onNuevaVenta) window.onNuevaVenta(v, d); }
   }
 }
+
+/* >>> 11-supabase.js */
+/* ============ 11 · adaptador Supabase (producción) ============
+   Auth: Supabase Auth (correo + contraseña). Datos: oli_docs (RLS) + RPC oli_apply (idempotente).
+   Tiempo real: Supabase Realtime (postgres_changes). La anon key es pública por diseño: la seguridad real está en RLS y en oli_apply.
+   Nunca hay claves secretas en el frontend. Config en window.OLI_CONFIG (generada en el build desde variables de entorno). */
+const APP_VERSION = window.OLI_BUILD || "dev";
+const SB = {client: null, org: null, store: null, role: null, email: "", chan: null, rt: "", rtWasDown: false, authError: false, subs: false};
+const SB_ADMIN_COLS = ADMIN_COLS.concat(["audit"]);
+
+async function bootSupabase(ident) {
+  const cfg = window.OLI_CONFIG;
+  if (!window.supabase || !window.supabase.createClient) { DS.mode = "local"; DS.error = "No se pudo cargar la conexión con el servidor."; changed(); return; }
+  SB.client = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey, {auth: {persistSession: true, autoRefreshToken: true, detectSessionInUrl: false}, realtime: {params: {eventsPerSecond: 20}}});
+  DS.mode = "db"; DS.backend = "supabase"; REMOTE.kind = "supabase"; REMOTE.desc = "Supabase"; REMOTE.apply = sbApply;
+  let session = null; try { const r = await SB.client.auth.getSession(); session = r.data && r.data.session; } catch (e) {}
+  if (!session && ident && ident.sb && typeof navigator !== "undefined" && navigator.onLine === false) { usarIdent(ident); sbIniciar(); return; }       // sin Internet: se usa la sesión guardada
+  if (!session) { DS.needsLogin = true; changed(); return; }
+  await sbCompletarSesion(session);
+}
+async function sbCompletarSesion(session) {
+  let me = null, fallo = false; try { const r = await withTimeout(SB.client.rpc("oli_me"), 9000); me = r.data; fallo = !!r.error; } catch (e) { fallo = true; }
+  const ident = await IDB.get("kv", "ident");
+  if (!me && fallo && ident && ident.sb && ident.uid === session.user.id) usarIdent(ident);                           // servidor sin respuesta: identidad guardada
+  else if (!me) { DS.needsLogin = false; DS.needsOrg = true; DS.uid = session.user.id; SB.email = session.user.email || ""; changed(); return; }
+  else { SB.org = me.org_id; SB.store = me.store_id; SB.role = me.role; DS.uid = session.user.id; DS.isAdmin = !!me.is_admin; DS.nombre = me.name || (session.user.email || "").split("@")[0]; SB.email = session.user.email || "";
+    await IDB.kvSet("ident", {uid: DS.uid, isAdmin: DS.isAdmin, org: SB.org, store: SB.store, role: SB.role, nombre: DS.nombre, sb: true}); }
+  DS.needsLogin = false; DS.needsOrg = false; await purgarNoPermitido(); sbIniciar();
+}
+function usarIdent(i) { DS.uid = i.uid; DS.isAdmin = i.isAdmin; SB.org = i.org; SB.store = i.store; SB.role = i.role; DS.nombre = i.nombre || ""; DS.needsLogin = false; }
+/* lo que este rol no puede leer no debe quedarse en el dispositivo (p. ej. costos en la tablet del empleado) */
+async function purgarNoPermitido() {
+  const ops = []; for (const c of Object.keys(DS.c)) if (!puede(c, "read")) { delete DS.c[c]; }
+  const all = await IDB.getAll("docs"); for (const [p, x] of Object.entries(all)) if (!puede(x.col, "read")) ops.push(["docs", "del", p]);
+  if (ops.length) await IDB.tx(ops).catch(() => {});
+}
+function sbIniciar() {
+  const cols = SHARED_COLS.concat(DS.isAdmin ? SB_ADMIN_COLS : []);
+  for (const n of SHARED_COLS) if (Object.keys(DS.c[n] || {}).length) DS.ready[n] = true;
+  sbCargarTodo(cols); sbRealtime();
+  setTimeout(() => { for (const n of SHARED_COLS) DS.ready[n] = true; DS.fromCache = false; changed(); }, 6000);
+  recalcEstado(); changed(); kickSync(500);
+  if (!SB.subs) { SB.subs = true;
+    setInterval(() => { if (pendientes().length) { netFail = false; kickSync(); } }, 20000);
+    setInterval(() => heartbeat(), 45000);
+    setInterval(() => { if (SB.rtWasDown && conRed()) sbCargarTodo(); }, 20000);                                  // respaldo SOLO si el tiempo real está caído
+    window.addEventListener("online", () => { sbCargarTodo(); });
+  }
+}
+const sbCols = () => SHARED_COLS.concat(DS.isAdmin ? SB_ADMIN_COLS : []);
+async function sbCargar(name) {
+  const desde = addDays(S.today, -HIST_DIAS), m = {}; let from = 0;
+  for (;;) {
+    let q = SB.client.from("oli_docs").select("doc_id,data").eq("org_id", SB.org).eq("collection", name).range(from, from + 999);
+    if (RANGED.has(name)) q = q.gte("data->>fecha", desde);
+    const r = await withTimeout(q, 15000); if (r.error) throw r.error;
+    for (const x of r.data) m[x.doc_id] = x.data; if (r.data.length < 1000) break; from += 1000;
+  }
+  aplicarSnapshot(name, m);
+}
+async function sbCargarTodo(cols) { for (const n of (cols || sbCols())) { try { await sbCargar(n); } catch (e) { DS.ready[n] = true; if (e && /JWT|401|auth/i.test(e.message || "")) SB.authError = true; } } if (!SB.rtWasDown) SB.authError = false; recalcEstado(); changed(); }
+function sbRealtime() {
+  if (SB.chan) return;
+  SB.chan = SB.client.channel("oli-docs-" + SB.org).on("postgres_changes", {event: "*", schema: "public", table: "oli_docs", filter: "org_id=eq." + SB.org}, p => {
+    const row = p.new && p.new.collection ? p.new : p.old; if (!row || !row.collection) return; const n = row.collection; if (!puede(n, "read")) return;
+    const cur = Object.assign({}, DS.c[n]); if (p.eventType === "DELETE") delete cur[row.doc_id]; else cur[row.doc_id] = p.new.data; aplicarSnapshot(n, cur);
+  }).subscribe(st => { SB.rt = st; if (st === "SUBSCRIBED") { if (SB.rtWasDown) sbCargarTodo(); SB.rtWasDown = false; } else if (st === "CHANNEL_ERROR" || st === "TIMED_OUT" || st === "CLOSED") SB.rtWasDown = true; changed(); });
+}
+async function sbApply(op) {
+  const payload = [{op_id: op.opId, col: op.col, id: op.id, data: op.del ? null : op.data, del: !!op.del, t: op.t, device_id: DEV.id}];
+  let r; try { r = await SB.client.rpc("oli_apply", {p_ops: payload, p_device_id: DEV.id, p_app_version: APP_VERSION}); } catch (e) { throw {code: "unavailable", message: String(e && e.message || e)}; }
+  if (r.error) {
+    const m = String(r.error.message || ""), st = r.error.status || r.status || 0;
+    if (r.error.code === "28000" || /not_authenticated|JWT|expired/i.test(m) || st === 401) { SB.authError = true; throw {code: "unavailable", message: "sesión vencida"}; }
+    if (r.error.code === "42501" || /no_membership/.test(m) || (st >= 400 && st < 500 && st !== 408 && st !== 429)) throw {code: "invalid_argument", message: m};
+    throw {code: "unavailable", message: m};
+  }
+  SB.authError = false; const x = r.data && r.data[0]; if (x && x.status === "rejected") throw {code: "invalid_argument", message: x.detail || "rechazada"};
+  return x;
+}
+async function sbLogin(email, pass) {
+  const r = await SB.client.auth.signInWithPassword({email: email.trim(), password: pass});
+  if (r.error || !r.data.session) { const e = new Error("No pudimos ingresar. Revisa tu correo y contraseña."); throw e; }
+  await sbCompletarSesion(r.data.session);
+}
+async function sbCrearNegocio(nombre) { const r = await SB.client.rpc("oli_bootstrap", {p_org_name: nombre, p_store_name: "OLI 001"}); if (r.error) throw new Error("No se pudo crear el negocio. " + (r.error.message || "")); const s = await SB.client.auth.getSession(); await sbCompletarSesion(s.data.session); }
+async function sbSalir() { try { await SB.client.auth.signOut(); } catch (e) {} await IDB.tx([["kv", "del", "ident"]]).catch(() => {}); for (const c of Object.keys(DS.c)) if (!puede(c, "read") || c === "audit") delete DS.c[c]; DS.needsLogin = true; DS.isAdmin = false; DS.uid = null; changed(); }
+async function sbInvitar(d) { const r = await SB.client.functions.invoke("invite-user", {body: d}); if (r.error) throw new Error((r.data && r.data.error) || "No se pudo crear la cuenta."); return r.data; }
+/* fotos: la imagen completa va a Storage; en el documento queda la ruta y una miniatura para verla sin conexión */
+async function sbSubirFoto(blob, pid) { const path = SB.org + "/products/" + pid + ".jpg"; const r = await SB.client.storage.from("product-images").upload(path, blob, {upsert: true, contentType: "image/jpeg"}); if (r.error) throw r.error; return path; }
+/* errores no controlados -> auditoría (monitoreo) */
+let errCount = 0;
+window.addEventListener("error", e => { if (errCount++ < 5) try { audit("ERROR_APP", "", String(e.message || "").slice(0, 160)); } catch (x) {} });
+window.addEventListener("unhandledrejection", e => { if (errCount++ < 5) try { audit("ERROR_APP", "", String((e.reason && e.reason.message) || e.reason || "").slice(0, 160)); } catch (x) {} });
+
+window.bootSupabase = bootSupabase;
+
+/* >>> 12-pwa.js */
+/* ============ 12 · PWA: instalación, actualización controlada ============
+   El service worker (sw.js) guarda la interfaz para abrir sin Internet. Una versión nueva NUNCA se aplica en medio de una venta:
+   se descarga en segundo plano y se activa cuando no hay pedido ni ventanas abiertas (o cuando la persona lo pide). */
+const PWA = {hay: false, worker: null, reloading: false, evento: null, instalada: false};
+function registrarSW() {
+  if (!window.OLI_PWA || !("serviceWorker" in navigator) || !/^https?:$/.test(location.protocol)) return;
+  navigator.serviceWorker.register("sw.js").then(reg => {
+    if (reg.waiting && navigator.serviceWorker.controller) { PWA.worker = reg.waiting; PWA.hay = true; changed(); }
+    reg.addEventListener("updatefound", () => { const w = reg.installing; if (!w) return; w.addEventListener("statechange", () => { if (w.state === "installed" && navigator.serviceWorker.controller) { PWA.worker = w; PWA.hay = true; changed(); } }); });
+    setInterval(() => reg.update().catch(() => {}), 30 * 60 * 1000);
+  }).catch(() => {});
+  navigator.serviceWorker.addEventListener("controllerchange", () => { if (PWA.reloading) return; PWA.reloading = true; location.reload(); });
+}
+const operacionEnCurso = () => S.cart.length > 0 || !!sheetFn || (typeof cobrando !== "undefined" && cobrando);
+function aplicarActualizacion(forzar) { if (!PWA.worker) return false; if (!forzar && operacionEnCurso()) return false; PWA.reloading = true; PWA.worker.postMessage("SKIP_WAITING"); return true; }
+setInterval(() => { if (PWA.hay) aplicarActualizacion(false); }, 20000);
+window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); PWA.evento = e; changed(); });
+window.addEventListener("appinstalled", () => { PWA.instalada = true; PWA.evento = null; toast("OLI quedó instalada en este equipo"); changed(); });
+ACT.instalar = async () => { if (!PWA.evento) { abrir(() => head("Instalar OLI") + `<p>En <b>Chrome o Edge</b>: abre el menú del navegador y elige <b>Instalar OLI</b>.<br>En <b>iPad / iPhone</b> (Safari): toca <b>Compartir</b> y luego <b>Agregar a pantalla de inicio</b>.</p><button class="btn pri wide xl" data-act="cerrar">Entendido</button>`); return; } PWA.evento.prompt(); await PWA.evento.userChoice.catch(() => {}); PWA.evento = null; changed(); };
+ACT.actualizarYa = async () => { if (operacionEnCurso() && !(await confirmar({titulo: "Hay un pedido en curso", texto: "Tu pedido y tus ventas quedan guardados. ¿Actualizar ahora?", si: "Sí, actualizar", no: "Esperar"}))) return; aplicarActualizacion(true); };
+const esInstalada = () => (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches) || window.navigator.standalone === true;
+registrarSW();
 
 /* >>> 20-domain.js */
 /* ============ 20 · dominio: productos, inventario, ventas, caja y finanzas ============ */
@@ -1342,8 +1511,6 @@ async function guardarConfig(patch) { exigirAdmin(); const cur = configNeg(); aw
 /* >>> 50-ui-core.js */
 /* ============ 50 · interfaz: base (navegación, ventanas, componentes) ============
    Principios: una acción principal por pantalla, botones grandes, texto humano, ícono + texto, errores recuperables. */
-const ACT = {};
-const VIEWS = {};
 const RUTAS = {
   hoy: {t: "Inicio", i: "hoy", rol: "admin"}, vender: {t: "Vender", i: "vender", rol: "all"}, caja: {t: "Caja", i: "caja", rol: "all"}, inventario: {t: "Inventario", i: "inventario", rol: "all"},
   compras: {t: "Compras", i: "compras", rol: "admin"}, productos: {t: "Productos", i: "productos", rol: "admin"}, analisis: {t: "Análisis", i: "analisis", rol: "admin"}, finanzas: {t: "Dinero", i: "finanzas", rol: "admin"},
@@ -1481,6 +1648,7 @@ function drawNav() {
   $("#tabs").innerHTML = mobile.map(r => navBtn(r, "")).join("") + (adm ? `<button data-act="mas" aria-current="${["productos", "analisis", "finanzas", "contabilidad", "reportes", "equipo", "ajustes", "caja"].includes(S.tab) ? "page" : "false"}"${nm ? ` data-n="${nm}"` : ""}>${ic("mas", 22)}<span>Más</span></button>` : "");
   const items = adm ? `${navBtn("hoy", "nv")}${GRUPOS_ADMIN.map(([g, rs]) => `<div class="grp">${g}</div>${rs.map(r => navBtn(r, "nv")).join("")}`).join("")}` : ["vender", "caja", "inventario"].map(r => navBtn(r, "nv")).join("");
   $("#rail").innerHTML = `<div class="logo">OLI</div>${items}<div class="sp"></div><button class="nv" data-act="ayuda" style="display:flex;align-items:center;gap:12px;border:0;background:none;padding:10px 12px;font-weight:600;color:var(--muted);border-radius:12px">${ic("info", 22)}<span>¿Necesitas ayuda?</span></button>
+    <button class="foot-link" data-act="acerca" style="text-align:left;padding:2px 12px">Acerca de OLI</button>
     <div class="meta">${connPill()}</div>${DS.mode === "local" ? `<button class="btn ghost sm" style="margin:8px 10px 0" data-act="rolLocal">Ver como: ${esAdmin() ? "Administrador" : "Empleado"}</button>` : ""}<div class="meta" style="padding-top:2px"><span class="xs">${esc(DEV.nombre || "")}</span></div>`;
 }
 ACT.mas = () => abrir(() => {
@@ -2186,7 +2354,7 @@ VIEWS.ajustes = () => {
   <div class="card"><h3>Gastos fijos del mes</h3><p class="small muted" style="margin-top:-4px">Arriendo, nómina, servicios. Se usan para el punto de equilibrio y las proyecciones.</p>${gastosFijosPlan().map(g => `<div class="row"><span>${esc(g.n)}</span><b>${fmt(g.v)}</b></div>`).join("") || '<p class="muted">Sin gastos fijos definidos.</p>'}<div class="row"><b>Total</b><b>${fmt(totalFijos())}</b></div><button class="btn ghost sm" style="margin-top:8px" data-act="editFijos">Editar gastos fijos</button></div>
   <div class="card"><h3>Apariencia</h3><div class="seg">${[["auto", "Automática"], ["light", "Clara"], ["dark", "Oscura"]].map(([k, l]) => `<button data-act="tema" data-v="${k}" aria-pressed="${temaActual() === k}">${l}</button>`).join("")}</div></div>
   <div class="card"><h3>Datos de demostración</h3><p class="small muted" style="margin-top:-4px">Para explorar OLI con un mes completo de ventas de ejemplo. No se mezcla con tu información real: puedes borrarlos cuando quieras.</p>${demo ? '<div class="notice">Estás usando datos de demostración.</div>' : ""}<div class="btns"><button class="btn ghost" data-act="cargarDemo">Cargar datos de demostración</button>${demo ? '<button class="btn danger" data-act="borrarDemo">Borrar datos de demostración</button>' : ""}</div></div>
-  <div class="card"><h3>Estado de OLI</h3><div class="row"><span>Productos</span><b>${n}</b></div><div class="row"><span>Almacenamiento en este equipo</span><b>${IDB.ok ? "IndexedDB" : "Respaldo básico"}</b></div><div class="row"><span>Conexión</span><b>${esc(connInfo().txt)}</b></div><div class="row"><span>Este equipo</span><b>${esc(DEV.nombre || DEV.id)}</b></div><div class="btns" style="margin-top:8px"><button class="btn ghost sm" data-act="ayuda">${ic("info", 16)} ¿Necesitas ayuda?</button><button class="btn ghost sm" data-act="verEnvio">Estado de envío</button></div></div>`;
+  <div class="card"><h3>Estado de OLI</h3><div class="row"><span>Productos</span><b>${n}</b></div><div class="row"><span>Almacenamiento en este equipo</span><b>${IDB.ok ? "IndexedDB" : "Respaldo básico"}</b></div><div class="row"><span>Conexión</span><b>${esc(connInfo().txt)}</b></div><div class="row"><span>Este equipo</span><b>${esc(DEV.nombre || DEV.id)}</b></div><div class="row"><span>Versión</span><b>${esc(versionTxt())}</b></div><div class="btns" style="margin-top:8px"><button class="btn ghost sm" data-act="ayuda">${ic("info", 16)} ¿Necesitas ayuda?</button><button class="btn ghost sm" data-act="verEnvio">Estado de envío</button><button class="btn ghost sm" data-act="acerca">Acerca de OLI</button></div><p class="xs muted" style="margin:10px 0 0">${esc(BRAND.texto)}</p></div>`;
 };
 ACT.guardarAjustes = async () => { await guardar(() => guardarConfig({nombre: $("#aj-nom").value.trim() || "OLI", margenObjetivo: clamp(num($("#aj-mo").value) / 100, .05, .95), metaDia: num($("#aj-meta").value), movimientosEmpleado: $("#aj-mov").checked}), "Guardado"); };
 ACT.editFijos = () => { S.fijosDraft = deepClone(gastosFijosPlan()); abrir(fijosSheet); };
@@ -2306,7 +2474,7 @@ function onboardingHTML() {
     <button class="btn pri xl wide" data-act="empezarOLI" style="margin-bottom:10px">${ic("paleta", 22)} Empezar con el catálogo de OLI</button>
     <button class="btn ghost xl wide" data-act="empezarDemo" style="margin-bottom:10px">${ic("analisis", 22)} Explorar con datos de demostración</button>
     <button class="btn ghost wide" data-act="empezarVacio">Empezar desde cero</button>
-    <div class="card flat" style="text-align:left;margin-top:18px"><b>Para empezar, solo 5 pasos</b><ol style="margin:8px 0 0;padding-left:20px"><li>Revisa tus productos y precios.</li><li>Pon el inventario de lo que tienes.</li><li>Define tus gastos fijos en Ajustes.</li><li>Da acceso a tu equipo con el botón Compartir.</li><li>Abre tu primera caja y vende.</li></ol><p class="small muted" style="margin:8px 0 0">No tienes que completar todo hoy.</p></div></div></div>`;
+    <div class="card flat" style="text-align:left;margin-top:18px"><b>Para empezar, solo 5 pasos</b><ol style="margin:8px 0 0;padding-left:20px"><li>Revisa tus productos y precios.</li><li>Pon el inventario de lo que tienes.</li><li>Define tus gastos fijos en Ajustes.</li><li>Da acceso a tu equipo con el botón Compartir.</li><li>Abre tu primera caja y vende.</li></ol><p class="small muted" style="margin:8px 0 0">No tienes que completar todo hoy.</p></div><p class="credit">Software by <b>VP Visual Project</b></p></div></div>`;
 }
 ACT.reintentar = () => { changed(); };
 ACT.empezarOLI = async () => { toast("Preparando OLI…"); await guardar(() => cargarCatalogoOLI(), "Listo. Revisa tus productos."); S.tab = "productos"; draw(); };
@@ -2332,15 +2500,33 @@ function banners() {
   if (DS.error) h += `<div class="notice bad" style="margin:0 0 12px">${esc(DS.error)}</div>`;
   el.innerHTML = h;
 }
+function loginHTML() {
+  return `<div class="gate"><div class="box"><div class="logo">OLI</div><h2>Bienvenido</h2><p>Ingresa para empezar.</p>
+    <label class="f" for="lg-mail" style="text-align:left">Correo</label><input class="in plain" id="lg-mail" type="email" autocomplete="username" inputmode="email" placeholder="tucorreo@ejemplo.com">
+    <label class="f" for="lg-pass" style="text-align:left">Contraseña</label><input class="in plain" id="lg-pass" type="password" autocomplete="current-password">
+    <div id="lg-err" role="alert" style="color:var(--danger);min-height:22px;margin:8px 0;font-size:14px"></div>
+    <button class="btn pri xl wide" data-act="login">INGRESAR</button>
+    <p class="small muted" style="margin-top:14px">¿Olvidaste tu contraseña? Pídele al administrador que te ayude a cambiarla.</p><p class="credit">Desarrollado por <b>VP Visual Project</b></p></div></div>`;
+}
+function orgHTML() {
+  return `<div class="gate"><div class="box"><div class="logo">OLI</div><h2>Crea tu negocio</h2><p>Esta cuenta aún no pertenece a ningún negocio. Si eres empleado, pídele al administrador que te agregue. Si eres el dueño, crea tu negocio.</p>
+    <label class="f" for="og-n" style="text-align:left">Nombre del negocio</label><input class="in plain" id="og-n" value="OLI"><div id="lg-err" role="alert" style="color:var(--danger);min-height:22px;margin:8px 0;font-size:14px"></div>
+    <button class="btn pri xl wide" data-act="crearNegocio">CREAR MI NEGOCIO</button><button class="btn ghost wide" style="margin-top:10px" data-act="logout">Salir</button></div></div>`;
+}
+ACT.login = async () => { const b = $("#lg-err"); b.textContent = ""; const m = $("#lg-mail").value.trim(), p = $("#lg-pass").value; if (!m || !p) { b.textContent = "Escribe tu correo y tu contraseña."; return; }
+  try { await sbLogin(m, p); } catch (e) { b.textContent = navigator.onLine === false ? "No hay conexión a Internet para ingresar por primera vez." : (e.message || "No pudimos ingresar."); } };
+ACT.crearNegocio = async () => { const n = $("#og-n").value.trim(); if (!n) return; try { await sbCrearNegocio(n); } catch (e) { $("#lg-err").textContent = e.message; } };
+ACT.logout = async () => { if (pendientes().length && !(await confirmar({titulo: "Hay ventas sin enviar", texto: "Si sales ahora, quedan guardadas en este equipo y se enviarán cuando vuelvas a ingresar. ¿Salir de todos modos?", si: "Sí, salir", no: "No"}))) return; await sbSalir(); };
 function renderView() {
+  if (DS.needsLogin) return loginHTML(); if (DS.needsOrg) return orgHTML();
   if (!listo()) return splash();
   const meta = col("meta").app; if (!meta) return onboardingHTML();
   const f = VIEWS[S.tab] || VIEWS.vender; try { return f(); } catch (e) { console.error(e); return vacio("alerta", "Algo no salió bien al mostrar esta pantalla", "Vuelve a Inicio e inténtalo otra vez.", '<button class="btn pri" data-act="ir" data-r="' + (esAdmin() ? "hoy" : "vender") + '">Volver al inicio</button>'); }
 }
 function draw() {
-  const root = $("#app"), meta = listo() ? col("meta").app : null;
+  const root = $("#app"), meta = listo() && !DS.needsLogin ? col("meta").app : null;
   if (!rutaOk(S.tab)) S.tab = "vender";
-  const gate = !listo() || !meta; root.classList.toggle("gate-mode", gate);
+  const gate = DS.needsLogin || DS.needsOrg || !listo() || !meta; root.classList.toggle("gate-mode", gate);
   $("#view").innerHTML = renderView();
   if (gate) { $("#ticket").innerHTML = ""; $("#cartbar").innerHTML = ""; $("#tabs").innerHTML = ""; $("#rail").innerHTML = ""; $("#banners").innerHTML = ""; return; }
   syncAuditSubs(); pedirNombres(Object.values(col("ventas")).map(d => d.uid));

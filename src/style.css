@@ -233,3 +233,11 @@ details.help span{display:block;font-weight:500;font-size:13px;line-height:1.35;
 .tile .n{display:block}
 .chart{max-height:260px}
 @media print{.rail,.top,.tabs,.cartbar,.ticket,.toast,.sheet{display:none!important}main{padding:0}}
+
+/* ---- propiedad / marca VP: discreta ---- */
+.foot{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:4px 12px;max-width:1180px;margin:0 auto;padding:14px 16px 150px;font-size:12px;color:var(--muted);text-align:center}
+.foot b{font-family:var(--display);color:var(--menta);letter-spacing:.06em}
+.foot-link{border:0;background:none;color:var(--muted);text-decoration:underline;font-size:12px;cursor:pointer;min-height:32px}
+@media (min-width:900px){.foot{padding-bottom:28px}}
+.gate .credit{margin-top:22px;font-size:12px;color:var(--muted)}
+.gate .credit b{color:var(--menta)}
