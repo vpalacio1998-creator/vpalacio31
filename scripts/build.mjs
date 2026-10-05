@@ -20,7 +20,7 @@ fs.writeFileSync(path.join(R, "dist-artifact.html"), BANNER + `<title>OLI</title
 
 // 1b) Capacidades del artefacto: las reglas del servidor salen del mismo RULES que usa el cliente (una sola fuente)
 const rulesSrc = /const RULES = (\[[\s\S]*?\n\]);/.exec(rd("10-data.js"))[1].replace(/\/\/[^\n]*/g, "");
-fs.writeFileSync(path.join(R, "dist-artifact-capabilities.json"), JSON.stringify({ db: { rules: new Function("return " + rulesSrc)() }, user: {}, downloads: true }, null, 2));
+fs.writeFileSync(path.join(R, "dist-artifact-capabilities.json"), JSON.stringify({ db: { rules: new Function("return " + rulesSrc)() }, user: { scopes: ["profile"] }, downloads: true }, null, 2));
 
 // 2) PWA para Vercel
 fs.rmSync(D, { recursive: true, force: true }); fs.mkdirSync(path.join(D, "vendor"), { recursive: true });

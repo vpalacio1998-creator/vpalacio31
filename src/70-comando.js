@@ -154,7 +154,11 @@ ACT.copiarResumen = async () => { const txt = resumenTexto(resumenDia()); try { 
 function bAcciones() {
   return `<div class="full"><div class="btns" style="gap:10px"><button class="btn pri" data-act="ir" data-r="vender">${ic("plus", 18)} Nueva venta</button><button class="btn ghost" data-act="nuevoProducto">${ic("plus", 18)} Producto</button><button class="btn ghost" data-act="nuevaCompra">${ic("compras", 18)} Compra</button><button class="btn ghost" data-act="nuevoGasto">${ic("finanzas", 18)} Gasto</button><button class="btn ghost" data-act="ir" data-r="caja">${ic("caja", 18)} Caja</button><button class="btn ghost" data-act="merma">${ic("merma", 18)} Pérdida</button><button class="btn ghost" data-act="ir" data-r="reportes">${ic("descargar", 18)} Informe</button></div></div>`;
 }
+const puestaEnMarcha = () => `<div class="card" style="border-color:var(--marca);border-width:2px"><h3 style="margin-top:0">${ic("paleta", 20)} Deja OLI lista en un minuto</h3><p class="muted" style="margin-top:-4px">Todavía no hay productos. Elige cómo empezar:</p>
+  <div class="btns"><button class="btn pri xl" data-act="empezarOLI">${ic("paleta", 20)} Cargar el catálogo de OLI</button><button class="btn ghost xl" data-act="cargarDemo">${ic("analisis", 20)} Explorar con datos de demostración</button><button class="btn ghost" data-act="nuevoProducto">${ic("plus", 18)} Agregar un producto</button></div>
+  <p class="xs muted" style="margin:10px 0 0">El catálogo trae las paletas, bebidas y precios de OLI. Los datos de demostración incluyen un mes de ventas de ejemplo y se pueden borrar en Ajustes.</p></div>`;
 VIEWS.hoy = () => {
+  if (!prods().length) return bEncabezado() + puestaEnMarcha();
   const comp = comandoModo() === "completa", cajaProblema = cajasAll().some(c => c.fecha >= addDays(S.today, -1) && (c.cierres || []).length && Math.abs(c.cierres.slice(-1)[0].dif) >= 1000), findeFuerte = [4, 5, 6].includes(dowOf(S.today)) && histInfo().ok;
   const partes = [bEncabezado(), bEstado(), bAtencion()];
   if (cajaProblema) partes.push(bCaja());

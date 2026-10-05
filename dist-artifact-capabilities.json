@@ -1,0 +1,114 @@
+{
+  "db": {
+    "rules": [
+      {
+        "path": "",
+        "read": "interact",
+        "write": "admin"
+      },
+      {
+        "path": "ventas",
+        "write": "interact"
+      },
+      {
+        "path": "cajas",
+        "write": "interact"
+      },
+      {
+        "path": "mermas",
+        "write": "interact"
+      },
+      {
+        "path": "checklists",
+        "write": "interact"
+      },
+      {
+        "path": "anulaciones",
+        "write": "interact"
+      },
+      {
+        "path": "confirmaciones",
+        "write": "interact"
+      },
+      {
+        "path": "demandaperdida",
+        "write": "interact"
+      },
+      {
+        "path": "dispositivos",
+        "write": "interact"
+      },
+      {
+        "path": "costos",
+        "read": "admin",
+        "write": "admin"
+      },
+      {
+        "path": "recetas",
+        "read": "admin",
+        "write": "admin"
+      },
+      {
+        "path": "gastos",
+        "read": "admin",
+        "write": "admin"
+      },
+      {
+        "path": "compras",
+        "read": "admin",
+        "write": "admin"
+      },
+      {
+        "path": "config",
+        "read": "admin",
+        "write": "admin"
+      },
+      {
+        "path": "terceros",
+        "read": "admin",
+        "write": "admin"
+      },
+      {
+        "path": "movinv",
+        "read": "interact",
+        "write": "admin"
+      },
+      {
+        "path": "periodos",
+        "read": "admin",
+        "write": "admin"
+      },
+      {
+        "path": "docelec",
+        "read": "admin",
+        "write": "admin"
+      },
+      {
+        "path": "audit",
+        "read": "admin",
+        "write": "admin"
+      },
+      {
+        "path": "audit/{self}",
+        "read": "interact",
+        "write": "interact"
+      },
+      {
+        "path": "data/users",
+        "read": "admin",
+        "write": "admin"
+      },
+      {
+        "path": "data/users/{self}",
+        "read": "interact",
+        "write": "interact"
+      }
+    ]
+  },
+  "user": {
+    "scopes": [
+      "profile"
+    ]
+  },
+  "downloads": true
+}

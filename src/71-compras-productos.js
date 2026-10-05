@@ -107,7 +107,7 @@ VIEWS.productos = () => {
     <div style="text-align:right">${p.controla === false ? '<span class="xs muted">Sin inventario</span>' : pillEstado(e)}${e.st != null && p.controla !== false ? `<div class="small" style="font-weight:700">${e.st}</div>` : ""}</div></div>`; };
   return cabecera("Productos", "Lo que vendes y lo que usas para hacerlo.", `<button class="btn pri xl" data-act="nuevoProducto">${ic("plus", 20)} AGREGAR PRODUCTO</button>`) +
     `<div class="search" style="margin-bottom:12px">${ic("buscar", 20)}<input class="in plain" id="prodq" type="search" placeholder="Buscar producto" value="${esc(S.q)}" aria-label="Buscar producto"></div>` +
-    (ok.length ? `<div class="card">${ok.map(fila).join("")}</div>` : vacio("productos", "Todavía no hay productos", "Toca AGREGAR PRODUCTO. Solo necesitas nombre y precio.")) + (off.length ? `<h3>Desactivados</h3><div class="card">${off.map(fila).join("")}</div>` : "");
+    (ok.length ? `<div class="card">${ok.map(fila).join("")}</div>` : vacio("productos", "Todavía no hay productos", "Carga el catálogo de OLI o agrega tus productos (solo necesitas nombre y precio).", '<div class="btns" style="justify-content:center"><button class="btn pri" data-act="empezarOLI">Cargar el catálogo de OLI</button><button class="btn ghost" data-act="nuevoProducto">Agregar producto</button></div>')) + (off.length ? `<h3>Desactivados</h3><div class="card">${off.map(fila).join("")}</div>` : "");
 };
 document.addEventListener("input", e => { if (e.target.id === "prodq") { S.q = e.target.value; draw(); const i = $("#prodq"); if (i) { i.focus(); i.setSelectionRange(i.value.length, i.value.length); } } });
 ACT.nuevoProducto = () => ACT.editProd(null, {id: ""});
