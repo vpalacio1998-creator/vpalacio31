@@ -25,6 +25,18 @@ for (const s of S) {
     : `<div class="blob b1"></div><div class="blob b2"></div><div class="logo">OLI</div><div class="left"><div class="chip">${s.chip}</div><h1>${s.title}</h1><div class="sub">${s.sub}</div></div>${devHtml}<div class="foot">OLI · Software propiedad de VP Visual Project · Creado por Víctor Palacio</div>`;
   await pg.setContent(`<html><head><style>${css}</style></head><body>${body}</body></html>`, { waitUntil: 'networkidle' });
   await pg.evaluate(() => document.fonts.ready); await pg.waitForTimeout(300);
+  if (process.argv[2] === 'revisar') {
+    const m = await pg.evaluate(() => {
+      const q = x => document.querySelector(x), r = e => e.getBoundingClientRect(), L = q('.left'), D = q('.dev'), kids = L ? [...L.children].map(r) : [], im = q('.dev img');
+      let contraste = null;
+      if (im) { const c = document.createElement('canvas'); c.width = 120; c.height = 80; const x = c.getContext('2d'); x.drawImage(im, 0, 0, 120, 80); const d = x.getImageData(0, 0, 120, 80).data; let n = 0, a = 0, a2 = 0; for (let i = 0; i < d.length; i += 4) { const v = (d[i] + d[i + 1] + d[i + 2]) / 3; a += v; a2 += v * v; n++; } const mu = a / n; contraste = Math.round(Math.sqrt(a2 / n - mu * mu)); }
+      return { fuente: document.fonts.check('600 72px Fredoka') && document.fonts.check('500 30px Figtree'),
+        textoDer: kids.length ? Math.round(Math.max(...kids.map(k => k.right))) : null, textoArr: kids.length ? Math.round(Math.min(...kids.map(k => k.top))) : null, textoAbj: kids.length ? Math.round(Math.max(...kids.map(k => k.bottom))) : null,
+        devIzq: D ? Math.round(r(D).left) : null, devArr: D ? Math.round(r(D).top) : null, devAbj: D ? Math.round(r(D).bottom) : null, devDer: D ? Math.round(r(D).right) : null, contraste };
+    });
+    const ok = m.fuente && (m.devIzq === null || m.textoDer < m.devIzq - 20) && (m.devArr === null || (m.devArr >= 0 && m.devAbj <= 1080 && m.devDer <= 1920)) && (m.textoArr === null || (m.textoArr > 130 && m.textoAbj < 1020)) && (m.contraste === null || m.contraste > 12);
+    console.log(ok ? 'OK' : 'REVISAR', s.id, JSON.stringify(m)); continue;
+  }
   await pg.screenshot({ path: `frames/${s.id}.png` }); console.log('lamina', s.id);
 }
 await b.close();
