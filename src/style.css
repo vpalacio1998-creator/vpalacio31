@@ -241,3 +241,17 @@ details.help span{display:block;font-weight:500;font-size:13px;line-height:1.35;
 @media (min-width:900px){.foot{padding-bottom:28px}}
 .gate .credit{margin-top:22px;font-size:12px;color:var(--muted)}
 .gate .credit b{color:var(--menta)}
+.spin{display:inline-block;width:16px;height:16px;border:2.5px solid currentColor;border-right-color:transparent;border-radius:50%;animation:spin .8s linear infinite;vertical-align:-3px}
+@keyframes spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.spin{animation-duration:2.4s}}
+.oblig{display:grid;grid-template-columns:1fr auto;gap:4px 12px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)}
+.oblig:last-child{border-bottom:0}
+.estado-tag{font-size:11px;font-weight:800;letter-spacing:.03em;padding:4px 9px;border-radius:8px;white-space:nowrap}
+.estado-tag.CONFIGURADO{background:var(--ok-soft);color:var(--ok)}.estado-tag.VALIDADO{background:var(--marca);color:var(--on-marca)}.estado-tag.PENDIENTE{background:var(--warn-soft);color:var(--warn)}
+.estado-tag.NOAPLICA{background:var(--surface-2);color:var(--muted)}.estado-tag.REQUIERE{background:var(--danger-soft);color:var(--danger)}
+.progreso{height:12px;border-radius:99px;background:var(--surface-2);overflow:hidden}.progreso>i{display:block;height:100%;background:var(--marca);border-radius:99px}
+.check input{flex:none}
+.chips.wrap{flex-wrap:wrap;overflow:visible}
+@media (max-width:719px){.chips.wrap{flex-wrap:nowrap;overflow-x:auto}.hide-sm{display:none!important}}
+.repgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:14px}
+@media (max-width:719px){.repgrid{grid-template-columns:1fr}}

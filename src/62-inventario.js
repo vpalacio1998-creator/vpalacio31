@@ -3,11 +3,15 @@
    Las ventas descuentan solas; cada cambio manual deja registro con antes y después. */
 const TIPO_MOV = {venta: "Venta", perdida: "Pérdida", entrada: "Llegó mercancía", compra: "Compra recibida", conteo: "Conteo", produccion: "Producción", consumo: "Consumo de insumo"};
 S.invTab = "resumen"; S.invEstado = "todos"; S.invCat = "Todas"; S.movRango = "7"; S.movPid = "";
-function movimientosInv(pid) {
+function movimientosInv(pid) { return pid ? movsCalc(pid) : memo("movsInv", () => movsCalc(null)); }
+function movsCalc(pid) {
   const out = [];
   for (const v of ventasOk()) for (const l of lineasExp(v)) if (!pid || l.pid === pid) out.push({t: v.t, fecha: v.fecha, pid: l.pid, tipo: "venta", q: -l.q, det: v.num || "", uid: v.uid});
   for (const m of mermasAll()) if (!pid || m.pid === pid) out.push({t: m.t, fecha: m.fecha, pid: m.pid, tipo: "perdida", q: -m.q, det: m.motivo || "", uid: m.uid});
-  for (const d of Object.values(col("movinv"))) for (const x of (d.items || [])) if (!pid || x.pid === pid) out.push({t: x.t, fecha: ymd(new Date(x.t)), pid: x.pid, tipo: x.tipo, q: x.q, antes: x.antes, despues: x.despues, det: (x.motivo || "") + (x.ref ? " · " + x.ref : ""), uid: x.uid});
+  const conMov = new Set();
+  for (const d of Object.values(col("movinv"))) for (const x of (d.items || [])) { if (x.compra) conMov.add(x.compra); if (!pid || x.pid === pid) out.push({t: x.t, fecha: ymd(new Date(x.t)), pid: x.pid, tipo: x.tipo, q: x.q, antes: x.antes, despues: x.despues, det: (x.motivo || "") + (x.ref ? " · " + x.ref : ""), uid: x.uid}); }
+  // compras recibidas antes de existir el kardex (o importadas): entran como movimiento de compra
+  for (const [id, c] of Object.entries(col("compras"))) if (c.estado === "recibido" && !conMov.has(id)) for (const l of (c.lineas || [])) if ((!pid || l.pid === pid) && l.q > 0) { const t = c.recT || parse(c.recFecha || c.fecha).getTime() + 12 * 3600000; out.push({t, fecha: c.recFecha || c.fecha, pid: l.pid, tipo: "compra", q: l.q, det: "Compra recibida" + (c.proveedor ? " · " + c.proveedor : ""), uid: c.uid}); }
   out.sort((x, y) => x.t - y.t);
   if (pid) {             // saldo: desde cada conteo/entrada (valor conocido) y desde el último conteo guardado
     const s0 = stockDocs()[pid]; let saldo = null;

@@ -22,9 +22,9 @@ function cambiarCantidad(pid, d) {
 /* impuesto de la línea: se toma del tratamiento configurado en el producto. Si no está validado, no se asume. */
 function impLinea(p, precioTotalLinea) {
   const imp = p && p.imp; if (!imp || !imp.t || imp.t === "validar") return {t: "validar", r: 0, base: precioTotalLinea, imp: 0};
-  const r = (imp.t === "iva" || imp.t === "inc" || imp.t === "otro") ? (Number(imp.r) || 0) : 0, incl = configNeg().preciosIncluyenImpuesto !== false;
-  if (incl) { const base = Math.round(precioTotalLinea / (1 + r)); return {t: imp.t, r, base, imp: Math.round(precioTotalLinea) - base}; }
-  return {t: imp.t, r, base: Math.round(precioTotalLinea), imp: Math.round(precioTotalLinea * r)};
+  // el precio al público incluye el impuesto: lo cobrado nunca cambia; se separa base e impuesto para el contador
+  const r = (imp.t === "iva" || imp.t === "inc" || imp.t === "otro") ? (Number(imp.r) || 0) : 0, base = Math.round(precioTotalLinea / (1 + r));
+  return {t: imp.t, r, base, imp: Math.round(precioTotalLinea) - base};
 }
 async function registrarVenta(opts) {
   if (!DS.canWrite) throw Object.assign(new Error("denied"), {code: "denied"});
@@ -142,7 +142,7 @@ async function crearCompra(c) { exigirAdmin(); const id = "c" + newId(); await p
 async function actualizarCompra(id, patch) { exigirAdmin(); await put("compras", id, Object.assign({}, col("compras")[id], patch)); }
 async function recibirCompra(id, lineas, datos) {
   exigirAdmin(); const c = col("compras")[id]; if (!c) throw new Error("No existe la compra.");
-  for (const l of lineas) { if (!(l.q > 0)) continue; const st = stockDe(l.pid); await fijarStock(l.pid, (st == null ? 0 : st) + l.q, {tipo: "compra", motivo: "Compra recibida", ref: (c.proveedor || "") + (datos && datos.factura ? " · " + datos.factura : "")}); if (l.costo != null && l.costo > 0) { const unit = l.costo; if ((costos()[l.pid] || {}).costo !== unit) await fijarCosto(l.pid, unit, "compra " + id); } }
+  for (const l of lineas) { if (!(l.q > 0)) continue; const st = stockDe(l.pid); await fijarStock(l.pid, (st == null ? 0 : st) + l.q, {tipo: "compra", motivo: "Compra recibida", compra: id, ref: (c.proveedor || "") + (datos && datos.factura ? " · " + datos.factura : "")}); if (l.costo != null && l.costo > 0) { const unit = l.costo; if ((costos()[l.pid] || {}).costo !== unit) await fijarCosto(l.pid, unit, "compra " + id); } }
   await put("compras", id, Object.assign({}, c, datos || {}, {lineas, estado: "recibido", recT: Date.now(), recFecha: S.today}));
   audit("COMPRA_RECIBIDA", id, fmt(sum(lineas, l => (l.costo || 0) * (l.q || 0))));
 }

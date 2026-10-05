@@ -14,29 +14,25 @@ function filasVentas(a, b, F) {
   }
   return out.sort((x, y) => x.t - y.t);
 }
-function stockFinalEn(pid, b) {    // inventario al final del periodo = actual + lo que salió después − lo que entró después
+/* inventario al final de un día = existencia actual menos todo lo que se movió después (cada movimiento del kardex tiene su cantidad con signo) */
+function stockFinalEn(pid, b, movs) {
   const st = stockDe(pid); if (st == null) return null; if (b >= S.today) return st;
-  let s = st; for (const v of ventasOk()) if (v.fecha > b) for (const l of lineasExp(v)) if (l.pid === pid) s += l.q;
-  for (const m of mermasAll()) if (m.fecha > b && m.pid === pid) s += m.q;
-  for (const c of Object.values(col("compras"))) if (c.estado === "recibido" && (c.recFecha || c.fecha) > b) for (const l of (c.lineas || [])) if (l.pid === pid) s -= l.q || 0;
-  return s;
+  let s = st; for (const m of (movs || movimientosInv(pid))) if (m.fecha > b) s -= m.q; return Math.round(s * 1000) / 1000;
 }
-function ajustesInventario(a, b) {
-  return auditList().filter(x => x.a === "AJUSTE_INVENTARIO" && ymd(new Date(x.t)) >= a && ymd(new Date(x.t)) <= b).map(x => { const m = /(-?\d+(?:[.,]\d+)?)\s*→\s*(-?\d+(?:[.,]\d+)?)/.exec(x.d || ""), d = m ? numDec(m[2]) - numDec(m[1]) : 0; return {pid: x.r, t: x.t, delta: d, u: x.u, d: x.d}; });
-}
+const ENTRA = {entrada: 1, compra: 1, produccion: 1};
 function filasInventario(a, b) {
-  const aj = ajustesInventario(a, b), out = [];
+  const porPid = {}; for (const m of movimientosInv(null)) (porPid[m.pid] = porPid[m.pid] || []).push(m);
+  const out = [];
   for (const p of prods().filter(x => x.controla !== false && !x.combo)) {
-    const fin = stockFinalEn(p.id, b); let ven = 0, mer = 0, ent = 0;
-    for (const v of ventasEn(a, b)) for (const l of lineasExp(v)) if (l.pid === p.id) ven += l.q;
-    for (const m of mermasAll()) if (m.fecha >= a && m.fecha <= b && m.pid === p.id) mer += m.q;
-    for (const c of Object.values(col("compras"))) if (c.estado === "recibido" && (c.recFecha || c.fecha) >= a && (c.recFecha || c.fecha) <= b) for (const l of (c.lineas || [])) if (l.pid === p.id) ent += l.q || 0;
-    const ajs = sum(aj.filter(x => x.pid === p.id), x => x.delta), ini = fin == null ? null : fin - ent + ven + mer - ajs, e = estadoProd(p), c = costoActual(p.id), cov = cobertura(p.id), ag = agotaEn(p.id);
+    const movs = porPid[p.id] || [], fin = stockFinalEn(p.id, b, movs), en = movs.filter(m => m.fecha >= a && m.fecha <= b);
+    const ent = sum(en.filter(m => ENTRA[m.tipo]), m => m.q), ven = -sum(en.filter(m => m.tipo === "venta"), m => m.q), mer = -sum(en.filter(m => m.tipo === "perdida"), m => m.q), con = -sum(en.filter(m => m.tipo === "consumo"), m => m.q), ajs = sum(en.filter(m => m.tipo === "conteo"), m => m.q);
+    const ini = fin == null ? null : Math.round((fin - ent + ven + mer + con - ajs) * 1000) / 1000, e = estadoProd(p), c = costoActual(p.id), cov = cobertura(p.id), ag = agotaEn(p.id);
     const estado = e.k === "agotado" ? "AGOTADO" : e.k === "bajo" ? "BAJO" : ag && ag.dias <= 3 ? "RIESGO" : e.k === "sin" ? "SIN CONTAR" : "NORMAL";
-    out.push({producto: p.nombre, sku: p.id, categoria: p.cat || "", tipo: p.tipo === "insumo" ? "Insumo" : "Producto terminado", unidad: p.unidad || "und", inicial: ini, entradas: ent, salidas: ven + mer, ventas: ven, mermas: mer, ajustes: ajs, final: fin, costo: c, minimo: p.min || 0, seguridad: p.seg || 0, cobertura: cov == null || cov === Infinity ? null : Math.round(cov * 10) / 10, estado});
+    out.push({producto: p.nombre, sku: p.id, categoria: p.cat || "", tipo: p.tipo === "insumo" ? "Insumo" : "Producto terminado", unidad: p.unidad || "und", inicial: ini, entradas: ent, salidas: ven + mer + con, ventas: ven, mermas: mer, consumo: con, ajustes: ajs, final: fin, costo: c, minimo: p.min || 0, seguridad: p.seg || 0, cobertura: cov == null || cov === Infinity ? null : Math.round(cov * 10) / 10, estado});
   }
   return out;
 }
+function filasAjustes(a, b) { return movimientosInv(null).filter(m => m.fecha >= a && m.fecha <= b && m.tipo !== "venta" && m.tipo !== "perdida").map(m => ({fecha: m.fecha, hora: hora(m.t), producto: (prod(m.pid) || {nombre: m.pid}).nombre, tipo: TIPO_MOV[m.tipo] || m.tipo, cantidad: m.q, antes: m.antes == null ? null : m.antes, despues: m.despues == null ? null : m.despues, motivo: m.det || "", usuario: empNombre(m.uid)})); }
 function proveedorDe(pid) { const cs = Object.values(col("compras")).filter(c => (c.lineas || []).some(l => l.pid === pid) && c.proveedor).sort((x, y) => (y.t || 0) - (x.t || 0)); return cs[0] ? cs[0].proveedor : ""; }
 function filasCompras(a, b) {
   const out = [];
@@ -113,7 +109,7 @@ function informacionPendiente(a, b) {
   return out;
 }
 function conciliacion(a, b) {
-  const f = finanzas(a, b), de = Object.values(col("docelec")).filter(d => d.fecha >= a && d.fecha <= b && d.estado === "aceptado"), feCfg = !!(configNeg().tributario && configNeg().tributario.proveedorFE);
+  const f = finanzas(a, b), de = Object.values(col("docelec")).filter(d => d.fecha >= a && d.fecha <= b && (d.estado === "aceptado" || d.estado === "registrado")), feCfg = !!(configNeg().tributario && configNeg().tributario.proveedorFE) || de.length > 0;
   const cajas = filasCajas(a, b).filter(c => c.contado != null), cr = filasCompras(a, b).filter(c => c.estado === "Recibida"), crSop = cr.filter(c => c.soporte);
   const inv = filasInventario(a, b), valIni = sum(inv, r => (r.inicial || 0) * (r.costo || 0)), valFin = sum(inv, r => (r.final || 0) * (r.costo || 0)), compras = sum(cr, c => c.total - c.iva), merma = sum(filasMermas(a, b), m => m.total || 0), cvTeo = valIni + compras - valFin - merma;
   const dig = ventasOk().filter(v => v.fecha >= a && v.fecha <= b && esDigital(v.m)), digConf = sum(dig.filter(v => !v.pend), v => v.total), digTot = sum(dig, v => v.total);
