@@ -100,3 +100,33 @@
 | 34 | Cierre de mes: Cerrar el mes | Y al final del mes, revisas los pendientes, exportas y marcas el mes como cerrado. |
 | 35 | OLI: Robusta por dentro | Por dentro, OLI es robusta: los permisos se validan en el servidor, funciona sin internet sin perder ni duplicar ventas, sincroniza en tiempo real entre equipos y guarda todo en una base de datos segura. |
 | 36 | OLI: OLI te dice qué hacer. | OLI no solo te muestra información: te dice qué deberías hacer. OLI, software de VP Visual Project, creado por Víctor Palacio. |
+
+
+---
+
+# Video del administrador (voz Gonzalo)
+
+**Archivo:** `OLI_Tutorial_Administrador.mp4` · 3 min 25 s · 1920×1080 · 27 MB · 18 escenas. Está en el almacenamiento privado de Supabase; el enlace se entregó por chat.
+
+La rutina diaria paso a paso se muestra con un mes de datos de ejemplo en OLI local: revisar, comprar (con su explicación), recibir el pedido, registrar un gasto, gastos fijos, conteo de inventario e informes. El ingreso y "Crear cuenta" son de producción: el formulario se llenó pero **no se guardó**.
+
+| # | Escena | Narración |
+|---|---|---|
+| 1 | OLI: OLI para el administrador | Hola. Este es OLI para el administrador. Te muestro, paso a paso, lo que haces cada día para tener el negocio bajo control. Usamos un mes de datos de ejemplo para que veas todo funcionando. |
+| 2 | Ingreso: Entras con tu cuenta | Entras desde tu celular con tu cuenta de administrador. Con esta cuenta ves todo: ventas, costos, ganancias, gastos y contabilidad. |
+| 3 | 1 · Revisar: Así va el negocio hoy | Lo primero cada mañana es Inicio. OLI te dice cómo van las ventas frente al promedio y te pone lo urgente arriba. Aquí avisa que la Paleta Mango se va a agotar mañana. |
+| 4 | 1 · Revisar: ¿Qué deberías hacer? | Bajando, ves el punto de equilibrio del mes, cuánto vas a cerrar hoy y la lista de lo que deberías hacer, ordenada por urgencia. Cada tarea tiene un botón para resolverla. |
+| 5 | 2 · Comprar: ¿Qué debo pedir? | Vamos a resolver lo urgente. En Compras, OLI calcula cuánto pedir de cada producto para los próximos días, según lo que realmente vendes. |
+| 6 | 2 · Comprar: Con su explicación | Si tocas ¿Por qué?, OLI te muestra el cálculo: ventas promedio, tendencia, inventario actual, cuántos días alcanza y la reserva de seguridad. Nada es una caja negra. |
+| 7 | 2 · Comprar: Generas el pedido | Generas el pedido con el proveedor. Queda como pedido pendiente, y OLI lo tiene en cuenta para no recomendarte comprar dos veces. |
+| 8 | 3 · Recibir: Llegó el pedido | Cuando llega la mercancía, registras lo que de verdad llegó y el costo de cada producto. También puedes anotar la factura para la contabilidad. |
+| 9 | 3 · Recibir: El inventario se actualiza | Y el inventario se actualiza solo. La Paleta Mango pasó de nueve a cuarenta y una unidades, y el movimiento queda registrado con su saldo, junto a cada venta. |
+| 10 | 4 · Gastos: Registras un gasto | Pagaste el recibo de la luz. Lo registras en segundos: cuánto, en qué y con qué pagaste. Si quieres, agregas el proveedor y el soporte para el contador. |
+| 11 | 4 · Gastos: Lo que de verdad queda | En Dinero ves lo que de verdad queda: lo que entró, menos lo que costó lo vendido, menos los gastos. La utilidad, sin hacer cuentas a mano. |
+| 12 | 4 · Gastos: Gastos fijos del mes | Aquí defines tus gastos fijos del mes: arriendo, nómina y servicios. Con ellos OLI calcula tu punto de equilibrio y cuánto necesitas vender cada día. |
+| 13 | 5 · Inventario: Contar lo que hay | De vez en cuando cuentas el inventario. OLI te dice cuántas unidades debería haber, tú escribes cuántas hay de verdad, y la diferencia queda registrada con su motivo. |
+| 14 | 6 · Equipo: Creas la cuenta de tu empleada | Cuando llega una empleada nueva, le creas su cuenta desde Equipo: nombre, correo, contraseña y rol. Ella solo verá lo que necesita para vender. |
+| 15 | 6 · Equipo: Ves qué cambió | En Equipo también ves cada tablet y si tiene ventas pendientes por enviar, y el historial de cambios: precios, inventario y caja, con quién y cuándo. |
+| 16 | 7 · Informes: Descargas los informes | En el computador eliges el periodo y descargas tus informes: el gerencial en Excel, el empresarial y el del dueño en PDF, y el paquete para el contador. |
+| 17 | 7 · Contador: Todo para tu contador | El paquete del contador trae quince libros de Excel y el resumen contable en PDF, con lo que falta completar señalado. Se lo envías y listo. |
+| 18 | OLI: Tu rutina en 5 minutos | Esa es tu rutina: revisar, comprar, recibir, registrar gastos y descargar informes. Cinco minutos al día con OLI, y el negocio bajo control. OLI, de VP Visual Project, creado por Víctor Palacio. |

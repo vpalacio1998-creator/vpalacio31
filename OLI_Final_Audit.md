@@ -121,6 +121,19 @@ Antes de llegar a 11/11, la misma prueba encontró **3 fallos reales** (sección
 
 ---
 
+## 4b. Incidente del 5/10/2026 (provocado por mí, ya corregido)
+
+Al limpiar los datos de prueba de las grabaciones del video, borré por error una **venta real** hecha desde el "Computador": `Computador #1`, $24.500 con tarjeta (1 Paleta Milky, 1 Capuchino, 1 Granizado Mango 9 oz). También borré la apertura de caja de esa sesión ($200.000) y sus registros de auditoría.
+
+- **Qué se borró:** la copia sincronizada (documentos `ventas` y `cajas`), los registros de equipos y la auditoría de esa sesión.
+- **Qué no se borró:** la venta, sus productos, el pago y la caja seguían en las tablas del servidor.
+- **Restauración:** se reconstruyeron los dos documentos con los mismos identificadores y valores. Inventario: 93 (94 − 1 Milky). Quedó constancia en la auditoría (`DATOS_RESTAURADOS`).
+- **No recuperable:** los registros de auditoría de esa sesión.
+- **Mejora:** el administrador restaura ventas y cajas perdidas también desde la primera carga, con su prueba de regresión (9/9). La prueba mostró que en ese caso la app ya se habría autocorregido al abrir OLI, así que el cambio es un refuerzo, no la corrección de una falla activa.
+- **Regla desde ahora:** no se borra nada en producción sin revisar antes qué datos son de prueba y cuáles son del negocio. Las grabaciones futuras deben usar datos de ejemplo locales, no producción.
+
+---
+
 ## 5. Limitaciones y pendientes (honesto)
 
 - **PENDIENTE: prueba en una tablet física.** Todo se probó con navegadores automáticos que simulan tablet y celular. Falta abrirlo en la tablet real del negocio.

@@ -213,7 +213,7 @@ function persistCol(name) {
    llega con menos elementos de los que este equipo ya vio (otra ventana o alguien lo sobrescribió), el administrador lo restaura uniendo por id. */
 const UNION = {ventas: ["ventas"], cajas: ["movs", "cierres"], mermas: ["items"], anulaciones: ["items"], confirmaciones: ["items"], reaperturas: ["items"], movinv: ["items"], demandaperdida: ["items"]};
 function restaurarPerdidos(name, map) {
-  if (!UNION[name] || !DS.isAdmin || DS.mode !== "db" || !DS.remoteSeen) return;
+  if (!UNION[name] || !DS.isAdmin || DS.mode !== "db") return;                                   // también en la primera carga: si el servidor perdió algo, lo guardado en este equipo lo restaura
   const prev = DS.c[name] || {}, fix = [];
   for (const [id, old] of Object.entries(prev)) {
     if (OUT[pathOf(name, id)] || String(id).startsWith("demo-") || (RANGED.has(name) && old.fecha && old.fecha < addDays(S.today, -HIST_DIAS + 2))) continue; const cur = map[id]; let doc = cur ? Object.assign({}, cur) : Object.assign({}, old), cambio = !cur;
