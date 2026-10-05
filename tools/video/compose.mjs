@@ -34,7 +34,7 @@ for (const s of S) {
       const q = x => document.querySelector(x), r = e => e.getBoundingClientRect(), L = q('.left'), D = q('.dev'), kids = L ? [...L.children].map(r) : [], im = q('.dev img');
       let contraste = null;
       if (im) { const c = document.createElement('canvas'); c.width = 120; c.height = 80; const x = c.getContext('2d'); x.drawImage(im, 0, 0, 120, 80); const d = x.getImageData(0, 0, 120, 80).data; let n = 0, a = 0, a2 = 0; for (let i = 0; i < d.length; i += 4) { const v = (d[i] + d[i + 1] + d[i + 2]) / 3; a += v; a2 += v * v; n++; } const mu = a / n; contraste = Math.round(Math.sqrt(a2 / n - mu * mu)); }
-      return { fuente: document.fonts.check('600 72px Fredoka') && document.fonts.check('500 30px Figtree'),
+      return { fuente: document.fonts.check('600 72px Fredoka') && document.fonts.check('400 30px Figtree') && [...document.fonts].some(f => f.family.replace(/"/g, '') === 'Fredoka' && f.status === 'loaded'),
         textoDer: kids.length ? Math.round(Math.max(...kids.map(k => k.right))) : null, textoArr: kids.length ? Math.round(Math.min(...kids.map(k => k.top))) : null, textoAbj: kids.length ? Math.round(Math.max(...kids.map(k => k.bottom))) : null,
         devIzq: D ? Math.round(r(D).left) : null, devArr: D ? Math.round(r(D).top) : null, devAbj: D ? Math.round(r(D).bottom) : null, devDer: D ? Math.round(r(D).right) : null, contraste };
     });
