@@ -18,15 +18,18 @@ h1{font-family:Fredoka;font-weight:600;font-size:72px;line-height:1.02;letter-sp
 .tablet{right:90px;top:50%;transform:translateY(-50%);width:1060px;padding:22px;background:#1C211E;border-radius:44px;box-shadow:0 40px 90px rgba(31,42,36,.28)}.tablet img{border-radius:22px}
 .phone{right:330px;top:50%;transform:translateY(-50%);width:420px;padding:16px;background:#1C211E;border-radius:62px;box-shadow:0 40px 90px rgba(31,42,36,.28)}.phone img{border-radius:48px}
 .pc{right:70px;top:50%;transform:translateY(-54%);width:1000px;flex-direction:column}.pc .scr{width:100%;padding:18px 18px 22px;background:#1C211E;border-radius:26px 26px 10px 10px;box-shadow:0 40px 90px rgba(31,42,36,.28)}.pc .scr img{border-radius:8px}.pc .base{width:108%;height:26px;background:linear-gradient(#D9D6CE,#BEBAB0);border-radius:0 0 22px 22px}
+.doc{right:170px;top:50%;transform:translateY(-50%);width:640px;background:#fff;border-radius:6px;box-shadow:0 30px 80px rgba(31,42,36,.25);overflow:hidden}
+.demo{position:absolute;right:96px;top:72px;background:#F6E7D2;color:#8A5A12;font-weight:700;font-size:18px;padding:8px 18px;border-radius:999px}
 .center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:30px}.center .big{font-family:Fredoka;font-weight:700;font-size:200px;color:#2F7B5A;line-height:1}.center h1{font-size:84px}.center .sub{max-width:1100px}`;
 for (const s of S) {
   let devHtml = '';
   if (s.dev === 'tablet') devHtml = `<div class="dev tablet"><img src="${img(s.img)}"></div>`;
   if (s.dev === 'phone') devHtml = `<div class="dev phone"><img src="${img(s.img)}"></div>`;
+  if (s.dev === 'doc') devHtml = `<div class="dev doc"><img src="${img(s.img)}"></div>`;
   if (s.dev === 'pc') devHtml = `<div class="dev pc"><div class="scr"><img src="${img(s.img)}"></div><div class="base"></div></div>`;
   const body = s.dev === 'none'
     ? `<div class="blob b1"></div><div class="blob b2"></div><div class="center"><div class="big">OLI</div><h1>${s.title}</h1><div class="sub">${s.sub}</div></div>`
-    : `<div class="blob b1"></div><div class="blob b2"></div><div class="logo">OLI</div><div class="left"><div class="chip">${s.chip}</div><h1>${s.title}</h1><div class="sub">${s.sub}</div></div>${devHtml}<div class="foot">OLI · Software propiedad de VP Visual Project · Creado por Víctor Palacio</div>`;
+    : `<div class="blob b1"></div><div class="blob b2"></div><div class="logo">OLI</div><div class="left"><div class="chip">${s.chip}</div><h1>${s.title}</h1><div class="sub">${s.sub}</div></div>${devHtml}${s.demo ? '<div class="demo">Datos de ejemplo</div>' : ''}<div class="foot">OLI · Software propiedad de VP Visual Project · Creado por Víctor Palacio</div>`;
   await pg.setContent(`<html><head><style>${css}</style></head><body>${body}</body></html>`, { waitUntil: 'networkidle' });
   await pg.evaluate(() => document.fonts.ready); await pg.waitForTimeout(300);
   if (process.argv[2] === 'revisar') {

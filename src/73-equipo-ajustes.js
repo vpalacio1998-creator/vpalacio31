@@ -1,3 +1,22 @@
+/* cómo dar acceso depende de dónde corre OLI: servidor propio (cuentas con correo), Claude (botón Compartir) o un solo equipo */
+const accesoHTML = () => DS.backend === "supabase"
+  ? `<div class="notice" style="margin-top:10px"><b>Dar acceso</b><br>Crea una cuenta con correo y contraseña. <b>Empleado</b>: vende, abre y cierra caja y consulta inventario. <b>Administrador</b>: ve todo. Los permisos los valida el servidor.</div><button class="btn pri sm" style="margin-top:10px" data-act="nuevaCuenta">${ic("plus", 16)} Crear cuenta</button>`
+  : DS.mode === "local" ? `<div class="notice" style="margin-top:10px"><b>Un solo equipo</b><br>En este modo OLI guarda todo en este equipo. Para que cada persona entre con su propia cuenta, conecta OLI al servidor.</div>`
+  : `<div class="notice" style="margin-top:10px"><b>Cómo dar acceso</b><br>Usa el botón <b>Compartir</b> de Claude: <b>Colaborador</b> = Empleado (vende, abre y cierra caja, consulta inventario). <b>Editor</b> = Administrador. Cada persona entra con su propia cuenta de Claude, y los permisos los valida el servidor.</div>`;
+ACT.nuevaCuenta = () => abrir(() => head("Crear cuenta") + `<p class="muted" style="margin-top:0">La persona entra a OLI con este correo y esta contraseña.</p>
+  <label class="f" for="nc-n">Nombre</label><input class="in plain" id="nc-n" placeholder="Ej: María">
+  <label class="f" for="nc-m">Correo</label><input class="in plain" id="nc-m" type="email" inputmode="email" autocomplete="off" placeholder="correo@ejemplo.com">
+  <label class="f" for="nc-p">Contraseña (mínimo 8 caracteres)</label><input class="in plain" id="nc-p" type="text" autocomplete="new-password">
+  <label class="f">Rol</label>${sel("nc-r", SB.role === "owner" ? ["Empleado", "Administrador"] : ["Empleado"], "Empleado")}
+  <button class="btn pri xl wide" style="margin-top:14px" data-act="doNuevaCuenta">CREAR CUENTA</button>`);
+ACT.doNuevaCuenta = async () => {
+  const nombre = $("#nc-n").value.trim(), email = $("#nc-m").value.trim(), password = $("#nc-p").value, rol = selVal("nc-r") === "Administrador" ? "admin" : "employee";
+  if (!email || !/@/.test(email)) { toast("Escribe un correo válido.", true); return; }
+  if (password.length < 8) { toast("La contraseña debe tener al menos 8 caracteres.", true); return; }
+  if (!conRed()) { toast("Para crear una cuenta se necesita Internet.", true); return; }
+  try { await sbInvitar({email, password, rol, nombre: nombre || null}); audit("CUENTA_CREADA", email, rol === "admin" ? "Administrador" : "Empleado"); cerrar(); toast("Cuenta creada. Ya puede entrar con " + email); }
+  catch (e) { toast(e.message || "No se pudo crear la cuenta.", true); }
+};
 /* ============ 73 · equipo, auditoría y ajustes (administrador) ============ */
 S.audFiltro = "todo";
 function personasConocidas() {
@@ -12,7 +31,7 @@ VIEWS.equipo = () => {
   `<div class="card"><h3>Dispositivos</h3>${dv.length ? dv.map(d => `<div class="row" style="align-items:flex-start"><span class="dot ${d.online ? "" : "off"}" style="margin-top:8px;${d.online ? "" : "background:var(--warn)"}"></span><div class="l" style="flex:1"><b>${esc(d.nombre)}</b>${d.mine ? ' <span class="pill">Este equipo</span>' : ""}<div class="small muted">${d.online ? "En línea · última sincronización " + haceTxt(d.vis) : "Sin conexión · última conexión " + haceTxt(d.vis)}</div>${(d.mine ? ventasPendientes() : d.ventasPend) ? `<div class="small" style="color:var(--warn)">Ventas pendientes de enviar: ${d.mine ? ventasPendientes() : d.ventasPend}</div>` : ""}<div class="xs muted">${d.rol === "admin" ? "Administrador" : "Empleado"}</div></div></div>`).join("") : '<p class="muted">Todavía no se ha conectado ningún dispositivo.</p>'}
     <button class="btn ghost sm" style="margin-top:8px" data-act="renombrarDev">Cambiar nombre de este equipo</button></div>
   <div class="card"><h3>Personas</h3>${pe.length ? pe.map(x => `<div class="row"><div class="l"><b>${esc(nombreDe(x.uid) || "Persona")}</b><div class="small muted">${x.ventas || 0} ventas · ${fmtK(x.total || 0)}${x.vis ? " · visto " + haceTxt(x.vis) : ""}</div></div></div>`).join("") : '<p class="muted">Cuando tu equipo use OLI, aparecerá aquí.</p>'}
-    <div class="notice" style="margin-top:10px"><b>Cómo dar acceso</b><br>Usa el botón <b>Compartir</b> de Claude: <b>Colaborador</b> = Empleado (vende, abre y cierra caja, consulta inventario). <b>Editor</b> = Administrador. Cada persona entra con su propia cuenta de Claude, y los permisos los valida el servidor.</div></div>
+    ${accesoHTML()}</div>
   <div class="card"><h3>Historial de cambios</h3><div class="seg" style="margin-bottom:10px">${[["todo", "Todo"], ["precios", "Precios y costos"], ["inventario", "Inventario"], ["caja", "Caja"], ["conflictos", "Para revisar"]].map(([k, l]) => `<button data-act="audFiltro" data-v="${k}" aria-pressed="${S.audFiltro === k}">${l}</button>`).join("")}</div>
     ${aud.length ? aud.map(a => { pedirNombres([a.u]); return `<div class="row" style="align-items:flex-start;padding:8px 0"><div class="l"><b>${esc(audTxt(a.a))}</b><div class="small muted">${esc(a.d || "")}</div></div><div style="text-align:right" class="xs muted">${diaCorto(ymd(new Date(a.t)))} ${hora(a.t)}<br>${esc(nombreDe(a.u) || "")}</div></div>`; }).join("") : '<p class="muted">No hay registros.</p>'}</div>
   ${rechazadas().length ? `<div class="card"><h3>Operaciones que el servidor rechazó</h3>${rechazadas().map(o => `<div class="row"><div class="l"><b>${esc(o.path)}</b><div class="small muted">${esc(o.error || "")}</div></div></div>`).join("")}<p class="small muted">Siguen guardadas en este equipo. Si necesitas recuperarlas, no borres los datos del navegador.</p></div>` : ""}`;

@@ -1,0 +1,8 @@
+<!doctype html><meta charset="utf-8"><body style="margin:0;background:#fff"><canvas></canvas>
+<script type="module">
+import * as pdfjs from './node_modules/pdfjs-dist/build/pdf.min.mjs';
+pdfjs.GlobalWorkerOptions.workerSrc = './node_modules/pdfjs-dist/build/pdf.worker.min.mjs';
+const q = new URLSearchParams(location.search), f = q.get('f'), doc = await pdfjs.getDocument(f).promise, page = await doc.getPage(+(q.get('p') || 1));
+const v1 = page.getViewport({ scale: 1 }), vp = page.getViewport({ scale: 1240 / v1.width }), c = document.querySelector('canvas');
+c.width = vp.width; c.height = vp.height; await page.render({ canvasContext: c.getContext('2d'), viewport: vp }).promise; window.listo = true;
+</script>
