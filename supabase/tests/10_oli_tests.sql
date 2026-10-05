@@ -123,6 +123,16 @@ begin
   reset role; set role authenticated; perform t_as(e1);
   r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','hb1','col','dispositivos','id','d1','t',14000,'data','{"dev":"d1","nombre":"Caja 1","rol":"empleado","vis":1760000000000,"pend":2,"ventasPend":2}'::jsonb)), 'd1', '1.0');
   reset role; perform t_assert((select name from devices where id = 'd1') = 'Caja 1' and (select pending_sales from devices where id = 'd1') = 2, 'el servidor registra el estado de cada dispositivo (nombre, pendientes, última señal)');
+  -- T17: kardex de inventario: solo el administrador lo escribe y lo lee; reenviar no duplica
+  reset role; set role authenticated; perform t_as(a);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','mi1','col','movinv','id','2026-10-03_da','t',15000,'data','{"fecha":"2026-10-03","dev":"da","items":[{"id":"m1","t":15000,"pid":"p-mango","tipo":"entrada","q":20,"antes":-2,"despues":18,"motivo":"Proveedor"}]}'::jsonb)), 'da', '1.0');
+  perform t_assert(r->0->>'status' = 'applied' and (select after_qty from inventory_movements where id = 'm1') = 18, 'el administrador registra una entrada de inventario con antes y después');
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','mi2','col','movinv','id','2026-10-03_da','t',15001,'data','{"fecha":"2026-10-03","dev":"da","items":[{"id":"m1","t":15000,"pid":"p-mango","tipo":"entrada","q":20,"antes":-2,"despues":18},{"id":"m2","t":15001,"pid":"p-mango","tipo":"conteo","q":-1,"antes":18,"despues":17}]}'::jsonb)), 'da', '1.0');
+  perform t_assert((select count(*) from inventory_movements) = 2, 'reenviar el kardex no duplica movimientos');
+  reset role; set role authenticated; perform t_as(e1);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','mi3','col','movinv','id','2026-10-03_d1','t',15002,'data','{"fecha":"2026-10-03","dev":"d1","items":[{"id":"m3","t":15002,"pid":"p-mango","tipo":"entrada","q":99}]}'::jsonb)), 'd1', '1.0');
+  perform t_assert(r->0->>'status' = 'rejected', 'el empleado no puede sumar inventario por su cuenta');
+  perform t_assert((select count(*) from inventory_movements) = 0 and (select count(*) from oli_docs where collection = 'movinv') = 0, 'el empleado no ve el kardex (RLS)');
   -- T16: coherencia de totales
   reset role;
   perform t_assert((select sum(total) from sales) = (select sum(amount) from payments), 'total de ventas = total de pagos');

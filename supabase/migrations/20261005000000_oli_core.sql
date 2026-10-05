@@ -170,6 +170,11 @@ create table if not exists purchases (                     -- solo administrador
 create table if not exists purchase_items (
   org_id uuid not null, purchase_id text not null, line_no int not null, product_id text, qty numeric, unit_cost numeric, checked boolean,
   primary key (org_id, purchase_id, line_no));
+create table if not exists inventory_movements (           -- kardex: entradas, conteos, compras, producción (solo administradores)
+  org_id uuid not null, id text not null, product_id text, type text not null, qty numeric, before_qty numeric, after_qty numeric, reason text, ref text,
+  at timestamptz, user_id text, device_id text, local_date date,
+  primary key (org_id, id));
+create index if not exists inv_mov_prod on inventory_movements (org_id, product_id, at);
 create table if not exists third_parties (                 -- proveedores / terceros
   org_id uuid not null, id text not null, kind text, name text, nit text, regime text, email text, data jsonb,
   primary key (org_id, id));
@@ -181,7 +186,7 @@ create or replace function oli.role_level(r text) returns int language sql immut
 $$ select case r when 'owner' then 4 when 'admin' then 3 when 'employee' then 2 else 0 end $$;
 
 create or replace function oli.col_read_min(c text) returns int language sql immutable as
-$$ select case when c in ('costos','recetas','gastos','compras','config','terceros','periodos','docelec','audit') then 3 else 2 end $$;
+$$ select case when c in ('costos','recetas','gastos','compras','config','terceros','periodos','docelec','movinv','audit') then 3 else 2 end $$;
 
 create or replace function oli.col_write_min(c text) returns int language sql immutable as
 $$ select case when c in ('ventas','cajas','mermas','checklists','anulaciones','confirmaciones','demandaperdida','dispositivos','audit') then 2 else 3 end $$;
@@ -194,7 +199,7 @@ $$ select c in ('ventas','cajas','mermas','checklists','anulaciones','confirmaci
 create or replace function oli.merge_fields(c text) returns text[] language sql immutable as
 $$ select case c when 'ventas' then array['ventas'] when 'cajas' then array['movs','cierres'] when 'mermas' then array['items']
   when 'anulaciones' then array['items'] when 'confirmaciones' then array['items'] when 'demandaperdida' then array['items']
-  when 'reaperturas' then array['items'] when 'audit' then array['items'] else array[]::text[] end $$;
+  when 'reaperturas' then array['items'] when 'movinv' then array['items'] when 'audit' then array['items'] else array[]::text[] end $$;
 
 create or replace function oli.my_membership(p_org uuid default null)
 returns table (org_id uuid, store_id uuid, role text) language sql stable security definer set search_path = public as
@@ -296,6 +301,12 @@ begin
       insert into waste (org_id, id, product_id, qty, reason, note, at, user_id, device_id, local_date)
       values (p_org, s->>'id', s->>'pid', (s->>'q')::numeric, s->>'motivo', s->>'obs', oli.ms((s->>'t')::bigint), s->>'uid', d->>'dev', (d->>'fecha')::date) on conflict do nothing;
     end loop;
+  elsif c = 'movinv' then
+    for s in select * from jsonb_array_elements(coalesce(d->'items','[]'::jsonb)) loop
+      insert into inventory_movements (org_id, id, product_id, type, qty, before_qty, after_qty, reason, ref, at, user_id, device_id, local_date)
+      values (p_org, s->>'id', s->>'pid', coalesce(s->>'tipo','ajuste'), (s->>'q')::numeric, (s->>'antes')::numeric, (s->>'despues')::numeric, s->>'motivo', s->>'ref',
+              oli.ms((s->>'t')::bigint), s->>'uid', d->>'dev', (d->>'fecha')::date) on conflict do nothing;
+    end loop;
   elsif c = 'gastos' then
     if del then delete from expenses where org_id = p_org and expenses.id = project.id; return; end if;
     insert into expenses (org_id, id, local_date, category, description, amount, method, supplier, base, tax, withholding, support, status, user_id)
@@ -354,7 +365,7 @@ begin
     if c = 'audit' then
       if split_part(id, '__', 1) <> uid::text then status := 'rejected'; detail := 'auditoría ajena'; end if;
     elsif lvl < wmin then status := 'rejected'; detail := 'sin permiso para ' || c;
-    elsif c not in ('productos','costos','stock','recetas','ventas','cajas','mermas','checklists','anulaciones','confirmaciones','demandaperdida','dispositivos','reaperturas','meta','gastos','compras','config','terceros','periodos','docelec') then status := 'rejected'; detail := 'colección desconocida';
+    elsif c not in ('productos','costos','stock','recetas','ventas','cajas','mermas','checklists','anulaciones','confirmaciones','demandaperdida','dispositivos','reaperturas','meta','gastos','compras','config','terceros','periodos','docelec','movinv') then status := 'rejected'; detail := 'colección desconocida';
     elsif oli.single_writer(c) and lvl < 3 and (d is null or coalesce(d->>'dev','') <> coalesce(dev,'')) then status := 'rejected'; detail := 'solo el dispositivo dueño puede escribir este documento';
     elsif c = 'dispositivos' and lvl < 3 and id <> coalesce(dev,'') then status := 'rejected'; detail := 'dispositivo ajeno';
     end if;
@@ -456,7 +467,7 @@ alter table organizations enable row level security; alter table stores enable r
 alter table oli_docs enable row level security; alter table sync_ops enable row level security; alter table sync_conflicts enable row level security; alter table audit_logs enable row level security;
 alter table products enable row level security; alter table product_costs enable row level security; alter table inventory_counts enable row level security; alter table sales enable row level security;
 alter table sale_items enable row level security; alter table payments enable row level security; alter table sale_voids enable row level security; alter table cash_sessions enable row level security;
-alter table cash_movements enable row level security; alter table waste enable row level security; alter table expenses enable row level security; alter table purchases enable row level security;
+alter table cash_movements enable row level security; alter table waste enable row level security; alter table inventory_movements enable row level security; alter table expenses enable row level security; alter table purchases enable row level security;
 alter table purchase_items enable row level security; alter table third_parties enable row level security;
 
 create policy org_read on organizations for select to authenticated using (oli.is_member(id));
@@ -477,6 +488,7 @@ create policy void_read on sale_voids for select to authenticated using (oli.is_
 create policy cash_read on cash_sessions for select to authenticated using (oli.is_member(org_id));
 create policy cmov_read on cash_movements for select to authenticated using (oli.is_member(org_id));
 create policy waste_read on waste for select to authenticated using (oli.is_member(org_id));
+create policy invmov_read on inventory_movements for select to authenticated using (oli.is_admin(org_id));
 create policy exp_read on expenses for select to authenticated using (oli.is_admin(org_id));
 create policy pur_read on purchases for select to authenticated using (oli.is_admin(org_id));
 create policy puri_read on purchase_items for select to authenticated using (oli.is_admin(org_id));
@@ -485,7 +497,7 @@ create policy third_read on third_parties for select to authenticated using (oli
 revoke all on all tables in schema public from anon, authenticated;
 grant usage on schema public to authenticated;
 grant select on organizations, stores, memberships, devices, oli_docs, sync_ops, sync_conflicts, audit_logs, products, product_costs, inventory_counts, sales, sale_items, payments, sale_voids,
-  cash_sessions, cash_movements, waste, expenses, purchases, purchase_items, third_parties, inventory_current, oli_health to authenticated;
+  cash_sessions, cash_movements, waste, inventory_movements, expenses, purchases, purchase_items, third_parties, inventory_current, oli_health to authenticated;
 revoke all on function oli_apply(jsonb, text, text), oli_bootstrap(text, text), oli_me() from public, anon;
 grant execute on function oli_apply(jsonb, text, text), oli_bootstrap(text, text), oli_me() to authenticated;
 revoke all on schema oli from public, anon, authenticated;

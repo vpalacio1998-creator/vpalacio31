@@ -90,9 +90,25 @@ async function registrarMerma(pid, q, motivo, obs) {
   await put("mermas", id, Object.assign({}, cur, {items: cur.items.concat([{id: newId(), t: Date.now(), pid, q, motivo, obs: obs || "", uid: uidActual()}])}));
   audit("MERMA", pid, q + " · " + motivo);
 }
+/* movimientos de inventario (kardex): cada cambio de existencias deja registro con antes y después */
+async function movInv(items) {
+  if (!items.length) return; const f = S.today, id = cajaId(f), cur = col("movinv")[id] || {fecha: f, dev: DEV.id, items: []};
+  await put("movinv", id, Object.assign({}, cur, {items: cur.items.concat(items.map(x => Object.assign({id: newId(), t: Date.now(), uid: uidActual()}, x)))}));
+}
+async function fijarStock(pid, nuevo, mov) {
+  const antes = stockDe(pid); await put("stock", pid, {base: nuevo, t: Date.now()});
+  await movInv([Object.assign({pid, antes: antes == null ? null : antes, despues: nuevo, q: antes == null ? nuevo : nuevo - antes}, mov)]);
+  return antes;
+}
 async function contarStock(pid, cantidad, motivo) {
-  exigirAdmin(); const p = prod(pid), antes = stockDe(pid); await put("stock", pid, {base: cantidad, t: Date.now()});
+  exigirAdmin(); const p = prod(pid), antes = await fijarStock(pid, cantidad, {tipo: "conteo", motivo: motivo || "Conteo"});
   audit("AJUSTE_INVENTARIO", pid, (p ? p.nombre : pid) + ": " + (antes == null ? "sin contar" : antes) + " → " + cantidad + (motivo ? " · " + motivo : ""));
+}
+async function entradaStock(pid, q, o = {}) {
+  exigirAdmin(); if (!(q > 0)) throw new Error("Escribe cuántas llegaron."); const st = stockDe(pid), p = prod(pid);
+  await fijarStock(pid, (st == null ? 0 : st) + q, {tipo: "entrada", motivo: o.motivo || "Llegó mercancía", ref: o.proveedor || ""});
+  if (o.costo > 0 && (costos()[pid] || {}).costo !== o.costo) await fijarCosto(pid, o.costo, "entrada de mercancía");
+  audit("ENTRADA_INVENTARIO", pid, (p ? p.nombre : pid) + ": +" + q + (o.proveedor ? " · " + o.proveedor : ""));
 }
 async function fijarCosto(pid, costo, motivo) {
   exigirAdmin(); const cur = costos()[pid] || {hist: []}, h = (cur.hist || []).slice();
@@ -113,8 +129,8 @@ async function guardarProducto(id, d, costo) {
 async function guardarReceta(pid, lineas, rinde) { exigirAdmin(); await put("recetas", pid, {lineas, rinde: rinde || 1}); audit("RECETA", pid, lineas.length + " ingredientes"); }
 async function producir(pid, q) {
   exigirAdmin(); if (!(q > 0)) throw new Error("Escribe la cantidad."); const r = col("recetas")[pid], p = prod(pid), st = stockDe(pid);
-  await put("stock", pid, {base: Math.max(0, st == null ? 0 : st) + q, t: Date.now()});
-  if (r) for (const l of r.lineas) { const s = stockDe(l.iid); if (s != null) await put("stock", l.iid, {base: s - l.q * q / (r.rinde || 1), t: Date.now()}); }
+  await fijarStock(pid, (st == null ? 0 : st) + q, {tipo: "produccion", motivo: "Producción"});
+  if (r) for (const l of r.lineas) { const s = stockDe(l.iid); if (s != null) await fijarStock(l.iid, Math.round((s - l.q * q / (r.rinde || 1)) * 1000) / 1000, {tipo: "consumo", motivo: "Producción de " + q + " " + p.nombre}); }
   audit("PRODUCCION", pid, q + " de " + p.nombre);
 }
 
@@ -126,7 +142,7 @@ async function crearCompra(c) { exigirAdmin(); const id = "c" + newId(); await p
 async function actualizarCompra(id, patch) { exigirAdmin(); await put("compras", id, Object.assign({}, col("compras")[id], patch)); }
 async function recibirCompra(id, lineas, datos) {
   exigirAdmin(); const c = col("compras")[id]; if (!c) throw new Error("No existe la compra.");
-  for (const l of lineas) { if (!(l.q > 0)) continue; const st = stockDe(l.pid); await put("stock", l.pid, {base: Math.max(0, st == null ? 0 : st) + l.q, t: Date.now()}); if (l.costo != null && l.costo > 0) { const unit = l.costo; if ((costos()[l.pid] || {}).costo !== unit) await fijarCosto(l.pid, unit, "compra " + id); } }
+  for (const l of lineas) { if (!(l.q > 0)) continue; const st = stockDe(l.pid); await fijarStock(l.pid, (st == null ? 0 : st) + l.q, {tipo: "compra", motivo: "Compra recibida", ref: (c.proveedor || "") + (datos && datos.factura ? " · " + datos.factura : "")}); if (l.costo != null && l.costo > 0) { const unit = l.costo; if ((costos()[l.pid] || {}).costo !== unit) await fijarCosto(l.pid, unit, "compra " + id); } }
   await put("compras", id, Object.assign({}, c, datos || {}, {lineas, estado: "recibido", recT: Date.now(), recFecha: S.today}));
   audit("COMPRA_RECIBIDA", id, fmt(sum(lineas, l => (l.costo || 0) * (l.q || 0))));
 }

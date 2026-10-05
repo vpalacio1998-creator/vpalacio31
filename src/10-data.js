@@ -17,13 +17,13 @@ const RULES = [
   {path: "ventas", write: "interact"}, {path: "cajas", write: "interact"}, {path: "mermas", write: "interact"}, {path: "checklists", write: "interact"},
   {path: "anulaciones", write: "interact"}, {path: "confirmaciones", write: "interact"}, {path: "demandaperdida", write: "interact"}, {path: "dispositivos", write: "interact"},
   {path: "costos", read: "admin", write: "admin"}, {path: "recetas", read: "admin", write: "admin"}, {path: "gastos", read: "admin", write: "admin"},
-  {path: "compras", read: "admin", write: "admin"}, {path: "config", read: "admin", write: "admin"}, {path: "terceros", read: "admin", write: "admin"}, {path: "periodos", read: "admin", write: "admin"}, {path: "docelec", read: "admin", write: "admin"},
+  {path: "compras", read: "admin", write: "admin"}, {path: "config", read: "admin", write: "admin"}, {path: "terceros", read: "admin", write: "admin"}, {path: "movinv", read: "admin", write: "admin"}, {path: "periodos", read: "admin", write: "admin"}, {path: "docelec", read: "admin", write: "admin"},
   {path: "data/users", read: "admin", write: "admin"}, {path: "data/users/{self}", read: "interact", write: "interact"}
 ];
 const LV = {view: 1, interact: 2, admin: 3, owner: 4};
 const SHARED_COLS = ["productos", "stock", "ventas", "cajas", "mermas", "checklists", "anulaciones", "confirmaciones", "demandaperdida", "dispositivos", "reaperturas", "meta"];
-const ADMIN_COLS = ["costos", "recetas", "gastos", "compras", "config", "terceros", "periodos", "docelec"];
-const RANGED = new Set(["ventas", "cajas", "mermas", "checklists", "anulaciones", "confirmaciones", "demandaperdida", "reaperturas"]);
+const ADMIN_COLS = ["costos", "recetas", "gastos", "compras", "config", "terceros", "periodos", "docelec", "movinv"];
+const RANGED = new Set(["ventas", "cajas", "mermas", "checklists", "anulaciones", "confirmaciones", "demandaperdida", "reaperturas", "movinv"]);
 const HIST_DIAS = 95;
 
 const DS = {lastRemote: 0, mode: "loading", dbh: null, uid: null, isAdmin: false, canWrite: true, c: {}, v: 0, ready: {}, error: null, fromCache: true, localRole: "admin", subs: [], remoteSeen: false};

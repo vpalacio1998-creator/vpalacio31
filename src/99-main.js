@@ -130,3 +130,5 @@ $("#sheet .bg").addEventListener("click", cerrar);
     setInterval(() => { const t = ymd(); if (t !== S.today) { S.today = t; changed(); } }, 30000);
   } catch (e) { console.error(e); $("#view").innerHTML = vacio("alerta", "No se pudo abrir OLI", "Recarga la página. Si sigue igual, avisa al administrador."); }
 })();
+/* gancho de pruebas automáticas: solo en localhost (nunca en producción) */
+if (/^(localhost|127\.0\.0\.1)$/.test(location.hostname)) window.__oli = expr => eval(expr);
