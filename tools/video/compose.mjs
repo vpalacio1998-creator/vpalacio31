@@ -2,7 +2,11 @@ import { chromium } from 'playwright'; import fs from 'fs';
 const S = JSON.parse(fs.readFileSync('scenes.json', 'utf8')); fs.mkdirSync('frames', { recursive: true });
 const b = await chromium.launch(); const pg = await b.newPage({ viewport: { width: 1920, height: 1080 } });
 const img = n => 'data:image/png;base64,' + fs.readFileSync(`shots/${n}.png`).toString('base64');
-const css = `@import url('https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Figtree:wght@400;500;600;700&display=swap');
+// fuentes incrustadas (paquetes @fontsource de npm): no dependen de Google Fonts
+const fuente = (pkg, fam, w) => { const f = `node_modules/@fontsource/${pkg}/files/${pkg}-latin-${w}-normal.woff2`; return fs.existsSync(f) ? `@font-face{font-family:${fam};font-weight:${w};src:url(data:font/woff2;base64,${fs.readFileSync(f).toString('base64')}) format('woff2')}` : ''; };
+const fontCss = [500, 600, 700].map(w => fuente('fredoka', 'Fredoka', w)).join('') + [400, 500, 600, 700].map(w => fuente('figtree', 'Figtree', w)).join('');
+if (!fontCss) console.log('AVISO: faltan las fuentes (npm i @fontsource/fredoka @fontsource/figtree)');
+const css = fontCss + `
 *{box-sizing:border-box;margin:0}body{width:1920px;height:1080px;overflow:hidden;background:#FAF7F0;font-family:Figtree,sans-serif;color:#1F2A24;position:relative}
 .blob{position:absolute;border-radius:50%;filter:blur(10px)}.b1{width:900px;height:900px;right:-220px;top:-180px;background:radial-gradient(circle,#E3EFE6 0%,#FAF7F0 70%)}.b2{width:600px;height:600px;left:-200px;bottom:-260px;background:radial-gradient(circle,#F6E7D2 0%,#FAF7F0 70%)}
 .logo{position:absolute;left:96px;top:72px;font-family:Fredoka;font-weight:700;font-size:44px;color:#2F7B5A;letter-spacing:.5px}
@@ -13,7 +17,7 @@ h1{font-family:Fredoka;font-weight:600;font-size:72px;line-height:1.02;letter-sp
 .dev{position:absolute;display:flex;align-items:center;justify-content:center}.dev img{display:block;width:100%;height:auto}
 .tablet{right:90px;top:50%;transform:translateY(-50%);width:1060px;padding:22px;background:#1C211E;border-radius:44px;box-shadow:0 40px 90px rgba(31,42,36,.28)}.tablet img{border-radius:22px}
 .phone{right:330px;top:50%;transform:translateY(-50%);width:420px;padding:16px;background:#1C211E;border-radius:62px;box-shadow:0 40px 90px rgba(31,42,36,.28)}.phone img{border-radius:48px}
-.pc{right:80px;top:50%;transform:translateY(-54%);width:1080px;flex-direction:column}.pc .scr{width:100%;padding:18px 18px 22px;background:#1C211E;border-radius:26px 26px 10px 10px;box-shadow:0 40px 90px rgba(31,42,36,.28)}.pc .scr img{border-radius:8px}.pc .base{width:116%;height:26px;background:linear-gradient(#D9D6CE,#BEBAB0);border-radius:0 0 22px 22px}
+.pc{right:70px;top:50%;transform:translateY(-54%);width:1000px;flex-direction:column}.pc .scr{width:100%;padding:18px 18px 22px;background:#1C211E;border-radius:26px 26px 10px 10px;box-shadow:0 40px 90px rgba(31,42,36,.28)}.pc .scr img{border-radius:8px}.pc .base{width:108%;height:26px;background:linear-gradient(#D9D6CE,#BEBAB0);border-radius:0 0 22px 22px}
 .center{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:30px}.center .big{font-family:Fredoka;font-weight:700;font-size:200px;color:#2F7B5A;line-height:1}.center h1{font-size:84px}.center .sub{max-width:1100px}`;
 for (const s of S) {
   let devHtml = '';
