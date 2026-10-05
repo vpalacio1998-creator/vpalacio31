@@ -240,24 +240,24 @@ end $$;
 create or replace function oli.ms(t bigint) returns timestamptz language sql immutable as
 $$ select case when t is null then null else to_timestamp(t / 1000.0) end $$;
 
-create or replace function oli.project(p_org uuid, p_store uuid, c text, id text, d jsonb, del boolean) returns void language plpgsql as
+create or replace function oli.project_a(p_org uuid, p_store uuid, c text, id text, d jsonb, del boolean) returns void language plpgsql as
 $$
 #variable_conflict use_column
 declare s jsonb; it jsonb; n int; mv jsonb; cl jsonb; la jsonb;
 begin
   if c = 'productos' then
-    if del then delete from products where org_id = p_org and products.id = project.id; return; end if;
+    if del then delete from products where org_id = p_org and products.id = project_a.id; return; end if;
     insert into products (org_id, id, name, category, type, price, unit, min_stock, safety_stock, pack, controls_stock, active, tax, image_path, combo, sort, updated_at)
     values (p_org, id, d->>'nombre', d->>'cat', coalesce(d->>'tipo','terminado'), coalesce((d->>'precio')::numeric,0), d->>'unidad', (d->>'min')::numeric, (d->>'seg')::numeric, (d->>'pack')::int,
             coalesce((d->>'controla')::boolean, true), coalesce((d->>'activo')::boolean, true), d->'imp', d->>'fotoPath', d->'combo', (d->>'orden')::int, now())
     on conflict (org_id, id) do update set name = excluded.name, category = excluded.category, type = excluded.type, price = excluded.price, unit = excluded.unit, min_stock = excluded.min_stock,
       safety_stock = excluded.safety_stock, pack = excluded.pack, controls_stock = excluded.controls_stock, active = excluded.active, tax = excluded.tax, image_path = excluded.image_path, combo = excluded.combo, sort = excluded.sort, updated_at = now();
   elsif c = 'costos' then
-    if del then delete from product_costs where org_id = p_org and product_id = id; return; end if;
+    if del then delete from product_costs where org_id = p_org and product_id = project_a.id; return; end if;
     insert into product_costs (org_id, product_id, cost, history, updated_at) values (p_org, id, (d->>'costo')::numeric, d->'hist', now())
     on conflict (org_id, product_id) do update set cost = excluded.cost, history = excluded.history, updated_at = now();
   elsif c = 'stock' then
-    if del then delete from inventory_counts where org_id = p_org and product_id = id; return; end if;
+    if del then delete from inventory_counts where org_id = p_org and product_id = project_a.id; return; end if;
     insert into inventory_counts (org_id, product_id, base, counted_at) values (p_org, id, (d->>'base')::numeric, oli.ms((d->>'t')::bigint))
     on conflict (org_id, product_id) do update set base = excluded.base, counted_at = excluded.counted_at;
   elsif c = 'ventas' then
@@ -297,7 +297,21 @@ begin
       insert into cash_movements (org_id, id, session_id, type, amount, reason, category, at, user_id)
       values (p_org, mv->>'id', id, mv->>'tipo', (mv->>'monto')::numeric, mv->>'motivo', mv->>'cat', oli.ms((mv->>'t')::bigint), mv->>'uid') on conflict do nothing;
     end loop;
-  elsif c = 'mermas' then
+  end if;
+end $$;
+
+create or replace function oli.clear_purchase_items(p_org uuid, p_purchase text) returns void language plpgsql as
+$$
+begin
+  delete from purchase_items where org_id = p_org and purchase_id = p_purchase;
+end $$;
+
+create or replace function oli.project_b(p_org uuid, p_store uuid, c text, id text, d jsonb, del boolean) returns void language plpgsql as
+$$
+#variable_conflict use_column
+declare s jsonb; it jsonb; n int; mv jsonb; cl jsonb; la jsonb;
+begin
+  if c = 'mermas' then
     for s in select * from jsonb_array_elements(coalesce(d->'items','[]'::jsonb)) loop
       insert into waste (org_id, id, product_id, qty, reason, note, at, user_id, device_id, local_date)
       values (p_org, s->>'id', s->>'pid', (s->>'q')::numeric, s->>'motivo', s->>'obs', oli.ms((s->>'t')::bigint), s->>'uid', d->>'dev', (d->>'fecha')::date) on conflict do nothing;
@@ -309,23 +323,23 @@ begin
               oli.ms((s->>'t')::bigint), s->>'uid', d->>'dev', (d->>'fecha')::date) on conflict do nothing;
     end loop;
   elsif c = 'gastos' then
-    if del then delete from expenses where org_id = p_org and expenses.id = project.id; return; end if;
+    if del then delete from expenses where org_id = p_org and expenses.id = project_b.id; return; end if;
     insert into expenses (org_id, id, local_date, category, description, amount, method, supplier, base, tax, withholding, support, status, user_id)
     values (p_org, id, (d->>'fecha')::date, d->>'cat', d->>'desc', coalesce((d->>'valor')::numeric,0), d->>'m', d->>'proveedor', (d->>'base')::numeric, (d->>'iva')::numeric, (d->>'retencion')::numeric, d->'soporte', d->>'estado', d->>'uid')
     on conflict (org_id, id) do update set local_date = excluded.local_date, category = excluded.category, description = excluded.description, amount = excluded.amount, method = excluded.method,
       supplier = excluded.supplier, base = excluded.base, tax = excluded.tax, withholding = excluded.withholding, support = excluded.support, status = excluded.status;
   elsif c = 'compras' then
-    if del then delete from purchases where org_id = p_org and purchases.id = project.id; delete from purchase_items where org_id = p_org and purchase_id = id; return; end if;
+    if del then delete from purchases where org_id = p_org and purchases.id = project_b.id; perform oli.clear_purchase_items(p_org, project_b.id); return; end if;
     insert into purchases (org_id, id, local_date, supplier, supplier_nit, invoice, status, received_at, tax, support, total)
     values (p_org, id, (d->>'fecha')::date, d->>'proveedor', d->>'nit', d->>'factura', d->>'estado', oli.ms((d->>'recT')::bigint), (d->>'iva')::numeric, d->'soporte',
             (select coalesce(sum((l->>'costo')::numeric * (l->>'q')::numeric),0) from jsonb_array_elements(coalesce(d->'lineas','[]'::jsonb)) l))
     on conflict (org_id, id) do update set supplier = excluded.supplier, supplier_nit = excluded.supplier_nit, invoice = excluded.invoice, status = excluded.status, received_at = excluded.received_at, tax = excluded.tax, support = excluded.support, total = excluded.total;
-    delete from purchase_items where org_id = p_org and purchase_id = id; n := 0;
+    perform oli.clear_purchase_items(p_org, project_b.id); n := 0;
     for it in select * from jsonb_array_elements(coalesce(d->'lineas','[]'::jsonb)) loop
       n := n + 1; insert into purchase_items (org_id, purchase_id, line_no, product_id, qty, unit_cost, checked) values (p_org, id, n, it->>'pid', (it->>'q')::numeric, (it->>'costo')::numeric, coalesce((it->>'ok')::boolean,false));
     end loop;
   elsif c = 'terceros' then
-    if del then delete from third_parties where org_id = p_org and third_parties.id = project.id; return; end if;
+    if del then delete from third_parties where org_id = p_org and third_parties.id = project_b.id; return; end if;
     insert into third_parties (org_id, id, kind, name, nit, regime, email, data) values (p_org, id, d->>'tipo', d->>'nombre', d->>'nit', d->>'regimen', d->>'correo', d)
     on conflict (org_id, id) do update set kind = excluded.kind, name = excluded.name, nit = excluded.nit, regime = excluded.regime, email = excluded.email, data = excluded.data;
   elsif c = 'dispositivos' then
@@ -342,9 +356,23 @@ begin
   end if;
 end $$;
 
+create or replace function oli.project(p_org uuid, p_store uuid, c text, id text, d jsonb, del boolean) returns void language plpgsql as
+$$
+begin
+  -- dividida en dos mitades para que cada función sea pequeña
+  if c in ('productos','costos','stock','ventas','anulaciones','confirmaciones','cajas') then perform oli.project_a(p_org, p_store, c, id, d, del);
+  else perform oli.project_b(p_org, p_store, c, id, d, del); end if;
+end $$;
+
 -- ---------------------------------------------------------------------------
 -- RPC: aplicar operaciones de un dispositivo (idempotente, con permisos)
 -- ---------------------------------------------------------------------------
+create or replace function oli.delete_doc(p_org uuid, p_col text, p_doc text) returns void language plpgsql as
+$$
+begin
+  delete from oli_docs where org_id = p_org and collection = p_col and doc_id = p_doc;
+end $$;
+
 create or replace function oli_apply(p_ops jsonb, p_device_id text default null, p_app_version text default null)
 returns jsonb language plpgsql security definer set search_path = public as
 $$
@@ -379,7 +407,7 @@ begin
     end if;
     select * into cur from oli_docs where org_id = mem.org_id and collection = c and doc_id = id for update;
     if del then
-      if cur is not null and ts >= cur.device_ts then delete from oli_docs where org_id = mem.org_id and collection = c and doc_id = id; perform oli.project(mem.org_id, mem.store_id, c, id, null, true);
+      if cur is not null and ts >= cur.device_ts then perform oli.delete_doc(mem.org_id, c, op->>'id'); perform oli.project(mem.org_id, mem.store_id, c, id, null, true);
       elsif cur is not null then status := 'stale'; end if;
     elsif cur is null then
       insert into oli_docs (org_id, store_id, collection, doc_id, data, device_id, device_ts) values (mem.org_id, mem.store_id, c, id, d, dev, ts);
@@ -506,6 +534,7 @@ revoke all on function oli_apply(jsonb, text, text), oli_bootstrap(text, text), 
 grant execute on function oli_apply(jsonb, text, text), oli_bootstrap(text, text), oli_me() to authenticated;
 revoke all on schema oli from public, anon, authenticated;
 grant usage on schema oli to authenticated;
+revoke execute on all functions in schema oli from public, anon, authenticated;   -- las funciones internas solo se usan desde oli_apply
 grant execute on function oli.role_level(text), oli.can_read(uuid, text), oli.is_admin(uuid), oli.is_member(uuid), oli.my_membership(uuid), oli.col_read_min(text) to authenticated;
 
 -- Realtime: el administrador ve las ventas casi al instante (RLS filtra qué recibe cada rol)
@@ -515,4 +544,11 @@ do $$ begin
     alter publication supabase_realtime add table sync_conflicts;
     alter publication supabase_realtime add table devices;
   end if;
+end $$;
+
+-- search_path fijo en las funciones internas (recomendación del linter de Supabase)
+do $$ declare f record; begin
+  for f in select p.oid::regprocedure as sig from pg_proc p join pg_namespace n on n.oid = p.pronamespace where n.nspname = 'oli' loop
+    execute format('alter function %s set search_path = public', f.sig);
+  end loop;
 end $$;
