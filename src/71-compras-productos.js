@@ -117,7 +117,7 @@ ACT.editProd = (el, d) => {
   abrir(() => `${head(p ? "Editar producto" : "Agregar producto")}
     <label class="f" for="pr-n">Nombre</label><input class="in plain" id="pr-n" value="${p ? esc(p.nombre) : ""}" placeholder="Ej: Paleta Mango" autofocus>
     <div class="split"><div><label class="f" for="pr-p">Precio de venta</label><input class="in money" id="pr-p" inputmode="numeric" value="${p ? fmt(p.precio) : ""}" placeholder="$0"></div>
-    <div><label class="f" for="pr-i">${p ? "Inventario actual" : "Inventario inicial"}</label><input class="in plain" id="pr-i" inputmode="numeric" value="${p && stockDe(p.id) != null ? Math.max(0, stockDe(p.id)) : ""}" placeholder="0"></div></div>
+    <div><label class="f" for="pr-i">${p ? "Inventario actual" : "Inventario inicial"}</label><input class="in plain" id="pr-i" inputmode="decimal" value="${p && stockDe(p.id) != null ? stockDe(p.id) : ""}" data-orig="${p && stockDe(p.id) != null ? stockDe(p.id) : ""}" placeholder="0"></div></div>
     <label class="f">Categoría</label>${sel("pr-cat", CATS, p ? p.cat : "Paletas")}
     <div id="pr-calc" class="small muted" style="margin-top:8px"></div>
     <details style="margin:14px 0"><summary style="font-weight:700;min-height:44px;display:flex;align-items:center;cursor:pointer">Más opciones</summary>
@@ -157,7 +157,8 @@ ACT.doGuardarProd = async (el, d) => {
   await guardar(async () => {
     const costoRaw = $("#pr-c").value.trim(), id = await guardarProducto(d.id, dat, costoRaw ? num(costoRaw) : null);
     if (S.recDraft.length || (d.id && col("recetas")[id])) await guardarReceta(id, S.recDraft.slice(), 1);
-    const inv = $("#pr-i").value.trim(); if (inv !== "" && dat.controla && (!ant || stockDe(id) !== num(inv))) await contarStock(id, num(inv), ant ? "edición" : "inventario inicial");
+    const inv = $("#pr-i").value.trim(), orig = $("#pr-i").dataset.orig || "";   // solo cuenta si la persona cambió el número (no pisa ventas que llegaron mientras editaba)
+    if (inv !== "" && dat.controla && (!ant || inv !== orig)) await contarStock(id, numDec(inv), ant ? "edición" : "inventario inicial");
     cerrar();
   }, "Producto guardado");
 };

@@ -34,10 +34,11 @@ function lineasExp(v) { const out = []; for (const it of (v.items || [])) { cons
 const mermasAll = () => memo("mermasAll", () => { const out = []; for (const [docId, d] of Object.entries(col("mermas"))) for (const m of (d.items || [])) out.push(Object.assign({fecha: d.fecha, dev: d.dev, docId}, m)); return out.sort((a, b) => a.t - b.t); });
 const stockDocs = () => col("stock");
 const stockMap = () => memo("stockMap", () => {
-  const sold = {}, mer = {};
+  const sold = {}, mer = {}, del = {};
   for (const v of ventasOk()) for (const l of lineasExp(v)) (sold[l.pid] = sold[l.pid] || []).push(l);
   for (const m of mermasAll()) (mer[m.pid] = mer[m.pid] || []).push(m);
-  const out = {}, base = id => { const s = stockDocs()[id]; if (!s || s.base == null) return null; let q = s.base; const t0 = s.t || 0; for (const x of (sold[id] || [])) if (x.t > t0) q -= x.q; for (const x of (mer[id] || [])) if (x.t > t0) q -= x.q; return q; };
+  for (const d of Object.values(col("movinv"))) for (const x of (d.items || [])) if (x.delta) (del[x.pid] = del[x.pid] || []).push(x);   // entradas, compras, producción, consumo
+  const out = {}, base = id => { const s = stockDocs()[id]; if (!s || s.base == null) return null; let q = s.base; const t0 = s.t || 0; for (const x of (sold[id] || [])) if (x.t > t0) q -= x.q; for (const x of (mer[id] || [])) if (x.t > t0) q -= x.q; for (const x of (del[id] || [])) if (x.t > t0) q += x.q; return Math.round(q * 1000) / 1000; };
   for (const p of prods()) if (p.controla !== false && !p.combo) out[p.id] = base(p.id);
   for (const p of prods()) if (p.combo) { let m = Infinity; for (const c of p.combo) { const s = out[c.pid]; if (s == null) { m = null; break; } m = Math.min(m, Math.floor(s / c.q)); } out[p.id] = m === Infinity ? null : m; }
   return out;
@@ -58,11 +59,11 @@ function maxVendible(p, enCarrito = 0) { const e = estadoProd(p); if (e.k === "s
 /* ---------- cajas (una por dispositivo y día) ---------- */
 const cajaId = (fecha, dev = DEV.id) => fecha + "_" + dev;
 const cajasAll = () => memo("cajasAll", () => Object.entries(col("cajas")).map(([id, c]) => Object.assign({id}, c)));
-const reabiertas = () => memo("reab", () => { const m = {}; for (const r of Object.values(col("reaperturas"))) for (const x of (r.items || [])) (m[x.caja] = m[x.caja] || []).push(x.t); return m; });
+const reabiertas = () => memo("reab", () => { const m = {}; for (const r of Object.values(col("reaperturas"))) for (const x of (r.items || [])) (m[x.caja] = m[x.caja] || []).push(x); return m; });
 function cajaEstado(c) {
   if (!c || !c.apertura) return "sin";
   const ci = (c.cierres || []).slice(-1)[0]; if (!ci) return "abierta";
-  const rea = (reabiertas()[c.id || cajaId(c.fecha, c.dev)] || []).filter(t => t > ci.t);
+  const rea = (reabiertas()[c.id || cajaId(c.fecha, c.dev)] || []).filter(x => x.cierre ? x.cierre === ci.id : x.t > ci.t);
   return rea.length ? "abierta" : "cerrada";
 }
 const cajaDe = (fecha, dev = DEV.id) => { const c = col("cajas")[cajaId(fecha, dev)]; return c ? Object.assign({id: cajaId(fecha, dev)}, c) : null; };

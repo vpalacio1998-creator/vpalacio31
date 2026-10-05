@@ -27,11 +27,6 @@ async function sbCompletarSesion(session) {
 }
 function usarIdent(i) { DS.uid = i.uid; DS.isAdmin = i.isAdmin; SB.org = i.org; SB.store = i.store; SB.role = i.role; DS.nombre = i.nombre || ""; DS.needsLogin = false; }
 /* lo que este rol no puede leer no debe quedarse en el dispositivo (p. ej. costos en la tablet del empleado) */
-async function purgarNoPermitido() {
-  const ops = []; for (const c of Object.keys(DS.c)) if (!puede(c, "read")) { delete DS.c[c]; }
-  const all = await IDB.getAll("docs"); for (const [p, x] of Object.entries(all)) if (!puede(x.col, "read")) ops.push(["docs", "del", p]);
-  if (ops.length) await IDB.tx(ops).catch(() => {});
-}
 function sbIniciar() {
   const cols = SHARED_COLS.concat(DS.isAdmin ? SB_ADMIN_COLS : []);
   for (const n of SHARED_COLS) if (Object.keys(DS.c[n] || {}).length) DS.ready[n] = true;
@@ -70,10 +65,15 @@ async function sbApply(op) {
   if (r.error) {
     const m = String(r.error.message || ""), st = r.error.status || r.status || 0;
     if (r.error.code === "28000" || /not_authenticated|JWT|expired/i.test(m) || st === 401) { SB.authError = true; throw {code: "unavailable", message: "sesión vencida"}; }
+    if (st === 409 || r.error.code === "23505" || r.error.code === "40001" || r.error.code === "40P01") throw {code: "unavailable", message: "reintentar"};   // carrera momentánea, no es rechazo
     if (r.error.code === "42501" || /no_membership/.test(m) || (st >= 400 && st < 500 && st !== 408 && st !== 429)) throw {code: "invalid_argument", message: m};
     throw {code: "unavailable", message: m};
   }
   SB.authError = false; const x = r.data && r.data[0]; if (x && x.status === "rejected") throw {code: "invalid_argument", message: x.detail || "rechazada"};
+  if (x && x.status === "stale" && x.data) setTimeout(() => {      // había un cambio más reciente en el servidor: este equipo se corrige y avisa
+    if (OUT[op.path]) return; DS.c[op.col] = Object.assign({}, DS.c[op.col], {[op.id]: x.data}); persistCol(op.col); changed();
+    toast("Un cambio hecho en este equipo no se aplicó porque ya había uno más reciente.", true);
+  }, 0);
   return x;
 }
 async function sbLogin(email, pass) {

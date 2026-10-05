@@ -57,6 +57,7 @@ function renderView() {
   const f = VIEWS[S.tab] || VIEWS.vender; try { return f(); } catch (e) { console.error(e); return vacio("alerta", "Algo no salió bien al mostrar esta pantalla", "Vuelve a Inicio e inténtalo otra vez.", '<button class="btn pri" data-act="ir" data-r="' + (esAdmin() ? "hoy" : "vender") + '">Volver al inicio</button>'); }
 }
 function draw() {
+  if (DS.bloqueada) return;
   const root = $("#app"), meta = listo() && !DS.needsLogin ? col("meta").app : null;
   if (!rutaOk(S.tab)) S.tab = "vender";
   const gate = DS.needsLogin || DS.needsOrg || !listo() || !meta; root.classList.toggle("gate-mode", gate);
@@ -123,13 +124,30 @@ window.matchMedia("(min-width:1100px)").addEventListener("change", () => draw())
 document.querySelectorAll("#sheet [data-close]").forEach(b => b.addEventListener("click", cerrar));
 $("#sheet .bg").addEventListener("click", cerrar);
 
+/* ---------- una sola ventana escritora por equipo ----------
+   Si OLI se abre dos veces en el mismo equipo (PWA + pestaña, o dos pestañas), las dos escribirían el mismo documento del día
+   y una pisaría las ventas de la otra. Solo una ventana trabaja; la otra queda en pausa y puede tomar el control. */
+function tomarCandado(robar) {
+  if (!navigator.locks || typeof navigator.locks.request !== "function") return Promise.resolve(true);
+  return new Promise(res => {
+    navigator.locks.request("oli-escritor", robar ? {steal: true} : {ifAvailable: true}, lock => { if (!lock) { res(false); return; } res(true); return new Promise(() => {}); })
+      .catch(() => { DS.bloqueada = true; cerrar(); pausaHTML(); });       // otra ventana tomó el control
+  });
+}
+function pausaHTML() {
+  $("#app").classList.add("gate-mode"); ["#ticket", "#cartbar", "#tabs", "#rail", "#banners"].forEach(x => { const el = $(x); if (el) el.innerHTML = ""; });
+  $("#view").innerHTML = `<div class="gate"><div class="box"><div class="logo">OLI</div><h2>OLI está abierta en otra ventana</h2><p>Para no duplicar ni perder ventas, en este equipo OLI trabaja en una sola ventana a la vez. Usa la otra ventana o continúa aquí.</p><button class="btn pri xl wide" data-act="usarAqui">USAR OLI EN ESTA VENTANA</button></div></div>`;
+}
+ACT.usarAqui = () => { try { sessionStorage.setItem("oli-robar", "1"); } catch (e) {} location.reload(); };
 /* ---------- boot ---------- */
 (async function boot() {
   aplicarTema(); $("#view").innerHTML = splash();
   try {
+    let robar = false; try { robar = sessionStorage.getItem("oli-robar") === "1"; sessionStorage.removeItem("oli-robar"); } catch (e) {}
+    if (!(await tomarCandado(robar))) { DS.bloqueada = true; pausaHTML(); return; }
     await bootData(); await restoreCart();
     S.tab = leerHash() || (esAdmin() ? "hoy" : "vender"); if (!rutaOk(S.tab)) S.tab = "vender";
-    changed(); setTimeout(() => heartbeat(true), 1500);
+    changed(); setTimeout(() => heartbeat(true), 1500); setTimeout(() => rebaseStockViejo().catch(() => {}), 20000);
     setInterval(() => { const t = ymd(); if (t !== S.today) { S.today = t; changed(); } }, 30000);
   } catch (e) { console.error(e); $("#view").innerHTML = vacio("alerta", "No se pudo abrir OLI", "Recarga la página. Si sigue igual, avisa al administrador."); }
 })();

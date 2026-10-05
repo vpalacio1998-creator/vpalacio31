@@ -170,8 +170,8 @@ create table if not exists purchases (                     -- solo administrador
 create table if not exists purchase_items (
   org_id uuid not null, purchase_id text not null, line_no int not null, product_id text, qty numeric, unit_cost numeric, checked boolean,
   primary key (org_id, purchase_id, line_no));
-create table if not exists inventory_movements (           -- kardex: entradas, conteos, compras, producción (solo administradores)
-  org_id uuid not null, id text not null, product_id text, type text not null, qty numeric, before_qty numeric, after_qty numeric, reason text, ref text,
+create table if not exists inventory_movements (           -- kardex: entradas, conteos, compras, producción (lo escribe el administrador; sin costos)
+  org_id uuid not null, id text not null, product_id text, type text not null, qty numeric, delta boolean not null default false, before_qty numeric, after_qty numeric, reason text, ref text,
   at timestamptz, user_id text, device_id text, local_date date,
   primary key (org_id, id));
 create index if not exists inv_mov_prod on inventory_movements (org_id, product_id, at);
@@ -186,7 +186,7 @@ create or replace function oli.role_level(r text) returns int language sql immut
 $$ select case r when 'owner' then 4 when 'admin' then 3 when 'employee' then 2 else 0 end $$;
 
 create or replace function oli.col_read_min(c text) returns int language sql immutable as
-$$ select case when c in ('costos','recetas','gastos','compras','config','terceros','periodos','docelec','movinv','audit') then 3 else 2 end $$;
+$$ select case when c in ('costos','recetas','gastos','compras','config','terceros','periodos','docelec','audit') then 3 else 2 end $$;
 
 create or replace function oli.col_write_min(c text) returns int language sql immutable as
 $$ select case when c in ('ventas','cajas','mermas','checklists','anulaciones','confirmaciones','demandaperdida','dispositivos','audit') then 2 else 3 end $$;
@@ -230,6 +230,7 @@ begin
     res := jsonb_set(res, array[f], merged);
   end loop;
   if c = 'cajas' and old ? 'apertura' then res := jsonb_set(res, '{apertura}', old->'apertura'); end if;   -- la primera apertura manda
+  if old ? 'dev' then res := jsonb_set(res, '{dev}', old->'dev'); end if;                                   -- el dueño del documento no cambia
   return res;
 end $$;
 
@@ -303,8 +304,8 @@ begin
     end loop;
   elsif c = 'movinv' then
     for s in select * from jsonb_array_elements(coalesce(d->'items','[]'::jsonb)) loop
-      insert into inventory_movements (org_id, id, product_id, type, qty, before_qty, after_qty, reason, ref, at, user_id, device_id, local_date)
-      values (p_org, s->>'id', s->>'pid', coalesce(s->>'tipo','ajuste'), (s->>'q')::numeric, (s->>'antes')::numeric, (s->>'despues')::numeric, s->>'motivo', s->>'ref',
+      insert into inventory_movements (org_id, id, product_id, type, qty, delta, before_qty, after_qty, reason, ref, at, user_id, device_id, local_date)
+      values (p_org, s->>'id', s->>'pid', coalesce(s->>'tipo','ajuste'), (s->>'q')::numeric, coalesce((s->>'delta')::boolean, false), (s->>'antes')::numeric, (s->>'despues')::numeric, s->>'motivo', s->>'ref',
               oli.ms((s->>'t')::bigint), s->>'uid', d->>'dev', (d->>'fecha')::date) on conflict do nothing;
     end loop;
   elsif c = 'gastos' then
@@ -360,13 +361,15 @@ begin
     opid := op->>'op_id'; c := op->>'col'; id := op->>'id'; d := op->'data'; del := coalesce((op->>'del')::boolean, false); ts := coalesce((op->>'t')::bigint, 0); dev := coalesce(op->>'device_id', p_device_id);
     status := 'applied'; detail := null;
     if opid is null or c is null or id is null then res := res || jsonb_build_object('op_id', opid, 'status', 'rejected', 'detail', 'operación incompleta'); continue; end if;
+    perform pg_advisory_xact_lock(hashtext(opid));                                           -- dos envíos simultáneos del mismo op_id: el segundo espera y sale como duplicado
     if exists (select 1 from sync_ops where sync_ops.op_id = opid) then res := res || jsonb_build_object('op_id', opid, 'status', 'duplicate'); continue; end if;   -- IDEMPOTENCIA
     wmin := oli.col_write_min(c);
     if c = 'audit' then
-      if split_part(id, '__', 1) <> uid::text then status := 'rejected'; detail := 'auditoría ajena'; end if;
+      if split_part(id, '__', 1) <> uid::text then status := 'rejected'; detail := 'auditoría ajena';
+      elsif del and lvl < 3 then status := 'rejected'; detail := 'la auditoría no se puede borrar'; end if;
     elsif lvl < wmin then status := 'rejected'; detail := 'sin permiso para ' || c;
     elsif c not in ('productos','costos','stock','recetas','ventas','cajas','mermas','checklists','anulaciones','confirmaciones','demandaperdida','dispositivos','reaperturas','meta','gastos','compras','config','terceros','periodos','docelec','movinv') then status := 'rejected'; detail := 'colección desconocida';
-    elsif oli.single_writer(c) and lvl < 3 and (d is null or coalesce(d->>'dev','') <> coalesce(dev,'')) then status := 'rejected'; detail := 'solo el dispositivo dueño puede escribir este documento';
+    elsif oli.single_writer(c) and lvl < 3 and (d is null or del or coalesce(d->>'dev','') <> coalesce(dev,'') or right(id, length(coalesce(dev,'')) + 1) <> '_' || coalesce(dev,'')) then status := 'rejected'; detail := 'solo el dispositivo dueño puede escribir este documento';
     elsif c = 'dispositivos' and lvl < 3 and id <> coalesce(dev,'') then status := 'rejected'; detail := 'dispositivo ajeno';
     end if;
     if status = 'rejected' then
@@ -389,11 +392,11 @@ begin
       update oli_docs set data = d, device_id = dev, device_ts = ts, server_ts = now(), rev = rev + 1 where org_id = mem.org_id and collection = c and doc_id = id;
       perform oli.project(mem.org_id, mem.store_id, c, id, d, false);
     else
-      status := 'stale'; detail := 'llegó una versión más vieja';
+      status := 'stale'; detail := 'llegó una versión más vieja'; merged := cur.data;
       insert into sync_conflicts (org_id, store_id, kind, collection, doc_id, devices, detail) values (mem.org_id, mem.store_id, 'stale_write', c, id, array[cur.device_id, dev], jsonb_build_object('servidor_ts', cur.device_ts, 'op_ts', ts, 'user', uid));
     end if;
     insert into sync_ops (op_id, org_id, store_id, device_id, user_id, collection, doc_id, kind, device_ts, status, detail) values (opid, mem.org_id, mem.store_id, dev, uid, c, id, case when del then 'del' else 'set' end, ts, status, detail);
-    res := res || jsonb_build_object('op_id', opid, 'status', status);
+    res := res || case when status = 'stale' then jsonb_build_object('op_id', opid, 'status', status, 'data', cur.data, 'device_ts', cur.device_ts) else jsonb_build_object('op_id', opid, 'status', status) end;
   end loop;
   if dev is null then dev := p_device_id; end if;
   if p_device_id is not null then
@@ -419,7 +422,8 @@ with lines as (
   select l.org_id, l.sold_at, l.qty, l.product_id from lines l left join products p on p.org_id = l.org_id and p.id = l.product_id where p.combo is null
 )
 select c.org_id, c.product_id, c.base - coalesce((select sum(e.qty) from exp e where e.org_id = c.org_id and e.product_id = c.product_id and e.sold_at > c.counted_at), 0)
-       - coalesce((select sum(w.qty) from waste w where w.org_id = c.org_id and w.product_id = c.product_id and w.at > c.counted_at), 0) as qty, c.counted_at
+       - coalesce((select sum(w.qty) from waste w where w.org_id = c.org_id and w.product_id = c.product_id and w.at > c.counted_at), 0)
+       + coalesce((select sum(m.qty) from inventory_movements m where m.org_id = c.org_id and m.product_id = c.product_id and m.delta and m.at > c.counted_at), 0) as qty, c.counted_at
 from inventory_counts c;
 
 create or replace function oli.detect_inventory_conflicts(p_org uuid, p_store uuid) returns void language plpgsql security definer set search_path = public as
@@ -488,7 +492,7 @@ create policy void_read on sale_voids for select to authenticated using (oli.is_
 create policy cash_read on cash_sessions for select to authenticated using (oli.is_member(org_id));
 create policy cmov_read on cash_movements for select to authenticated using (oli.is_member(org_id));
 create policy waste_read on waste for select to authenticated using (oli.is_member(org_id));
-create policy invmov_read on inventory_movements for select to authenticated using (oli.is_admin(org_id));
+create policy invmov_read on inventory_movements for select to authenticated using (oli.is_member(org_id));
 create policy exp_read on expenses for select to authenticated using (oli.is_admin(org_id));
 create policy pur_read on purchases for select to authenticated using (oli.is_admin(org_id));
 create policy puri_read on purchase_items for select to authenticated using (oli.is_admin(org_id));

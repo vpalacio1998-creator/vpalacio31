@@ -21,7 +21,7 @@ function stockFinalEn(pid, b, movs) {
 }
 const ENTRA = {entrada: 1, compra: 1, produccion: 1};
 function filasInventario(a, b) {
-  const porPid = {}; for (const m of movimientosInv(null)) (porPid[m.pid] = porPid[m.pid] || []).push(m);
+  const porPid = {}; for (const p of prods()) if (p.controla !== false && !p.combo) porPid[p.id] = movimientosInv(p.id);   // con saldo y ajustes recalculados
   const out = [];
   for (const p of prods().filter(x => x.controla !== false && !x.combo)) {
     const movs = porPid[p.id] || [], fin = stockFinalEn(p.id, b, movs), en = movs.filter(m => m.fecha >= a && m.fecha <= b);
@@ -32,21 +32,21 @@ function filasInventario(a, b) {
   }
   return out;
 }
-function filasAjustes(a, b) { return movimientosInv(null).filter(m => m.fecha >= a && m.fecha <= b && m.tipo !== "venta" && m.tipo !== "perdida").map(m => ({fecha: m.fecha, hora: hora(m.t), producto: (prod(m.pid) || {nombre: m.pid}).nombre, tipo: TIPO_MOV[m.tipo] || m.tipo, cantidad: m.q, antes: m.antes == null ? null : m.antes, despues: m.despues == null ? null : m.despues, motivo: m.det || "", usuario: empNombre(m.uid)})); }
+function filasAjustes(a, b) { return prods().filter(p => p.controla !== false && !p.combo).flatMap(p => movimientosInv(p.id)).sort((x, y) => x.t - y.t).filter(m => m.fecha >= a && m.fecha <= b && m.tipo !== "venta" && m.tipo !== "perdida").map(m => ({fecha: m.fecha, hora: hora(m.t), producto: (prod(m.pid) || {nombre: m.pid}).nombre, tipo: TIPO_MOV[m.tipo] || m.tipo, cantidad: m.q, antes: m.antes == null ? null : m.antes, despues: m.despues == null ? null : m.despues, motivo: m.det || "", usuario: empNombre(m.uid)})); }
 function proveedorDe(pid) { const cs = Object.values(col("compras")).filter(c => (c.lineas || []).some(l => l.pid === pid) && c.proveedor).sort((x, y) => (y.t || 0) - (x.t || 0)); return cs[0] ? cs[0].proveedor : ""; }
 function filasCompras(a, b) {
   const out = [];
-  for (const [id, c] of Object.entries(col("compras"))) { if (c.fecha < a || c.fecha > b) continue; const tot = sum(c.lineas || [], l => (l.costo || 0) * (l.q || 0));
+  for (const [id, c] of Object.entries(col("compras"))) { const f = c.estado === "recibido" ? (c.recFecha || c.fecha) : c.fecha; if (c.estado === "cancelado" || f < a || f > b) continue; const tot = sum(c.lineas || [], l => (l.costo || 0) * (l.q || 0));
     for (const l of (c.lineas || [])) { const val = (l.costo || 0) * (l.q || 0), iva = tot ? Math.round((c.iva || 0) * val / tot) : 0, p = prod(l.pid);
-      out.push({id, proveedor: c.proveedor || "", nit: c.nit || "", fecha: c.fecha, factura: c.factura || "", producto: (p && p.nombre) || l.n || "", unidad: (p && p.unidad) || "und", cantidad: l.q || 0, costo: l.costo || 0, iva, total: val + iva, estado: c.estado === "recibido" ? "Recibida" : c.estado === "cancelado" ? "Cancelada" : "Pendiente", recibido: c.estado === "recibido" ? l.q || 0 : 0, pendiente: c.estado === "pedido" ? l.q || 0 : 0, soporte: (c.soporte && c.soporte.ref) || "", tipoSoporte: (c.soporte && c.soporte.tipo) || ""}); } }
+      out.push({id, proveedor: c.proveedor || "", nit: c.nit || "", fecha: f, factura: c.factura || "", producto: (p && p.nombre) || l.n || "", unidad: (p && p.unidad) || "und", cantidad: l.q || 0, costo: l.costo || 0, iva, total: val + iva, estado: c.estado === "recibido" ? "Recibida" : c.estado === "cancelado" ? "Cancelada" : "Pendiente", recibido: c.estado === "recibido" ? l.q || 0 : 0, pendiente: c.estado === "pedido" ? l.q || 0 : 0, soporte: (c.soporte && c.soporte.ref) || "", tipoSoporte: (c.soporte && c.soporte.tipo) || ""}); } }
   return out.sort((x, y) => x.fecha.localeCompare(y.fecha));
 }
 function filasRecomendacion() {
   return recomendarCompra(fechasHorizonte("7")).filter(r => r.comprar > 0).map(r => ({producto: r.p.nombre, inventario: r.st == null ? null : Math.max(0, r.st), consumo: r.avg == null ? null : Math.round(r.avg * 10) / 10, demanda: r.dem == null ? null : Math.round(r.dem), seguridad: r.seg, cantidad: r.comprar, proveedor: proveedorDe(r.pid), costo: costoActual(r.pid), costoTotal: costoActual(r.pid) == null ? null : costoActual(r.pid) * r.comprar, fecha: r.ag ? r.ag.fecha : S.today, motivo: r.riesgo === "bad" ? "Se agota pronto" : r.riesgo === "warn" ? "Inventario ajustado para la demanda" : "Reposición normal"}));
 }
 function filasCajas(a, b) {
-  return cajasAll().filter(c => c.fecha >= a && c.fecha <= b && c.apertura).sort((x, y) => (x.fecha + x.dev).localeCompare(y.fecha + y.dev)).map(c => { const k = cajaCalc(c), ci = (c.cierres || []).slice(-1)[0];
-    return {fecha: c.fecha, caja: devNombre(c.dev), empleado: empNombre(c.apertura.uid), apertura: k.apertura, efectivo: k.efectivo, digitales: k.ventas - k.efectivo, ingresos: k.ingresos, retiros: k.retiros, gastos: k.gastos, esperado: k.esperado, contado: ci ? ci.contado : null, diferencia: ci ? ci.contado - k.esperado : null, hAp: hora(c.apertura.t), hCi: ci ? hora(ci.t) : "", estado: cajaEstado(c) === "cerrada" ? "Cerrada" : "Abierta", obs: ci ? ci.obs || "" : "", id: c.id}; });
+  return cajasAll().filter(c => c.fecha >= a && c.fecha <= b && c.apertura).sort((x, y) => (x.fecha + x.dev).localeCompare(y.fecha + y.dev)).map(c => { const k = cajaCalc(c), ci = (c.cierres || []).slice(-1)[0], cerr = !!ci && cajaEstado(c) === "cerrada";   // lo cerrado se informa tal como se cerró
+    return {fecha: c.fecha, caja: devNombre(c.dev), empleado: empNombre(c.apertura.uid), apertura: k.apertura, efectivo: k.efectivo, digitales: k.ventas - k.efectivo, ingresos: k.ingresos, retiros: k.retiros, gastos: k.gastos, esperado: cerr ? (ci.esperado != null ? ci.esperado : k.esperado) : null, contado: cerr ? ci.contado : null, diferencia: cerr ? (ci.dif != null ? ci.dif : ci.contado - k.esperado) : null, hAp: hora(c.apertura.t), hCi: cerr ? hora(ci.t) : "", estado: cerr ? "Cerrada" : "Abierta", obs: cerr ? ci.obs || "" : "Caja abierta · efectivo esperado ahora " + fmt(k.esperado), id: c.id}; });
 }
 function filasMovCaja(a, b) { const out = []; for (const c of cajasAll()) if (c.fecha >= a && c.fecha <= b) for (const m of (c.movs || [])) out.push({fecha: c.fecha, hora: hora(m.t), caja: devNombre(c.dev), tipo: m.tipo === "retiro" ? "Salida de dinero" : m.tipo === "ingreso" ? "Entrada de dinero" : "Pago desde caja", valor: m.monto, motivo: m.motivo, usuario: empNombre(m.uid), soporte: ""}); return out; }
 function filasGastos(a, b) { return gastosEn(a, b).map(g => ({fecha: g.fecha, proveedor: g.proveedor || "", categoria: g.cat || "", descripcion: g.desc || "", base: g.base || (g.iva ? g.valor - g.iva : g.valor), iva: g.iva || 0, retencion: g.retencion || 0, total: g.valor, metodo: g.m || "", cuenta: g.origen === "caja" || g.m === "Efectivo" ? "Caja" : "Banco", usuario: empNombre(g.uid), soporte: (g.soporte && g.soporte.ref) || "", estado: g.origen === "caja" ? "Desde caja" : (g.estado || "Registrado")})).sort((x, y) => x.fecha.localeCompare(y.fecha)); }
@@ -61,7 +61,7 @@ function filasClientes(a, b) {
   const cada = configNeg().puntosCada || 0;
   return Object.values(m).map(o => ({cliente: o.doc, nombre: o.nombre, correo: o.correo, ultima: o.ult, compras: o.n, total: o.total, ticket: o.n ? o.total / o.n : 0, favorito: Object.entries(o.prods).sort((x, y) => y[1] - x[1])[0][0], puntos: cada ? Math.floor(o.total / cada) : null, estado: "Activo"}));
 }
-function filasAnulaciones(a, b) { const out = []; for (const d of Object.values(col("anulaciones"))) for (const x of (d.items || [])) { const f = ymd(new Date(x.t)); if (f < a || f > b) continue; const v = ventasAll().find(y => y.id === x.ventaId); out.push({fecha: f, hora: hora(x.t), venta: v ? v.num : x.ventaId, total: x.total || (v ? v.total : 0), motivo: x.motivo || "", usuario: empNombre(x.uid)}); } return out; }
+function filasAnulaciones(a, b) { const out = []; for (const d of Object.values(col("anulaciones"))) for (const x of (d.items || [])) { const v = ventasAll().find(y => y.id === x.ventaId), f = (v && v.fecha) || d.fecha || ymd(new Date(x.t)); if (f < a || f > b) continue; out.push({fecha: f, anuladaEl: ymd(new Date(x.t)), hora: hora(x.t), venta: v ? v.num : x.ventaId, total: x.total || (v ? v.total : 0), motivo: x.motivo || "", usuario: empNombre(x.uid)}); } return out; }
 function filasAuditoria(a, b) { return auditList().filter(x => { const f = ymd(new Date(x.t)); return f >= a && f <= b; }).map(x => ({fecha: ymd(new Date(x.t)), hora: hora(x.t), accion: audTxt(x.a), codigo: x.a, registro: x.r, detalle: x.d, usuario: empNombre(x.u), equipo: devNombre(x.dev)})); }
 function filasTerceros(a, b) {
   const m = {}; const add = (nombre, nit, tipo, valor, iva, ret) => { const k = (nit || nombre || "").trim(); if (!k) return; const o = m[k] = m[k] || {nombre: nombre || "", nit: nit || "", tipo, compras: 0, iva: 0, retencion: 0, registros: 0, completo: !!(nit && nombre)}; o.compras += valor; o.iva += iva || 0; o.retencion += ret || 0; o.registros++; };
@@ -111,14 +111,14 @@ function informacionPendiente(a, b) {
 function conciliacion(a, b) {
   const f = finanzas(a, b), de = Object.values(col("docelec")).filter(d => d.fecha >= a && d.fecha <= b && (d.estado === "aceptado" || d.estado === "registrado")), feCfg = !!(configNeg().tributario && configNeg().tributario.proveedorFE) || de.length > 0;
   const cajas = filasCajas(a, b).filter(c => c.contado != null), cr = filasCompras(a, b).filter(c => c.estado === "Recibida"), crSop = cr.filter(c => c.soporte);
-  const inv = filasInventario(a, b), valIni = sum(inv, r => (r.inicial || 0) * (r.costo || 0)), valFin = sum(inv, r => (r.final || 0) * (r.costo || 0)), compras = sum(cr, c => c.total - c.iva), merma = sum(filasMermas(a, b), m => m.total || 0), cvTeo = valIni + compras - valFin - merma;
+  const inv = filasInventario(a, b), valIni = sum(inv, r => (r.inicial || 0) * (r.costo || 0)), valFin = sum(inv, r => (r.final || 0) * (r.costo || 0)), compras = sum(inv, r => (r.entradas || 0) * (r.costo || 0)), merma = sum(inv, r => ((r.mermas || 0) + (r.consumo || 0) - (r.ajustes || 0)) * (r.costo || 0)), cvTeo = valIni + compras - valFin - merma;   // entradas del kardex (compras, llegadas y producción)
   const dig = ventasOk().filter(v => v.fecha >= a && v.fecha <= b && esDigital(v.m)), digConf = sum(dig.filter(v => !v.pend), v => v.total), digTot = sum(dig, v => v.total);
   const row = (n, x, nx, y, ny, tol, nota) => ({n, x, nx, y, ny, dif: y == null ? null : x - y, ok: y != null && Math.abs(x - y) <= tol, nota});
   return [
     feCfg ? row("Ventas OLI vs documentos electrónicos", f.ventas, "Ventas OLI", sum(de, d => d.total || 0), "Documentos aceptados", 1, "") : {n: "Ventas OLI vs documentos electrónicos", x: f.ventas, nx: "Ventas OLI", y: null, ny: "Documentos electrónicos", dif: null, ok: false, nota: "No hay proveedor de facturación electrónica conectado. Requiere contador."},
     row("Caja OLI vs caja declarada", sum(cajas, c => c.esperado), "Efectivo esperado", sum(cajas, c => c.contado), "Efectivo contado", 0, ""),
     row("Compras vs soportes", sum(cr, c => c.total), "Compras registradas", sum(crSop, c => c.total), "Con soporte", 0, ""),
-    row("Inventario vs costo de ventas", f.cogs, "Costo de ventas (OLI)", Math.round(cvTeo), "Inventario inicial + compras − final − mermas", Math.max(1000, f.cogs * 0.05), "Estimación con costos actuales; diferencias menores al 5% son normales."),
+    row("Inventario vs costo de ventas", f.cogs, "Costo de ventas (OLI)", Math.round(cvTeo), "Inventario inicial + entradas − final − mermas y ajustes", Math.max(1000, f.cogs * 0.05), "Estimación con costos actuales; diferencias menores al 5% son normales."),
     row("Pagos digitales vs confirmados", digTot, "Ventas digitales", digConf, "Pagos confirmados", 0, "")
   ];
 }

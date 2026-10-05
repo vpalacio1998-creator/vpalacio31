@@ -132,7 +132,22 @@ begin
   reset role; set role authenticated; perform t_as(e1);
   r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','mi3','col','movinv','id','2026-10-03_d1','t',15002,'data','{"fecha":"2026-10-03","dev":"d1","items":[{"id":"m3","t":15002,"pid":"p-mango","tipo":"entrada","q":99}]}'::jsonb)), 'd1', '1.0');
   perform t_assert(r->0->>'status' = 'rejected', 'el empleado no puede sumar inventario por su cuenta');
-  perform t_assert((select count(*) from inventory_movements) = 0 and (select count(*) from oli_docs where collection = 'movinv') = 0, 'el empleado no ve el kardex (RLS)');
+  perform t_assert((select count(*) from inventory_movements where id = 'm3') = 0, 'la entrada falsa del empleado no existe');
+  perform t_assert((select count(*) from inventory_movements) = 2, 'el empleado ve el kardex (sin costos) para calcular el inventario');
+  -- T18: una entrada (delta) suma al inventario sin borrar ventas hechas antes en otro equipo
+  reset role; set role authenticated; perform t_as(a);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','mi4','col','movinv','id','2026-10-03_da','t',15003,'data','{"fecha":"2026-10-03","dev":"da","items":[{"id":"m1","t":15000,"pid":"p-mango","tipo":"entrada","q":20,"antes":-2,"despues":18},{"id":"m2","t":15001,"pid":"p-mango","tipo":"conteo","q":-1,"antes":18,"despues":17},{"id":"m4","t":4102444800000,"pid":"p-mango","tipo":"entrada","q":5,"delta":true}]}'::jsonb)), 'da', '1.0');
+  perform t_assert((select qty from inventory_current where product_id = 'p-mango') = -2 + 5, 'el inventario del servidor suma la entrada (delta) sobre el conteo y las ventas');
+  -- T19: un empleado no puede escribir el documento de otra caja aunque declare ese dispositivo como propio
+  reset role; set role authenticated; perform t_as(e1);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','sp1','col','ventas','id','2026-10-03_d2','t',16000,'data','{"fecha":"2026-10-03","dev":"d1","ventas":[]}'::jsonb)), 'd1', '1.0');
+  perform t_assert(r->0->>'status' = 'rejected', 'el id del documento debe ser del dispositivo que escribe');
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','sp2','col','audit','id', e1::text || '__audit_2026-10-03','t',9000000000000000,'del',true)), 'd1', '1.0');
+  perform t_assert(r->0->>'status' = 'rejected', 'el empleado no puede borrar su auditoría');
+  -- T20: una escritura vieja devuelve la versión vigente para que el equipo se corrija
+  reset role; set role authenticated; perform t_as(a);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','st9','col','productos','id','p-mango','t',1,'data','{"nombre":"Mango viejo","precio":1}'::jsonb)), 'da', '1.0');
+  perform t_assert(r->0->>'status' = 'stale' and (r->0->'data'->>'precio')::numeric = 8500, 'el servidor responde stale con el dato vigente');
   -- T16: coherencia de totales
   reset role;
   perform t_assert((select sum(total) from sales) = (select sum(amount) from payments), 'total de ventas = total de pagos');

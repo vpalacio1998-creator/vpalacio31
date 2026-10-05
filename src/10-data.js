@@ -17,13 +17,13 @@ const RULES = [
   {path: "ventas", write: "interact"}, {path: "cajas", write: "interact"}, {path: "mermas", write: "interact"}, {path: "checklists", write: "interact"},
   {path: "anulaciones", write: "interact"}, {path: "confirmaciones", write: "interact"}, {path: "demandaperdida", write: "interact"}, {path: "dispositivos", write: "interact"},
   {path: "costos", read: "admin", write: "admin"}, {path: "recetas", read: "admin", write: "admin"}, {path: "gastos", read: "admin", write: "admin"},
-  {path: "compras", read: "admin", write: "admin"}, {path: "config", read: "admin", write: "admin"}, {path: "terceros", read: "admin", write: "admin"}, {path: "movinv", read: "admin", write: "admin"}, {path: "periodos", read: "admin", write: "admin"}, {path: "docelec", read: "admin", write: "admin"},
+  {path: "compras", read: "admin", write: "admin"}, {path: "config", read: "admin", write: "admin"}, {path: "terceros", read: "admin", write: "admin"}, {path: "movinv", read: "interact", write: "admin"}, {path: "periodos", read: "admin", write: "admin"}, {path: "docelec", read: "admin", write: "admin"},
   {path: "audit", read: "admin", write: "admin"}, {path: "audit/{self}", read: "interact", write: "interact"},     // cada persona escribe su auditoría; solo el administrador la lee toda
   {path: "data/users", read: "admin", write: "admin"}, {path: "data/users/{self}", read: "interact", write: "interact"}
 ];
 const LV = {view: 1, interact: 2, admin: 3, owner: 4};
-const SHARED_COLS = ["productos", "stock", "ventas", "cajas", "mermas", "checklists", "anulaciones", "confirmaciones", "demandaperdida", "dispositivos", "reaperturas", "meta"];
-const ADMIN_COLS = ["costos", "recetas", "gastos", "compras", "config", "terceros", "periodos", "docelec", "movinv"];
+const SHARED_COLS = ["productos", "stock", "movinv", "ventas", "cajas", "mermas", "checklists", "anulaciones", "confirmaciones", "demandaperdida", "dispositivos", "reaperturas", "meta"];
+const ADMIN_COLS = ["costos", "recetas", "gastos", "compras", "config", "terceros", "periodos", "docelec"];
 const RANGED = new Set(["ventas", "cajas", "mermas", "checklists", "anulaciones", "confirmaciones", "demandaperdida", "reaperturas", "movinv"]);
 const HIST_DIAS = 95;
 
@@ -70,9 +70,13 @@ const IDB = {
     });
   },
   fallback() { try { const o = JSON.parse(localStorage.getItem("oli-fallback") || "null"); if (o) this.mem = o; } catch (e) {} this.ok = false; return false; },
-  flush() { try { localStorage.setItem("oli-fallback", JSON.stringify(this.mem)); } catch (e) {} },
+  flush() {      // respaldo sin IndexedDB: lo crítico (cola de envío y llaves) primero; si no cabe todo, se guarda sin el espejo del servidor
+    try { localStorage.setItem("oli-fallback", JSON.stringify(this.mem)); return; } catch (e) {}
+    localStorage.setItem("oli-fallback", JSON.stringify({docs: {}, outbox: this.mem.outbox, kv: this.mem.kv}));   // si esto falla, el error sube y la venta NO se da por guardada
+  },
   tx(ops) {      // ops: [[store, "put"|"del", key, value]]  -> una sola transacción: o se guarda todo o nada
-    if (!this.ok) { for (const [s, k, key, v] of ops) { if (k === "put") this.mem[s][key] = v; else delete this.mem[s][key]; } this.flush(); return Promise.resolve(); }
+    if (!this.ok) { const prev = JSON.stringify(this.mem); for (const [s, k, key, v] of ops) { if (k === "put") this.mem[s][key] = v; else delete this.mem[s][key]; }
+      try { this.flush(); return Promise.resolve(); } catch (e) { this.mem = JSON.parse(prev); return Promise.reject(Object.assign(new Error("quota"), {code: "quota_exceeded"})); } }
     return new Promise((res, rej) => {
       const stores = uniq(ops.map(o => o[0])), t = this.db.transaction(stores, "readwrite");
       for (const [s, k, key, v] of ops) { const st = t.objectStore(s); if (k === "put") st.put(v, key); else st.delete(key); }
@@ -95,13 +99,21 @@ async function bootDevice() {
 const setDevNombre = async n => { DEV.nombre = n; await IDB.kvSet("dev.nombre", n); };
 async function nextSeq() { DEV.seq++; await IDB.kvSet("dev.seq", DEV.seq); return DEV.seq; }
 
+/* ---------- limpiar del equipo lo que el rol actual no puede ver (p. ej. un empleado en una tablet que usó el dueño) ---------- */
+async function purgarNoPermitido() {
+  const ops = []; for (const c of Object.keys(DS.c)) if (!puede(c, "read")) { delete DS.c[c]; }
+  const all = await IDB.getAll("docs"); for (const [p, x] of Object.entries(all)) if (!puede(x.col, "read")) ops.push(["docs", "del", p]);
+  if (ops.length) await IDB.tx(ops).catch(() => {});
+}
 /* ---------- escritura offline-first ---------- */
 let opSeq = 0;
 const newOpId = path => DEV.id + ":" + Date.now().toString(36) + ":" + (++opSeq) + ":" + path;
+const errPausa = () => Object.assign(new Error("OLI está abierta en otra ventana de este equipo. Usa esa ventana."), {code: "pausa"});
 async function put(colName, id, data) {
+  if (DS.bloqueada) throw errPausa();
   if (!puede(colName, "write")) { const e = new Error("denied"); e.code = "denied"; throw e; }
   const doc = Object.assign({sede: SEDE}, data), path = pathOf(colName, id), prev = (DS.c[colName] || {})[id], prevOp = OUT[path];
-  const op = {path, col: colName, id, data: doc, t: Date.now(), opId: newOpId(path), estado: "pendiente", ids: idsDe(doc)};
+  const op = {path, col: colName, id, data: doc, t: Date.now(), opId: newOpId(path), estado: "pendiente", ids: idsDe(doc), uid: DS.uid || null};
   DS.c[colName] = Object.assign({}, DS.c[colName], {[id]: doc}); OUT[path] = op; changed();
   try { await IDB.tx([["docs", "put", path, {col: colName, id, data: doc}], ["outbox", "put", path, op]]); }
   catch (e) { const m = Object.assign({}, DS.c[colName]); if (prev === undefined) delete m[id]; else m[id] = prev; DS.c[colName] = m; if (prevOp) OUT[path] = prevOp; else delete OUT[path]; changed(); throw e; }
@@ -109,9 +121,10 @@ async function put(colName, id, data) {
   return doc;
 }
 async function remove(colName, id) {
+  if (DS.bloqueada) throw errPausa();
   if (!puede(colName, "write")) { const e = new Error("denied"); e.code = "denied"; throw e; }
   const path = pathOf(colName, id), m = Object.assign({}, DS.c[colName]); delete m[id]; DS.c[colName] = m;
-  const op = {path, col: colName, id, del: true, t: Date.now(), opId: newOpId(path), estado: "pendiente", ids: []}; OUT[path] = op; changed();
+  const op = {path, col: colName, id, del: true, t: Date.now(), opId: newOpId(path), estado: "pendiente", ids: [], uid: DS.uid || null}; OUT[path] = op; changed();
   await IDB.tx([["docs", "del", path], ["outbox", "put", path, op]]);
   if (DS.mode === "db") kickSync(); else { delete OUT[path]; IDB.tx([["outbox", "del", path]]).catch(() => {}); }
 }
@@ -138,6 +151,7 @@ function ventaSync(v) {
   return OUT[path] && OUT[path].estado === "rechazada" ? "error" : "pendiente";
 }
 const pendientes = () => Object.values(OUT).filter(o => o.estado !== "rechazada");
+const enviables = () => pendientes().filter(o => !o.uid || !DS.uid || o.uid === DS.uid || o.uid === "local");
 const rechazadas = () => Object.values(OUT).filter(o => o.estado === "rechazada");
 const ventasPendientes = () => { let n = 0; for (const o of pendientes()) if (o.col === "ventas") { const acked = (DS.acks || {})[o.path] || []; n += (o.ids || []).filter(i => !acked.includes(i)).length; } return n; };
 
@@ -153,9 +167,10 @@ function recalcEstado() {
 }
 function kickSync(delay = 0) { clearTimeout(syncTimer); syncTimer = setTimeout(syncNow, delay); recalcEstado(); changed(); }
 async function syncNow() {
-  if (syncing || DS.mode !== "db") return;
+  if (syncing || DS.mode !== "db" || DS.bloqueada) return;
   if (!conRed()) { recalcEstado(); changed(); return; }
-  const ops = Object.values(OUT).filter(o => o.estado !== "rechazada").sort((a, b) => a.t - b.t);
+  // solo se envía lo que hizo la persona con sesión abierta (lo de otra persona espera a que ella vuelva a ingresar)
+  const ops = enviables().sort((a, b) => a.t - b.t);
   if (!ops.length) { SYNC.estado = "sincronizado"; recalcEstado(); changed(); return; }
   syncing = true; SYNC.total = ops.length; SYNC.hecho = 0; recalcEstado(); changed();
   try {
@@ -176,7 +191,7 @@ async function syncNow() {
       changed();
     }
   } finally { SYNC.enCurso = ""; syncing = false; SYNC.rechazadas = rechazadas().length; recalcEstado(); changed(); }
-  if (pendientes().length) { clearTimeout(syncTimer); syncTimer = setTimeout(() => { netFail = false; syncNow(); }, 8000); }
+  if (enviables().length) { clearTimeout(syncTimer); syncTimer = setTimeout(() => { netFail = false; syncNow(); }, 8000); }
   else { SYNC.estado = "sincronizado"; recalcEstado(); heartbeat(true); detectarConflictos(); }
 }
 window.addEventListener("online", () => { netFail = false; kickSync(200); heartbeat(true); });
@@ -194,7 +209,22 @@ function persistCol(name) {
       if (ops.length) await IDB.tx(ops); } catch (e) {}
   }, 800);
 }
+/* integridad: ventas, movimientos de caja, cierres, mermas y anulaciones nunca se borran. Si un documento del servidor
+   llega con menos elementos de los que este equipo ya vio (otra ventana o alguien lo sobrescribió), el administrador lo restaura uniendo por id. */
+const UNION = {ventas: ["ventas"], cajas: ["movs", "cierres"], mermas: ["items"], anulaciones: ["items"], confirmaciones: ["items"], reaperturas: ["items"], movinv: ["items"], demandaperdida: ["items"]};
+function restaurarPerdidos(name, map) {
+  if (!UNION[name] || !DS.isAdmin || DS.mode !== "db" || !DS.remoteSeen) return;
+  const prev = DS.c[name] || {}, fix = [];
+  for (const [id, old] of Object.entries(prev)) {
+    if (OUT[pathOf(name, id)] || String(id).startsWith("demo-") || (RANGED.has(name) && old.fecha && old.fecha < addDays(S.today, -HIST_DIAS + 2))) continue; const cur = map[id]; let doc = cur ? Object.assign({}, cur) : Object.assign({}, old), cambio = !cur;
+    for (const f of UNION[name]) { const ids = new Set(((cur && cur[f]) || []).map(x => x && x.id)), faltan = (old[f] || []).filter(x => x && x.id && !ids.has(x.id)); if (faltan.length) { doc[f] = ((cur && cur[f]) || []).concat(faltan).sort((x, y) => (x.t || 0) - (y.t || 0)); cambio = true; } }
+    if (name === "cajas" && old.apertura && cur && !cur.apertura) { doc.apertura = old.apertura; cambio = true; }
+    if (cambio) fix.push([id, doc]);
+  }
+  if (fix.length) setTimeout(() => { for (const [id, doc] of fix) put(name, id, doc).catch(() => {}); audit("DATOS_RESTAURADOS", name, fix.length + " documento(s) restaurados: " + fix.map(x => x[0]).join(", ")); }, 0);
+}
 function aplicarSnapshot(name, map) {
+  restaurarPerdidos(name, map);
   const m = Object.assign({}, map);
   for (const op of Object.values(OUT)) if (op.col === name) { if (op.del) delete m[op.id]; else m[op.id] = op.data; }   // lo pendiente local manda hasta que suba
   DS.c[name] = m; DS.ready[name] = true; DS.remoteSeen = true; DS.lastRemote = Date.now(); netFail = false; persistCol(name); newSalesFeed(name); changed();
@@ -220,21 +250,33 @@ async function bootData() {
   for (const x of Object.values(docs)) (DS.c[x.col] = DS.c[x.col] || {})[x.id] = x.data;
   for (const [p, op] of Object.entries(outbox)) { OUT[p] = op; if (op.estado === "rechazada") SYNC.rechazadas++; if (op.del) { if (DS.c[op.col]) delete DS.c[op.col][op.id]; } else (DS.c[op.col] = DS.c[op.col] || {})[op.id] = op.data; }
   if (window.OLI_CONFIG && window.OLI_CONFIG.supabaseUrl && typeof window.bootSupabase === "function") { await window.bootSupabase(ident); return; }
-  let db = null, user = null;
-  try { if (window.claude && typeof window.claude.use === "function") [db, user] = await Promise.all([window.claude.use("db"), window.claude.use("user")]); } catch (e) {}
+  const pedir = async () => { try { if (window.claude && typeof window.claude.use === "function") { const r = await Promise.all([window.claude.use("db"), window.claude.use("user")]); return r; } } catch (e) {} return [null, null]; };
+  let [db, user] = await pedir();
+  if (!db && window.claude && ident) for (let i = 0; i < 2 && !db; i++) { await new Promise(r => setTimeout(r, 1500)); [db, user] = await pedir(); }
   if (ident && !user) { DS.uid = ident.uid; DS.isAdmin = ident.isAdmin; }
+  if (!db && window.claude && ident) {
+    // este equipo ya trabajó con el servidor: NO pasar a modo local (perdería la cola de envío). Sigue sin conexión y reintenta.
+    DS.mode = "db"; DS.backend = "claude"; REMOTE.kind = "claude"; REMOTE.desc = "Claude"; REMOTE.apply = () => Promise.reject({code: "unavailable"}); netFail = true;
+    for (const n of SHARED_COLS.concat(DS.isAdmin ? ADMIN_COLS : [])) DS.ready[n] = true; recalcEstado(); changed();
+    const reint = setInterval(async () => { const [d, u] = await pedir(); if (d) { clearInterval(reint); netFail = false; await conectarClaude(d, u, ident); } }, 15000);
+    return;
+  }
   if (!db) {
     DS.mode = "local"; try { DS.localRole = localStorage.getItem("oli-local-role") || "admin"; } catch (e) {}
     DS.isAdmin = DS.localRole === "admin"; DS.uid = "local"; for (const n of SHARED_COLS.concat(ADMIN_COLS)) DS.ready[n] = true; DS.fromCache = false; recalcEstado(); changed(); return;
   }
+  await conectarClaude(db, user, ident);
+}
+async function conectarClaude(db, user, ident) {
   DS.mode = "db"; DS.dbh = db; DS.backend = "claude"; REMOTE.kind = "claude"; REMOTE.desc = "Claude";
   REMOTE.apply = op => op.del ? DS.dbh.doc(op.path).delete() : DS.dbh.doc(op.path).set(op.data);
   for (const n of SHARED_COLS) if (Object.keys(DS.c[n] || {}).length || ident) DS.ready[n] = true;      // con datos guardados, ya se puede operar sin esperar a la red
   try { if (user) { const me = await user.me(); DS.uid = me.id; DS.nombre = me.name || ""; DS.isAdmin = !!(await user.canEdit()); const cw = await user.can("data.write"); DS.canWrite = cw === null ? true : !!cw || DS.isAdmin; await IDB.kvSet("ident", {uid: DS.uid, isAdmin: DS.isAdmin}); } } catch (e) {}
+  if (!DS.isAdmin) await purgarNoPermitido();
   SHARED_COLS.forEach(subscribe); if (DS.isAdmin) ADMIN_COLS.forEach(subscribe);
   setTimeout(() => { for (const n of SHARED_COLS) DS.ready[n] = true; DS.fromCache = false; changed(); }, 5000);
   recalcEstado(); changed(); kickSync(500);
-  setInterval(() => { if (pendientes().length) { netFail = false; kickSync(); } }, 20000);
+  setInterval(() => { if (enviables().length) { netFail = false; kickSync(); } }, 20000);
   setInterval(() => heartbeat(), 45000);
 }
 const listo = () => DS.mode !== "loading" && !DS.needsLogin && !DS.needsOrg && ["productos", "meta"].every(n => DS.ready[n]);

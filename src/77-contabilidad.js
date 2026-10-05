@@ -3,6 +3,8 @@
    (APLICA / NO APLICA / POR VALIDAR) y su estado sale de lo configurado, nunca de "tener datos". Nada tributario está fijo en el código. */
 S.conTab = "resumen"; S.cierreMes = null; S.exoSel = null;
 const trib = () => configNeg().tributario || {};
+// contabilidad SIEMPRE con todo el negocio (los filtros de Informes no aplican aquí: el contador necesita cifras completas)
+const datosConta = () => memo("conta:" + rangoInf().join(), () => { const [a, b] = rangoInf(); return datosInforme(a, b, {}); });
 async function guardarTrib(patch) { exigirAdmin(); await guardarConfig({tributario: Object.assign({}, trib(), patch)}); }
 const prodsSinTrat = () => vendibles().filter(p => !p.combo && (!p.imp || !p.imp.t || p.imp.t === "validar"));
 // capa de facturación electrónica desacoplada: la conexión real va en el servidor (credenciales del proveedor nunca en el navegador)
@@ -36,7 +38,7 @@ const TABS_CON = [["resumen", "Resumen"], ["cumplimiento", "Cumplimiento"], ["fa
 
 /* ---------- resumen ---------- */
 function conResumen() {
-  const [a, b] = rangoInf(), d = datosVista(), rc = resumenContable(d);
+  const [a, b] = rangoInf(), d = datosConta(), rc = resumenContable(d);
   const traz = {"Ingresos netos": "ventas", "Compras recibidas": "compras", "Gastos": "gastos", "Caja (efectivo esperado / contado)": "caja", "Inventarios (a costo actual)": "inventario", "Costo de ventas": "costo"};
   return `<div class="card"><h3>Periodo</h3><div class="seg">${RANGOS_INF.map(([k, l]) => `<button data-act="rangoInf" data-v="${k}" aria-pressed="${S.inf.rango === k}">${l}</button>`).join("")}</div><p class="small muted" style="margin:8px 0 0">${periodoDoc(a, b)}</p></div>` + avisoIntegridad(d) +
     (d.pend.length ? `<div class="card" style="border-color:var(--warn)"><h3>${ic("alerta", 18)} Información pendiente</h3>${d.pend.map(p => `<div class="row" style="padding:8px 0"><span>${esc(p)}</span></div>`).join("")}<p class="xs muted" style="margin:6px 0 0">Completarla antes de enviar el paquete le ahorra trabajo a tu contador.</p></div>` : `<div class="notice">Sin información pendiente para el contador.</div>`) +
@@ -45,14 +47,14 @@ function conResumen() {
 }
 /* trazabilidad: del total al detalle */
 ACT.traza = (el, x) => {
-  const [a, b] = rangoInf(), d = datosVista(), t = x.v;
+  const [a, b] = rangoInf(), d = datosConta(), t = x.v;
   abrir(() => {
     let h = "";
     if (t === "compras") { const r = d.compras.filter(c => c.estado === "Recibida"), fac = uniq(r.map(c => c.id)), prov = uniq(r.map(c => c.proveedor)), sop = uniq(r.filter(c => c.soporte).map(c => c.id)), movs = movimientosInv(null).filter(m => m.tipo === "compra" && m.fecha >= a && m.fecha <= b);
       h = `<p><b>${fmt(sum(r, c => c.total))}</b> de compras → <b>${fac.length}</b> compras · <b>${prov.length}</b> proveedores · <b>${sop.length}</b> con soporte · <b>${movs.length}</b> movimientos de inventario</p>` + tablaVista([{h: "Fecha", f: c => fCorta(c.fecha)}, {h: "Proveedor", f: c => esc(c.proveedor || "Sin proveedor")}, {h: "Factura", f: c => esc(c.factura || "—")}, {h: "Producto", f: c => esc(c.producto)}, {h: "Total", n: 1, f: c => fmt(c.total)}, {h: "Soporte", f: c => c.soporte ? esc(c.tipoSoporte || "Sí") : '<span class="pill warn">Falta</span>'}], r); }
     else if (t === "ventas" || t === "costo") { const dd = d.dias.filter(x => x.n); h = `<p><b>${fmt(t === "costo" ? d.costo : d.tot)}</b> → <b>${d.n}</b> ventas en <b>${dd.length}</b> días · ${d.cajasV.length} cajas${t === "costo" && d.sinCosto ? ` · <span class="pill warn">${d.sinCosto} líneas sin costo</span>` : ""}</p>` + tablaVista([{h: "Día", f: x => diaCorto(x.fecha)}, {h: "Ventas", n: 1, f: x => x.n}, {h: "Total", n: 1, f: x => fmt(x.ventas)}, {h: "Costo", n: 1, f: x => fmt(x.costo)}], dd) + tablaVista([{h: "Caja", f: x => esc(x.n)}, {h: "Total", n: 1, f: x => fmt(x.v)}], d.cajasV); }
     else if (t === "gastos") { h = `<p><b>${fmt(sum(d.gastos, g => g.total))}</b> → <b>${d.gastos.length}</b> gastos · <b>${d.gastos.filter(g => !g.soporte).length}</b> sin soporte</p>` + tablaVista([{h: "Fecha", f: g => fCorta(g.fecha)}, {h: "Categoría", f: g => esc(g.categoria)}, {h: "Descripción", f: g => esc(g.descripcion)}, {h: "Total", n: 1, f: g => fmt(g.total)}, {h: "Soporte", f: g => g.soporte ? esc(g.soporte) : '<span class="pill warn">Falta</span>'}], d.gastos); }
-    else if (t === "caja") { h = tablaVista([{h: "Fecha", f: c => fCorta(c.fecha)}, {h: "Caja", f: c => esc(c.caja)}, {h: "Esperado", n: 1, f: c => fmt(c.esperado)}, {h: "Contado", n: 1, f: c => c.contado == null ? "–" : fmt(c.contado)}, {h: "Dif.", n: 1, f: c => c.diferencia == null ? "–" : `<b style="color:${c.diferencia ? "var(--danger)" : "inherit"}">${fmt(c.diferencia)}</b>`}], d.cajas); }
+    else if (t === "caja") { h = tablaVista([{h: "Fecha", f: c => fCorta(c.fecha)}, {h: "Caja", f: c => esc(c.caja)}, {h: "Esperado", n: 1, f: c => c.esperado == null ? "Abierta" : fmt(c.esperado)}, {h: "Contado", n: 1, f: c => c.contado == null ? "–" : fmt(c.contado)}, {h: "Dif.", n: 1, f: c => c.diferencia == null ? "–" : `<b style="color:${c.diferencia ? "var(--danger)" : "inherit"}">${fmt(c.diferencia)}</b>`}], d.cajas); }
     else if (t === "inventario") { h = tablaVista([{h: "Producto", f: r => esc(r.producto)}, {h: "Inicial", n: 1, f: r => vx(r.inicial)}, {h: "Entradas", n: 1, f: r => fmtN(r.entradas, 2)}, {h: "Salidas", n: 1, f: r => fmtN(r.salidas, 2)}, {h: "Ajustes", n: 1, f: r => fmtN(r.ajustes, 2)}, {h: "Final", n: 1, f: r => vx(r.final)}], d.inv.filter(r => r.entradas || r.salidas || r.ajustes)); }
     return head("¿De dónde sale este dato?") + `<p class="small muted" style="margin-top:0">${periodoDoc(a, b)}</p>` + h;
   }, {wide: true});
@@ -162,14 +164,14 @@ ACT.exoExcel = async (el, x) => { const f = exoList().find(y => y.id === x.id); 
 /* ---------- conciliación y auditoría ---------- */
 const TRAZA_CONC = ["ventas", "caja", "compras", "inventario", "ventas"];
 function conConciliacion() {
-  const [a, b] = rangoInf(), d = datosVista();
+  const [a, b] = rangoInf(), d = datosConta();
   return `<div class="card"><h3>Periodo</h3><div class="seg">${RANGOS_INF.map(([k, l]) => `<button data-act="rangoInf" data-v="${k}" aria-pressed="${S.inf.rango === k}">${l}</button>`).join("")}</div><p class="small muted" style="margin:8px 0 0">${periodoDoc(a, b)}</p></div>
     ${d.conc.map((c, i) => `<div class="card"><div style="display:flex;justify-content:space-between;gap:10px;align-items:flex-start"><h3 style="margin:0">${esc(c.n)}</h3>${c.y == null ? tagEstado("REQUIERE CONTADOR") : c.ok ? '<span class="pill ok">OK</span>' : '<span class="pill warn">' + ic("alerta", 14) + " REVISAR</span>"}</div>
       <div class="row"><span>${esc(c.nx)}</span><b>${fmt(c.x)}</b></div><div class="row"><span>${esc(c.ny)}</span><b>${c.y == null ? "No disponible" : fmt(c.y)}</b></div>${c.dif != null ? `<div class="row"><span>Diferencia</span><b style="color:${c.ok ? "inherit" : "var(--warn)"}">${fmt(c.dif)}</b></div>` : ""}${c.nota ? `<p class="xs muted" style="margin:6px 0 0">${esc(c.nota)}</p>` : ""}
       <button class="btn ghost sm" style="margin-top:8px" data-act="traza" data-v="${TRAZA_CONC[i]}">¿De dónde sale?</button></div>`).join("")}`;
 }
 function conAuditoria() {
-  const [a, b] = rangoInf(), d = datosVista(), cnt = k => d.riesgos.filter(r => r.riesgo === k).length;
+  const [a, b] = rangoInf(), d = datosConta(), cnt = k => d.riesgos.filter(r => r.riesgo === k).length;
   return `<div class="card"><h3>Periodo</h3><div class="seg">${RANGOS_INF.map(([k, l]) => `<button data-act="rangoInf" data-v="${k}" aria-pressed="${S.inf.rango === k}">${l}</button>`).join("")}</div></div>
     <div class="kpis k3"><div class="kpi"><span>Riesgo alto</span><b style="color:${cnt("Alto") ? "var(--danger)" : "inherit"}">${cnt("Alto")}</b></div><div class="kpi"><span>Medio</span><b>${cnt("Medio")}</b></div><div class="kpi"><span>Bajo</span><b>${cnt("Bajo")}</b></div></div>
     <div class="card"><h3>Auditoría del periodo</h3><p class="small muted" style="margin-top:-4px">Ventas anuladas, descuentos, cambios de precio e inventario, diferencias de caja, compras sin soporte y sincronización. Un riesgo es algo para revisar, no una falta comprobada.</p>

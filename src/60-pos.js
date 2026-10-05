@@ -87,7 +87,7 @@ ACT.cobrar = () => {
   if (!S.cart.length) { toast("Toca un producto para empezar.", true); return; }
   if (!DS.canWrite) { toast("Tienes acceso de solo lectura.", true); return; }
   const c = cajaHoy(), st = cajaEstado(c); if (st === "sin") { ACT.abrirCaja(); return; } if (st === "cerrada") { toast("La caja de hoy está cerrada.", true); return; }
-  S.recibido = ""; S.desc = 0; S.descModo = ""; S.cliente = null; S.mas = false; if (!METODOS.includes(S.metodo)) S.metodo = "Efectivo";
+  S.recibido = ""; S.desc = 0; S.descModo = ""; S.cliente = null; S.mas = false; S.metodo = "Efectivo";   // cada venta empieza en efectivo (no hereda el método de la anterior)
   abrir(() => cobroHTML());
 };
 ACT.metodo = (el, d) => { S.metodo = d.v; if (d.v !== "Efectivo") S.recibido = ""; redrawSheet(true); };
@@ -136,6 +136,9 @@ function checklistHTML(grupo, items) {
   return `<div class="card"><div class="row" style="padding-top:0"><h3 style="margin:0">${grupo === "apertura" ? "Al abrir" : "Al cerrar"}</h3><span class="pill ${hechos === items.length ? "ok" : ""}">${hechos}/${items.length}</span></div>${items.map(([k, t]) => `<label class="check" style="width:100%;padding:6px 0;min-height:48px"><input type="checkbox" data-act-change="check" data-g="${grupo}" data-k="${k}" ${cl[k] ? "checked" : ""}> ${esc(t)}</label>`).join("")}</div>`;
 }
 document.addEventListener("change", e => { const t = e.target; if (t.dataset && t.dataset.actChange === "check") toggleChecklist(t.dataset.g, t.dataset.k).catch(err => toast(errMsg(err), true)); });
+const cajaPendiente = () => cajasAll().filter(x => x.dev === DEV.id && x.fecha < S.today && x.apertura && cajaEstado(x) === "abierta").sort((a, b) => b.fecha.localeCompare(a.fecha))[0] || null;
+const cajaSel = () => cajasAll().find(x => x.id === S.cierreId) || cajaHoy();
+const avisoCajaPendiente = () => { const p = cajaPendiente(); return p ? `<div class="alertrow" style="border-color:var(--warn)"><span class="sev warn"></span><div style="flex:1"><b>La caja del ${esc(diaLargo(p.fecha).toLowerCase())} quedó abierta.</b><span>Cuenta el efectivo y ciérrala antes de abrir la de hoy.</span></div><button class="btn pri sm" data-act="cerrarCaja" data-id="${esc(p.id)}">Cerrar esa caja</button></div>` : ""; };
 VIEWS.caja = () => {
   const c = cajaHoy(), st = cajaEstado(c), todas = cajasAll().filter(x => x.fecha === S.today && x.id !== (c && c.id));
   let principal = "";
@@ -143,7 +146,7 @@ VIEWS.caja = () => {
   else principal = cajaCardHTML(c, true) + (st === "abierta" ? `<div class="btns" style="margin-bottom:14px"><button class="btn ghost" style="flex:1" data-act="movCaja" data-t="retiro">Sacar dinero</button><button class="btn ghost" style="flex:1" data-act="movCaja" data-t="ingreso">Entró dinero</button><button class="btn ghost" style="flex:1" data-act="movCaja" data-t="gasto">Pagué algo</button></div><button class="btn pri xl wide" data-act="cerrarCaja">${ic("lock", 22)} CERRAR CAJA</button>` : "");
   const pend = ventasOk().filter(v => v.pend && v.fecha >= addDays(S.today, -3));
   const adm = esAdmin();
-  return cabecera("Caja", "Hoy · " + diaLargo(S.today) + (DEV.nombre ? " · " + esc(DEV.nombre) : "")) + (st === "sin" ? principal : cajaCardHTML(c, true)) +
+  return cabecera("Caja", "Hoy · " + diaLargo(S.today) + (DEV.nombre ? " · " + esc(DEV.nombre) : "")) + avisoCajaPendiente() + (st === "sin" ? principal : cajaCardHTML(c, true)) +
     (st !== "sin" ? checklistHTML("apertura", CHECK_AP) : "") + (st === "abierta" ? checklistHTML("cierre", CHECK_CI) : "") +
     (pend.length ? `<div class="card"><h3>Pagos por confirmar</h3><p class="small muted" style="margin-top:-4px">Mira el aviso de tu banco o billetera. Si ya llegó, toca “Ya llegó”.</p>${pend.slice(-8).reverse().map(v => `<div class="row"><div class="l"><b>${fmt(v.total)}</b> <span class="pill">${esc(v.m)}</span><div class="small muted">${hora(v.t)}${v.ref ? " · " + esc(v.ref) : ""}</div></div><button class="btn pri sm" data-act="ya" data-id="${esc(v.id)}">Ya llegó</button></div>`).join("")}</div>` : "") +
     (st === "abierta" ? `<div class="btns" style="margin-bottom:14px"><button class="btn ghost" style="flex:1" data-act="movCaja" data-t="retiro">Sacar dinero</button><button class="btn ghost" style="flex:1" data-act="movCaja" data-t="ingreso">Entró dinero</button><button class="btn ghost" style="flex:1" data-act="movCaja" data-t="gasto">Pagué algo</button></div><button class="btn pri xl wide" data-act="cerrarCaja">${ic("lock", 22)} CERRAR CAJA</button>` : "") +
@@ -151,7 +154,8 @@ VIEWS.caja = () => {
 };
 ACT.ya = async (el, d) => { const v = ventasOk().find(x => x.id === d.id); if (v) { await guardar(() => confirmarPago(v), "Pago confirmado"); } };
 const SUGERIDOS_APERTURA = [0, 50000, 100000, 200000];
-ACT.abrirCaja = () => abrir(() => `${head("Abrir caja")}<p style="margin-top:0">¿Con cuánto efectivo empiezas?</p>
+ACT.abrirCaja = () => { const p = cajaPendiente(); if (p) { toast("Primero cierra la caja del " + diaCorto(p.fecha) + ".", true); ACT.cerrarCaja(null, {id: p.id}); return; } ACT.abrirCajaHoy(); };
+ACT.abrirCajaHoy = () => abrir(() => `${head("Abrir caja")}<p style="margin-top:0">¿Con cuánto efectivo empiezas?</p>
   <div class="btns" style="margin-bottom:10px">${SUGERIDOS_APERTURA.map(m => `<button class="btn ghost" style="flex:1;min-width:45%" data-act="aperturaMonto" data-v="${m}">${m === 0 ? "$0 (sin base)" : fmt(m)}</button>`).join("")}</div>
   <label class="f" for="ap-monto">Otro valor</label><input class="in money" id="ap-monto" inputmode="numeric" value="${S.apMonto ? fmt(S.apMonto) : ""}" placeholder="$0">${teclado("ap-monto")}
   <button class="btn pri xl wide" style="margin-top:14px" data-act="doAbrir">${ic("ok", 22)} ABRIR CAJA</button>`, {});
@@ -159,27 +163,27 @@ ACT.aperturaMonto = (el, d) => { $("#ap-monto").value = Number(d.v) ? fmt(Number
 ACT.doAbrir = async () => { const v = num($("#ap-monto").value); await guardar(async () => { await abrirCaja(v); cerrar(); draw(); }, "Caja abierta. ¡A vender!"); };
 const MOT_MOV = {retiro: ["Retiro del dueño", "Consignación", "Cambio de billetes", "Otro"], ingreso: ["Base adicional", "Cambio de billetes", "Otro"], gasto: ["Insumos", "Domicilio", "Aseo", "Transporte", "Otro"]};
 const TIT_MOV = {retiro: "Sacar dinero de la caja", ingreso: "Entró dinero a la caja", gasto: "Pagué algo con dinero de la caja"};
-ACT.movCaja = (el, d) => { if (!esAdmin() && configNeg().movimientosEmpleado === false) { toast("Pídele al administrador que haga este movimiento.", true); return; } S.movTipo = d.t;
+const permisoMov = () => esAdmin() || ((col("meta").permisos || {}).movimientosEmpleado !== false);
+ACT.movCaja = (el, d) => { if (!permisoMov()) { toast("Pídele al administrador que haga este movimiento.", true); return; } S.movTipo = d.t;
   abrir(() => `${head(TIT_MOV[S.movTipo])}<label class="f" for="mv-monto">¿Cuánto?</label><input class="in money" id="mv-monto" inputmode="numeric" placeholder="$0">${teclado("mv-monto")}
   <label class="f">¿Para qué?</label>${sel("mv-mot", MOT_MOV[S.movTipo], "")}<label class="f" for="mv-nota">Detalle (opcional)</label><input class="in plain" id="mv-nota" placeholder="Ej: compra de vasos">
   <button class="btn pri xl wide" style="margin-top:14px" data-act="doMov">GUARDAR</button>`); };
 ACT.doMov = async () => { const m = num($("#mv-monto").value), mot = selVal("mv-mot"), nota = $("#mv-nota").value.trim(); if (!mot) { toast("Elige para qué fue.", true); return; }
   await guardar(async () => { await movimientoCaja(S.movTipo, m, mot + (nota ? " · " + nota : ""), S.movTipo === "gasto" ? "Otros" : ""); cerrar(); draw(); }, "Guardado"); };
-ACT.cerrarCaja = () => { const c = cajaHoy(), k = cajaCalc(c); S.cierreVal = ""; abrir(() => {
-  const cont = $("#ci-monto") ? num($("#ci-monto").value) : null;
-  return `${head("Cerrar caja")}<div class="card flat"><div class="row" style="padding-top:0"><div class="l">Ventas de hoy</div><div class="r">${fmt(k.ventas)}</div></div>${Object.entries(k.por).map(([m, v]) => `<div class="row"><div class="l">${esc(m)}</div><div class="r">${fmt(v)}</div></div>`).join("")}
+ACT.cerrarCaja = (el, d) => { S.cierreId = (d && d.id) || (cajaHoy() || {}).id || ""; const c = cajaSel(); if (!c) return; const k = cajaCalc(c); S.cierreVal = ""; abrir(() => {
+  return `${head(c.fecha === S.today ? "Cerrar caja" : "Cerrar la caja del " + diaCorto(c.fecha))}<div class="card flat"><div class="row" style="padding-top:0"><div class="l">Ventas ${c.fecha === S.today ? "de hoy" : "de ese día"}</div><div class="r">${fmt(k.ventas)}</div></div>${Object.entries(k.por).map(([m, v]) => `<div class="row"><div class="l">${esc(m)}</div><div class="r">${fmt(v)}</div></div>`).join("")}
     <div class="row"><div class="l"><b>Efectivo que debería haber</b></div><div class="r big" style="font-size:26px">${fmt(k.esperado)}</div></div></div>
   <label class="f" for="ci-monto">¿Cuánto efectivo hay realmente en la caja?</label><input class="in money" id="ci-monto" inputmode="numeric" placeholder="$0" style="font-size:24px;min-height:58px">${teclado("ci-monto")}
   <div id="ci-dif" style="margin:10px 0"></div><div id="ci-obs"></div>
   <button class="btn pri xl wide" data-act="doCerrar">${ic("lock", 22)} CERRAR CAJA</button>`; }); };
 document.addEventListener("input", e => {
-  if (e.target.id === "ci-monto") { const k = cajaCalc(cajaHoy()), v = num(e.target.value), dif = v - k.esperado, has = e.target.value.trim() !== "";
+  if (e.target.id === "ci-monto") { const cs = cajaSel(); if (!cs) return; const k = cajaCalc(cs), v = num(e.target.value), dif = v - k.esperado, has = e.target.value.trim() !== "";
     $("#ci-dif").innerHTML = has ? `<div class="notice ${dif === 0 ? "ok" : "bad"}"><b>${dif === 0 ? "La caja cuadra" : dif > 0 ? "Sobran " + fmt(dif) : "Faltan " + fmt(-dif)}</b></div>` : "";
     $("#ci-obs").innerHTML = has && dif !== 0 ? `<label class="f">¿Qué pasó?</label>${sel("ci-mot", ["Error de cambio", "Gasto sin anotar", "Retiro sin anotar", "No sé"], "")}<label class="f" for="ci-nota">Detalle (opcional)</label><input class="in plain" id="ci-nota">` : ""; }
   if (e.target.id === "qsearch") { S.q = e.target.value; const g = $("#grid"); if (g) g.innerHTML = gridHTML(); }
 });
 ACT.doCerrar = async () => { const raw = $("#ci-monto").value; if (!raw.trim()) { toast("Escribe cuánto efectivo hay en la caja.", true); return; } const mot = selVal("ci-mot"), nota = ($("#ci-nota") || {value: ""}).value.trim();
-  const k = cajaCalc(cajaHoy()), dif = num(raw) - k.esperado; if (dif !== 0 && !mot) { toast("Elige qué pasó con la diferencia.", true); return; }
-  await guardar(async () => { const ci = await cerrarCaja(num(raw), (mot ? mot : "") + (nota ? " · " + nota : "")); abrir(() => `<div class="done"><div class="tick">${ic("ok", 52)}</div><h2 style="margin:14px 0 4px">Caja cerrada</h2><p class="muted">Vendiste ${fmt(ci.resumen.ventas)} en ${ci.resumen.n} ventas.<br>${ci.dif === 0 ? "La caja cuadró." : ci.dif > 0 ? "Sobraron " + fmt(ci.dif) + "." : "Faltaron " + fmt(-ci.dif) + "."}</p><button class="btn pri xl wide" data-act="cerrar">Listo</button></div>`); draw(); }); };
+  const cs = cajaSel(); if (!cs) { toast("No hay una caja abierta para cerrar.", true); return; } const k = cajaCalc(cs), dif = num(raw) - k.esperado; if (dif !== 0 && !mot) { toast("Elige qué pasó con la diferencia.", true); return; }
+  await guardar(async () => { const ci = await cerrarCaja(num(raw), (mot ? mot : "") + (nota ? " · " + nota : ""), cs); S.cierreId = ""; abrir(() => `<div class="done"><div class="tick">${ic("ok", 52)}</div><h2 style="margin:14px 0 4px">Caja cerrada</h2><p class="muted">Vendiste ${fmt(ci.resumen.ventas)} en ${ci.resumen.n} ventas.<br>${ci.dif === 0 ? "La caja cuadró." : ci.dif > 0 ? "Sobraron " + fmt(ci.dif) + "." : "Faltaron " + fmt(-ci.dif) + "."}</p><button class="btn pri xl wide" data-act="cerrar">Listo</button></div>`); draw(); }); };
 ACT.reabrir = async (el, d) => { const c = d.id ? cajasAll().find(x => x.id === d.id) : cajaHoy(); if (c && await confirmar({titulo: "¿Reabrir la caja?", texto: "Quedará registrado quién la reabrió.", si: "Sí, reabrir", no: "No"})) await guardar(() => reabrirCaja(c), "Caja reabierta"); };
 

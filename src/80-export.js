@@ -48,7 +48,7 @@ function datosInforme(a, b, F) {
   const ventas = filasVentas(a, b, F); for (const r of ventas) { const c = costoUnit(r.pid, r.t); r.costo = c == null ? null : Math.round(c * r.cantidad); }
   const ok = ventas.filter(r => r.estado === "Confirmada"), ids = uniq(ok.map(r => r.id)), tot = sum(ok, r => r.total), desc = sum(ok, r => r.descuento), costo = sum(ok, r => r.costo || 0), bruto = tot + desc;
   const anuladas = uniq(ventas.filter(r => r.estado === "Anulada").map(r => r.id)), anuladoTot = sum(ventas.filter(r => r.estado === "Anulada"), r => r.total);
-  const prodFiltro = !!(F.cat || F.pid), gastos = filasGastos(a, b), gastosOp = prodFiltro ? null : sum(gastos.filter(g => g.categoria !== BASE_COSTO), g => g.total), bruta = tot - costo, util = gastosOp == null ? null : bruta - gastosOp;
+  const gastos = filasGastos(a, b), gastosOp = hayFiltro(F) ? null : sum(gastos.filter(g => g.categoria !== BASE_COSTO), g => g.total), bruta = tot - costo, util = gastosOp == null ? null : bruta - gastosOp;
   const mermas = filasMermas(a, b).filter(m => { const p = prods().find(x => x.nombre === m.producto); return (!F.pid || (p && p.id === F.pid)) && (!F.cat || (p && p.cat === F.cat)); });
   const rmap = {}; for (const r of ok) { const o = rmap[r.pid] = rmap[r.pid] || {pid: r.pid, producto: r.producto, categoria: r.categoria, unidades: 0, ventas: 0, costo: 0, sinCosto: 0, descuentos: 0, merma: 0}; o.unidades += r.cantidad; o.ventas += r.total; o.descuentos += r.descuento; if (r.costo == null) o.sinCosto += r.cantidad; else o.costo += r.costo; }
   for (const m of mermas) { const p = prods().find(x => x.nombre === m.producto); if (p && rmap[p.id]) rmap[p.id].merma += m.total || 0; }
@@ -184,7 +184,7 @@ const COLS = {
   rent: [{h: "Producto", k: "producto"}, {h: "Categoría", k: "categoria"}, {h: "Unidades vendidas", k: "unidades", t: "num", tot: 1}, {h: "Ventas", k: "ventas", t: "money", tot: 1}, {h: "Costo", k: "costo", t: "money", tot: 1}, {h: "Utilidad bruta", k: "bruta", t: "money", tot: 1, neg: 1}, {h: "Margen", k: "margen", t: "pct"}, {h: "Descuentos", k: "descuentos", t: "money", tot: 1}, {h: "Merma (costo)", k: "merma", t: "money", tot: 1}, {h: "Utilidad neta estimada", k: "neta", t: "money", tot: 1, neg: 1}, {h: "Costo completo", f: r => r.costoOk ? "Sí" : "Falta costo de " + r.sinCosto + " und"}],
   mermas: [{h: "Producto", k: "producto"}, {h: "Fecha", k: "fecha", t: "fecha"}, {h: "Cantidad", k: "cantidad", t: "num", tot: 1}, {h: "Unidad", k: "unidad"}, {h: "Costo unitario", k: "costo", t: "money"}, {h: "Costo total", k: "total", t: "money", tot: 1}, {h: "Motivo", k: "motivo"}, {h: "Empleado", k: "empleado"}, {h: "Observación", k: "obs"}],
   clientes: [{h: "Identificación", k: "cliente"}, {h: "Nombre", k: "nombre"}, {h: "Correo", k: "correo"}, {h: "Última compra", k: "ultima", t: "fecha"}, {h: "Número de compras", k: "compras", t: "int", tot: 1}, {h: "Total comprado", k: "total", t: "money", tot: 1}, {h: "Ticket promedio", k: "ticket", t: "money"}, {h: "Producto favorito", k: "favorito"}, {h: "Puntos", k: "puntos", t: "int"}, {h: "Estado", k: "estado"}],
-  anul: [{h: "Fecha", k: "fecha", t: "fecha"}, {h: "Hora", k: "hora"}, {h: "Venta", k: "venta"}, {h: "Total anulado", k: "total", t: "money", tot: 1}, {h: "Motivo", k: "motivo"}, {h: "Usuario", k: "usuario"}],
+  anul: [{h: "Fecha de la venta", k: "fecha", t: "fecha"}, {h: "Anulada el", k: "anuladaEl", t: "fecha"}, {h: "Hora", k: "hora"}, {h: "Venta", k: "venta"}, {h: "Total anulado", k: "total", t: "money", tot: 1}, {h: "Motivo", k: "motivo"}, {h: "Usuario", k: "usuario"}],
   audit: [{h: "Fecha", k: "fecha", t: "fecha"}, {h: "Hora", k: "hora"}, {h: "Acción", k: "accion"}, {h: "Código", k: "codigo"}, {h: "Registro", k: "registro"}, {h: "Detalle", k: "detalle"}, {h: "Usuario", k: "usuario"}, {h: "Equipo", k: "equipo"}],
   riesgos: [{h: "Riesgo", k: "riesgo", estado: 1}, {h: "Tipo", k: "tipo"}, {h: "Acción / detalle", k: "accion"}, {h: "Usuario", k: "usuario"}, {h: "Fecha", k: "fecha"}, {h: "Soporte / referencia", k: "soporte"}],
   ajustes: [{h: "Fecha", k: "fecha", t: "fecha"}, {h: "Hora", k: "hora"}, {h: "Producto", k: "producto"}, {h: "Tipo de movimiento", k: "tipo"}, {h: "Cantidad (+/−)", k: "cantidad", t: "num", tot: 1, neg: 1}, {h: "Antes", k: "antes", t: "num"}, {h: "Después", k: "despues", t: "num"}, {h: "Motivo / referencia", k: "motivo"}, {h: "Usuario", k: "usuario"}],
@@ -364,7 +364,7 @@ async function pdfEmpresarial(d) {
   pdfH(doc, "Gastos", 7);
   pdfTabla(doc, ["Categoría", "Total"], agruparPor(d.gastos, "categoria", "total").map(x => [x.n, fmt(x.v)]), {vacio: "Sin gastos registrados.", cols: {1: {halign: "right"}}, foot: d.gastos.length ? ["Total", fmt(sum(d.gastos, g => g.total))] : null});
   pdfH(doc, "Caja", 8);
-  pdfTabla(doc, ["Fecha", "Caja", "Esperado", "Contado", "Diferencia", "Estado"], d.cajas.slice(-20).map(c => [fCorta(c.fecha), c.caja, fmt(c.esperado), c.contado == null ? "–" : fmt(c.contado), c.diferencia == null ? "–" : fmt(c.diferencia), c.estado]), {vacio: "Sin cajas en el periodo.", color: (i, j, v) => j === 4 && v !== "$0" && v !== "–" ? PDFC.rojo : null});
+  pdfTabla(doc, ["Fecha", "Caja", "Esperado", "Contado", "Diferencia", "Estado"], d.cajas.slice(-20).map(c => [fCorta(c.fecha), c.caja, c.esperado == null ? "Abierta" : fmt(c.esperado), c.contado == null ? "–" : fmt(c.contado), c.diferencia == null ? "–" : fmt(c.diferencia), c.estado]), {vacio: "Sin cajas en el periodo.", color: (i, j, v) => j === 4 && v !== "$0" && v !== "–" ? PDFC.rojo : null});
   pdfH(doc, "Clientes", 9);
   pdfTxt(doc, d.clientes.length ? d.clientes.length + " clientes pidieron factura a su nombre en el periodo, por " + fmt(sum(d.clientes, c => c.total)) + ". Sus datos personales no se incluyen en este informe." : "Ningún cliente pidió factura a su nombre en el periodo. OLI no recolecta datos personales en ventas normales.");
   pdfH(doc, "Operación", 10);
@@ -487,7 +487,7 @@ async function zipContador(d, conGerencia) {
 /* ---------- acciones de descarga ---------- */
 const NOMBRES = {gerencial: "OLI_Informe_Gerencial", empresarial: "OLI_Informe_Empresarial", dueno: "OLI_Informe_Dueno", contador: "OLI_Resumen_Contable", zip: "OLI_CONTABILIDAD"};
 async function generar(tipo, a, b, F) {
-  exigirAdmin(); const d = datosInforme(a, b, F), et = etiquetaPeriodo(a, b);
+  exigirAdmin(); const d = datosInforme(a, b, ["zip", "contador", "impuestos", "terceros", "auditoria"].includes(tipo) ? {} : F), et = etiquetaPeriodo(a, b);   // lo contable va sin filtros
   let blob, nombre;
   if (tipo === "gerencial") { blob = await excelGerencial(d); nombre = NOMBRES.gerencial + "_" + et + ".xlsx"; }
   else if (tipo === "empresarial") { blob = await pdfEmpresarial(d); nombre = NOMBRES.empresarial + "_" + et + ".pdf"; }
