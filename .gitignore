@@ -5,3 +5,12 @@ dist/
 !.env.example
 .vercel/
 .seed/
+
+# archivos generados por tools/video
+tools/video/docs/
+tools/video/shots/
+tools/video/frames/
+tools/video/audio/
+tools/video/clips/
+tools/video/*.mp4
+tools/video/list.txt
