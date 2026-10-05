@@ -39,6 +39,7 @@ function loginHTML() {
     <label class="f" for="lg-pass" style="text-align:left">Contraseña</label><input class="in plain" id="lg-pass" type="password" autocomplete="current-password">
     <div id="lg-err" role="alert" style="color:var(--danger);min-height:22px;margin:8px 0;font-size:14px"></div>
     <button class="btn pri xl wide" data-act="login">INGRESAR</button>
+    ${btnInstalar("btn ghost wide")}
     <p class="small muted" style="margin-top:14px">¿Olvidaste tu contraseña? Pídele al administrador que te ayude a cambiarla.</p><p class="credit">Desarrollado por <b>VP Visual Project</b></p></div></div>`;
 }
 function orgHTML() {
