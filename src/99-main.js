@@ -56,12 +56,15 @@ function renderView() {
   const meta = col("meta").app; if (!meta) return onboardingHTML();
   const f = VIEWS[S.tab] || VIEWS.vender; try { return f(); } catch (e) { console.error(e); return vacio("alerta", "Algo no salió bien al mostrar esta pantalla", "Vuelve a Inicio e inténtalo otra vez.", '<button class="btn pri" data-act="ir" data-r="' + (esAdmin() ? "hoy" : "vender") + '">Volver al inicio</button>'); }
 }
+let lastGateHTML = "";
 function draw() {
   if (DS.bloqueada) return;
   const root = $("#app"), meta = listo() && !DS.needsLogin ? col("meta").app : null;
   if (!rutaOk(S.tab)) S.tab = "vender";
   const gate = DS.needsLogin || DS.needsOrg || !listo() || !meta; root.classList.toggle("gate-mode", gate);
-  $("#view").innerHTML = renderView();
+  const vh = renderView();
+  if (!(gate && vh === lastGateHTML)) $("#view").innerHTML = vh;              // ingreso/creación: no redibujar si no cambió (no se borra lo que la persona está escribiendo)
+  lastGateHTML = gate ? vh : "";
   if (gate) { $("#ticket").innerHTML = ""; $("#cartbar").innerHTML = ""; $("#tabs").innerHTML = ""; $("#rail").innerHTML = ""; $("#banners").innerHTML = ""; return; }
   syncAuditSubs(); pedirNombres(Object.values(col("ventas")).map(d => d.uid));
   if (DEMO_ACTIVO()) Object.assign(NAMES, DEMO_PERSONAS);
