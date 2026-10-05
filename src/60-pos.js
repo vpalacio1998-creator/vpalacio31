@@ -111,7 +111,7 @@ ACT.confirmarVenta = async () => {
     const v = await registrarVenta({m: S.metodo, desc: S.desc, recibido: rec, cliente: S.cliente});
     S.cart = []; saveCart(); S.cliente = null; S.desc = 0; S.recibido = ""; S.recOtro = false;
     const off = DS.mode === "db" && !SYNC.online;
-    abrir(() => `<div class="done" data-v="${esc(v.id)}"><div class="tick">${ic("ok", 52)}</div><h2 style="margin:14px 0 4px">Venta realizada</h2><div class="big">${fmt(v.total)}</div><p class="muted" style="margin:6px 0 0">${esc(v.m)}${v.m === "Efectivo" && v.cambio > 0 ? " · Cambio: <b>" + fmt(v.cambio) + "</b>" : ""}</p>${off ? '<p class="small muted">Guardada en este equipo. Se enviará sola cuando vuelva Internet.</p>' : ""}<button class="btn pri xl wide" style="margin-top:16px" data-act="cerrar" autofocus>Nueva venta</button></div>`);
+    abrir(() => `<div class="done" data-v="${esc(v.id)}"><div class="tick">${ic("ok", 52)}</div><h2 style="margin:14px 0 4px">Venta realizada</h2><div class="big">${fmt(v.total)}</div><p class="muted" style="margin:6px 0 0">${esc(v.m)}${v.m === "Efectivo" && v.cambio > 0 ? " · Cambio: <b>" + fmt(v.cambio) + "</b>" : ""}</p>${off ? '<p class="small muted">Guardada en este equipo. Se enviará sola cuando vuelva Internet.</p>' : ""}<button class="btn pri xl wide" style="margin-top:16px" data-act="cerrar" autofocus>Nueva venta</button><button class="btn ghost wide" style="margin-top:8px" data-act="anular" data-id="${esc(v.id)}">Fue un error: anular</button></div>`);
     clearTimeout(doneTimer); const vid = v.id; doneTimer = setTimeout(() => { const el = $("#panel .done"); if (sheetFn && el && el.dataset.v === vid) cerrar(); }, 2600); draw();
   } catch (e) {
     if (e.abrirCaja) { cerrar(); ACT.abrirCaja(); } else toast(e.message && !e.code ? e.message : errMsg(e), true);
@@ -154,6 +154,7 @@ VIEWS.caja = () => {
     (st !== "sin" ? checklistHTML("apertura", CHECK_AP) : "") + (st === "abierta" ? checklistHTML("cierre", CHECK_CI) : "") +
     (pend.length ? `<div class="card"><h3>Pagos por confirmar</h3><p class="small muted" style="margin-top:-4px">Mira el aviso de tu banco o billetera. Si ya llegó, toca “Ya llegó”.</p>${pend.slice(-8).reverse().map(v => `<div class="row"><div class="l"><b>${fmt(v.total)}</b> <span class="pill">${esc(v.m)}</span><div class="small muted">${hora(v.t)}${v.ref ? " · " + esc(v.ref) : ""}</div></div><button class="btn pri sm" data-act="ya" data-id="${esc(v.id)}">Ya llegó</button></div>`).join("")}</div>` : "") +
     (st === "abierta" ? `<div class="btns" style="margin-bottom:14px"><button class="btn ghost" style="flex:1" data-act="movCaja" data-t="retiro">Sacar dinero</button><button class="btn ghost" style="flex:1" data-act="movCaja" data-t="ingreso">Entró dinero</button><button class="btn ghost" style="flex:1" data-act="movCaja" data-t="gasto">Pagué algo</button></div><button class="btn pri xl wide" data-act="cerrarCaja">${ic("lock", 22)} CERRAR CAJA</button>` : "") +
+    ventasHoyHTML() +
     (adm && todas.length ? `<h3>Otras cajas de hoy</h3>${todas.map(x => cajaCardHTML(x, false)).join("")}` : "");
 };
 ACT.ya = async (el, d) => { const v = ventasOk().find(x => x.id === d.id); if (v) { await guardar(() => confirmarPago(v), "Pago confirmado"); } };

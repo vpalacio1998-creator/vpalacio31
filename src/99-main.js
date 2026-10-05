@@ -108,13 +108,38 @@ function buscarGlobal(q) {
   const pe = personasConocidas().filter(x => (nombreDe(x.uid) || "").toLowerCase().includes(q)).map(x => `<div class="row"><b>${esc(nombreDe(x.uid))}</b><span class="small muted">${x.ventas || 0} ventas</span></div>`);
   return (g("Productos", ps) + g("Ventas", vs) + g("Gastos", gs) + g("Compras", cs) + g("Personas", pe)) || '<p class="muted">No encontré nada.</p>';
 }
-ACT.verVenta = (el, d) => { const v = ventasAll().find(x => x.id === d.id); if (!v) return; pedirNombres([v.uid]);
-  abrir(() => `${head(v.num || "Venta")}<div class="notice ${v.anulada ? "bad" : "ok"}">${v.anulada ? "Esta venta fue anulada." : "Venta confirmada."} · ${esc(ventaSyncTxt(ventaSync(v)))}</div>
-    <div class="row"><span>Fecha</span><b>${diaCorto(v.fecha)} ${hora(v.t)}</b></div><div class="row"><span>Caja</span><b>${esc((col("dispositivos")[v.dev] || {}).nombre || v.dev || "")}</b></div><div class="row"><span>Empleado</span><b>${esc(nombreDe(v.uid) || "—")}</b></div><div class="row"><span>Pago</span><b>${esc(v.m)}</b></div>
+/* historial de anulaciones: la venta nunca se borra; queda marcada con quién, cuándo y por qué */
+const anulacionDe = id => { for (const d of Object.values(col("anulaciones"))) for (const a of (d.items || [])) if (a.ventaId === id) return a; return null; };
+const MIN_ANULAR_EMP = 10;
+function puedeAnular(v) {
+  if (v.anulada) return {ok: false, txt: ""};
+  const caja = cajaDe(v.fecha, v.dev); if (caja && cajaEstado(caja) === "cerrada") return {ok: false, txt: "La caja de esta venta ya está cerrada. Si devolviste el dinero, regístralo en Caja como “Sacar dinero”."};
+  if (esAdmin()) return {ok: true};
+  if (v.uid === uidActual() && v.dev === DEV.id && Date.now() - v.t < MIN_ANULAR_EMP * 60000 && caja && cajaEstado(caja) === "abierta") return {ok: true};
+  return {ok: false, txt: "Pasaron más de " + MIN_ANULAR_EMP + " minutos o no es tu venta: pídele al administrador que la anule."};
+}
+ACT.verVenta = (el, d) => { const v = ventasAll().find(x => x.id === d.id); if (!v) return; const an = v.anulada ? anulacionDe(v.id) : null; if (an) pedirNombres([an.uid]); pedirNombres([v.uid]); const pa = puedeAnular(v);
+  abrir(() => `${head(v.num || "Venta")}<div class="notice ${v.anulada ? "bad" : "ok"}">${v.anulada ? "<b>Venta anulada.</b>" + (an ? " " + diaCorto(ymd(new Date(an.t))) + " " + hora(an.t) + " por " + esc(nombreDe(an.uid) || "—") + (an.motivo ? " · Motivo: " + esc(an.motivo) : "") : "") : "Venta confirmada."} · ${esc(ventaSyncTxt(ventaSync(v)))}</div>
+    <div class="row"><span>Fecha</span><b>${diaCorto(v.fecha)} ${hora(v.t)}</b></div><div class="row"><span>Caja</span><b>${esc((col("dispositivos")[v.dev] || {}).nombre || v.dev || "")}</b></div><div class="row"><span>Vendió</span><b>${esc(nombreDe(v.uid) || "—")}</b></div><div class="row"><span>Pago</span><b>${esc(v.m)}${v.m === "Efectivo" && v.cambio ? " · recibió " + fmt(v.recibido) + ", cambio " + fmt(v.cambio) : ""}</b></div>
     ${(v.items || []).map(i => `<div class="row"><span>${i.q} × ${esc(i.n)}</span><b>${fmt(i.p * i.q)}</b></div>`).join("")}${v.desc ? `<div class="row"><span>Descuento</span><b>- ${fmt(v.desc)}</b></div>` : ""}<div class="row"><b>Total</b><b class="big" style="font-size:24px">${fmt(v.total)}</b></div>
-    ${!v.anulada ? `<button class="btn danger wide" style="margin-top:10px" data-act="anular" data-id="${esc(v.id)}">Anular esta venta</button>` : ""}`); };
-ACT.anular = async (el, d) => { const v = ventasAll().find(x => x.id === d.id); if (!v) return; if (!(await confirmar({titulo: "¿Anular esta venta?", texto: "Se descuenta de las ventas y el inventario vuelve a su lugar. Queda registrado.", si: "Sí, anular", no: "No", peligro: true}))) return; await guardar(async () => { await anularVenta(v, "Anulada por " + (esAdmin() ? "administrador" : "empleado")); cerrar(); }, "Venta anulada"); };
-
+    ${pa.ok ? `<button class="btn danger wide" style="margin-top:10px" data-act="anular" data-id="${esc(v.id)}">Anular esta venta</button>` : pa.txt ? `<p class="small muted" style="margin-top:10px">${pa.txt}</p>` : ""}`); };
+ACT.anular = (el, d) => { const v = ventasAll().find(x => x.id === d.id); if (!v) return;
+  abrir(() => `${head("Anular " + (v.num || "venta"))}<p class="muted" style="margin-top:0">La venta de ${fmt(v.total)} se descuenta de las ventas y el inventario vuelve a su lugar. No se borra: queda en el historial con tu nombre, la hora y el motivo.</p>
+    <label class="f">¿Por qué la anulas?</label>${sel("an-mot", ["Error al marcar", "Cobro duplicado", "El cliente se arrepintió", "Otro"], "")}
+    <label class="f" for="an-nota">Detalle (opcional)</label><input class="in plain" id="an-nota" autocomplete="off">
+    ${v.m === "Efectivo" ? `<div class="notice" style="margin-top:12px">Si ya le devolviste el dinero al cliente, no hace falta registrar nada más: la caja se ajusta sola.</div>` : `<div class="notice" style="margin-top:12px">Pagó con ${esc(v.m)}: la devolución del dinero se hace por ese mismo medio.</div>`}
+    <button class="btn danger xl wide" style="margin-top:14px" data-act="doAnular" data-id="${esc(v.id)}">SÍ, ANULAR</button>`); };
+ACT.doAnular = async (el, d) => { const v = ventasAll().find(x => x.id === d.id); if (!v) return; const mot = selVal("an-mot"), nota = ($("#an-nota") || {value: ""}).value.trim();
+  if (!mot) { toast("Elige el motivo.", true); return; }
+  await guardar(async () => { await anularVenta(v, mot + (nota ? " · " + nota : "")); cerrar(); }, "Venta anulada · queda en el historial"); };
+/* ventas de hoy en Caja: la empleada ve las de su equipo; el administrador, todas */
+function ventasHoyHTML() {
+  const vs = ventasAll().filter(v => v.fecha === S.today && (esAdmin() || v.dev === DEV.id)).sort((a, b) => b.t - a.t);
+  if (!vs.length) return "";
+  const n = vs.filter(v => !v.anulada).length, an = vs.length - n;
+  return `<div class="card"><h3>Ventas de hoy <span class="xs muted">· ${n} ${n === 1 ? "venta" : "ventas"}${an ? " · " + an + (an === 1 ? " anulada" : " anuladas") : ""}</span></h3><p class="small muted" style="margin-top:-4px">Toca una venta para ver el detalle o anularla si fue un error.</p>
+    ${vs.slice(0, 40).map(v => `<button class="row" style="width:100%;background:none;border:0;border-bottom:1px solid var(--line);text-align:left;cursor:pointer;font:inherit;color:inherit;${v.anulada ? "opacity:.6" : ""}" data-act="verVenta" data-id="${esc(v.id)}"><div class="l" style="min-width:0"><b>${hora(v.t)} · ${esc(v.num || "")}</b>${v.anulada ? ' <span class="pill bad">Anulada</span>' : ""}<div class="small muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc((v.items || []).map(i => i.q + " " + i.n).join(", "))}</div></div><b style="${v.anulada ? "text-decoration:line-through" : ""}">${fmt(v.total)}</b></button>`).join("")}${vs.length > 40 ? `<p class="small muted">Se muestran las 40 más recientes.</p>` : ""}</div>`;
+}
 /* ---------- eventos ---------- */
 document.addEventListener("click", e => {
   const el = e.target.closest("[data-act]"); if (!el || el.tagName === "INPUT" && el.dataset.actChange) return;

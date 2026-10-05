@@ -373,6 +373,17 @@ begin
   delete from oli_docs where org_id = p_org and collection = p_col and doc_id = p_doc;
 end $$;
 
+-- anulación hecha por un empleado: solo su propia venta, del mismo equipo, dentro de los 10 minutos siguientes a la venta
+-- (el administrador anula cualquiera; la regla también la aplica la app, aquí se valida de nuevo)
+create or replace function oli.void_ok(p_org uuid, p_uid uuid, p_dev text, p_doc text, d jsonb) returns boolean language sql stable security definer set search_path = public as
+$$ select not exists (
+     select 1 from jsonb_array_elements(coalesce(d->'items','[]'::jsonb)) it
+     where not exists (select 1 from oli_docs o, jsonb_array_elements(coalesce(o.data->'items','[]'::jsonb)) x
+                       where o.org_id = p_org and o.collection = 'anulaciones' and o.doc_id = p_doc and x->>'id' = it->>'id')
+       and (coalesce(it->>'uid','') <> p_uid::text
+            or not exists (select 1 from sales sa where sa.org_id = p_org and sa.id = it->>'ventaId' and sa.user_id = p_uid::text and sa.device_id = p_dev
+                             and oli.ms((it->>'t')::bigint) between sa.sold_at and sa.sold_at + interval '11 minutes'))) $$;
+
 create or replace function oli_apply(p_ops jsonb, p_device_id text default null, p_app_version text default null)
 returns jsonb language plpgsql security definer set search_path = public as
 $$
@@ -399,6 +410,7 @@ begin
     elsif c not in ('productos','costos','stock','recetas','ventas','cajas','mermas','checklists','anulaciones','confirmaciones','demandaperdida','dispositivos','reaperturas','meta','gastos','compras','config','terceros','periodos','docelec','movinv') then status := 'rejected'; detail := 'colección desconocida';
     elsif oli.single_writer(c) and lvl < 3 and (d is null or del or coalesce(d->>'dev','') <> coalesce(dev,'') or right(id, length(coalesce(dev,'')) + 1) <> '_' || coalesce(dev,'')) then status := 'rejected'; detail := 'solo el dispositivo dueño puede escribir este documento';
     elsif c = 'dispositivos' and lvl < 3 and id <> coalesce(dev,'') then status := 'rejected'; detail := 'dispositivo ajeno';
+    elsif c = 'anulaciones' and lvl < 3 and not oli.void_ok(mem.org_id, uid, dev, id, d) then status := 'rejected'; detail := 'el empleado solo anula su propia venta en los 10 minutos siguientes';
     end if;
     if status = 'rejected' then
       insert into sync_ops (op_id, org_id, store_id, device_id, user_id, collection, doc_id, kind, device_ts, status, detail) values (opid, mem.org_id, mem.store_id, dev, uid, c, id, case when del then 'del' else 'set' end, ts, 'rejected', detail);

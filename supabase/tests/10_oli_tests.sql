@@ -148,6 +148,31 @@ begin
   reset role; set role authenticated; perform t_as(a);
   r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','st9','col','productos','id','p-mango','t',1,'data','{"nombre":"Mango viejo","precio":1}'::jsonb)), 'da', '1.0');
   perform t_assert(r->0->>'status' = 'stale' and (r->0->'data'->>'precio')::numeric = 8500, 'el servidor responde stale con el dato vigente');
+  -- T21: anulaciones — el empleado solo anula su propia venta reciente; el administrador, cualquiera; queda el historial
+  reset role; set role authenticated; perform t_as(e1);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','vv1','col','ventas','id','2026-10-03_d1','t',20000,'data', jsonb_build_object('fecha','2026-10-03','dev','d1','ventas', jsonb_build_array(
+         jsonb_build_object('id','d1-vv-1','n',9,'num','Caja 1 #9','t',20000,'fecha','2026-10-03','uid',e1::text,'dev','d1','m','Efectivo','total',8000,'sub',8000,'desc',0,'estado','confirmada','items','[{"pid":"p-mango","n":"Paleta Mango","q":1,"p":8000,"d":0}]'::jsonb))))), 'd1', '1.0');
+  perform t_assert(r->0->>'status' = 'applied', 'el empleado registra una venta propia');
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','an1','col','anulaciones','id','2026-10-03_d1','t',20100,'data', jsonb_build_object('fecha','2026-10-03','dev','d1','items', jsonb_build_array(
+         jsonb_build_object('id','an-x1','ventaId','d1-aaa-1','t',20100,'uid',e1::text,'motivo','Error al marcar','total',24000))))), 'd1', '1.0');
+  perform t_assert(r->0->>'status' = 'rejected', 'el empleado no puede anular una venta que no es suya');
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','an2','col','anulaciones','id','2026-10-03_d1','t',20200,'data', jsonb_build_object('fecha','2026-10-03','dev','d1','items', jsonb_build_array(
+         jsonb_build_object('id','an-x2','ventaId','d1-vv-1','t',20000 + 20*60000,'uid',e1::text,'motivo','Error al marcar','total',8000))))), 'd1', '1.0');
+  perform t_assert(r->0->>'status' = 'rejected', 'el empleado no puede anular su venta pasados los 10 minutos');
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','an3','col','anulaciones','id','2026-10-03_d1','t',20300,'data', jsonb_build_object('fecha','2026-10-03','dev','d1','items', jsonb_build_array(
+         jsonb_build_object('id','an-1','ventaId','d1-vv-1','t',20000 + 2*60000,'uid',e1::text,'motivo','Error al marcar · marqué dos','total',8000))))), 'd1', '1.0');
+  perform t_assert(r->0->>'status' = 'applied', 'el empleado anula su propia venta a los 2 minutos');
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','an4','col','anulaciones','id','2026-10-03_d1','t',20400,'data', jsonb_build_object('fecha','2026-10-03','dev','d1','items', jsonb_build_array(
+         jsonb_build_object('id','an-1','ventaId','d1-vv-1','t',20000 + 2*60000,'uid',e1::text,'motivo','Error al marcar · marqué dos','total',8000))))), 'd1', '1.0');
+  perform t_assert(r->0->>'status' = 'applied', 'reenviar la misma anulación no se rechaza');
+  reset role; set role authenticated; perform t_as(a);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','an5','col','anulaciones','id','2026-10-03_dA','t',20500,'data', jsonb_build_object('fecha','2026-10-03','dev','dA','items', jsonb_build_array(
+         jsonb_build_object('id','an-2','ventaId','d1-aaa-1','t',4102444800000,'uid',a::text,'motivo','Cobro duplicado','total',24000))))), 'dA', '1.0');
+  perform t_assert(r->0->>'status' = 'applied', 'el administrador anula cualquier venta, aunque sea tarde');
+  reset role;
+  perform t_assert((select count(*) from sale_voids where id in ('an-1','an-2')) = 2 and (select count(*) from sale_voids where id in ('an-x1','an-x2')) = 0, 'solo quedan las anulaciones permitidas');
+  perform t_assert((select reason from sale_voids where id = 'an-1') = 'Error al marcar · marqué dos' and (select user_id from sale_voids where id = 'an-1') = e1::text, 'el historial guarda quién y por qué');
+  perform t_assert((select count(*) from sales where id in ('d1-vv-1','d1-aaa-1')) = 2, 'las ventas anuladas no se borran');
   -- T16: coherencia de totales
   reset role;
   perform t_assert((select sum(total) from sales) = (select sum(amount) from payments), 'total de ventas = total de pagos');
