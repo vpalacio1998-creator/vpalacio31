@@ -69,6 +69,8 @@ Después se **borraron** esas 3 ventas, la caja y los equipos de prueba. El scri
 
 Antes de llegar a 11/11, la misma prueba encontró **3 fallos reales** (sección 4), que se corrigieron y se volvieron a desplegar.
 
+**Crear cuenta (prueba real en producción):** el administrador creó una cuenta con la función `invite-user` ✅; esa cuenta inició sesión como empleado del negocio ✅; la empleada intentó crear una cuenta de administrador y el servidor lo rechazó ✅. La cuenta de prueba se borró.
+
 ### 3.2 Seguridad comprobada en el servidor real (SQL con la sesión de cada rol)
 | Comprobación | Resultado |
 |---|---|
@@ -113,6 +115,9 @@ Antes de llegar a 11/11, la misma prueba encontró **3 fallos reales** (sección
 3. **El administrador entraba en "Vender" en vez de "Inicio"** después de iniciar sesión. Corregido.
 4. **El esquema no se podía aplicar en Supabase**: las sentencias grandes con borrados quedaban esperando una confirmación. La proyección se dividió en dos funciones y los borrados pasaron a funciones auxiliares. Las 45 pruebas siguen pasando.
 5. Las funciones internas tenían `search_path` variable (aviso del asesor de Supabase). Corregido.
+
+6. **No había forma de crear cuentas de empleados desde la app.** La función del servidor (`invite-user`) existía, pero ningún botón la usaba. Ahora Equipo tiene **"Crear cuenta"** (correo, contraseña y rol). Además, la ayuda ya no menciona el botón "Compartir" de Claude cuando OLI corre en su propio servidor.
+7. **Botón "Instalar OLI"** con los pasos según el equipo (iPad/Safari, Samsung Internet, Chrome Android, computador).
 
 ---
 
