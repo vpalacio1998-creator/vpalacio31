@@ -107,7 +107,8 @@ ACT.verEnvio = () => abrir(() => {
 }, {live: true});
 
 /* ---------- ayuda y bienvenida ---------- */
-ACT.ayuda = () => abrir(() => head("¿Necesitas ayuda?") + (puedeInstalar() ? `<div class="btns" style="margin-bottom:10px">${btnInstalar("btn pri")}</div>` : "") + (esAdmin() ? `
+const btnSalir = (cls = "btn ghost") => DS.backend === "supabase" ? `<button class="${cls}" data-act="logout">${ic("salir", 18)} Cerrar sesión${SB.email ? " (" + esc(SB.email) + ")" : ""}</button>` : "";
+ACT.ayuda = () => abrir(() => head("¿Necesitas ayuda?") + (DS.backend === "supabase" ? `<div class="btns" style="margin-bottom:10px">${btnSalir()}</div>` : "") + (puedeInstalar() ? `<div class="btns" style="margin-bottom:10px">${btnInstalar("btn pri")}</div>` : "") + (esAdmin() ? `
   <div class="card flat"><b>Cada día</b><ol style="margin:8px 0 0;padding-left:20px"><li>Abre <b>Inicio</b>: ahí OLI te dice cómo va el negocio y qué hacer.</li><li>Si algo se acaba, entra a <b>Compras</b> y toca <b>¿Qué pedir?</b></li><li>Al final del día revisa <b>Caja</b>.</li></ol></div>
   <div class="card flat"><b>Para empezar</b><ol style="margin:8px 0 0;padding-left:20px"><li>Crea tus <b>Productos</b> con nombre, precio e inventario.</li><li>${DS.backend === "supabase" ? "Crea las cuentas de tu equipo en <b>Equipo</b> → <b>Crear cuenta</b>." : DS.mode === "local" ? "Este equipo trabaja solo; para varias cuentas, conecta OLI al servidor." : "Invita a tu equipo con el botón <b>Compartir</b> de Claude (dales acceso de colaborador)."}</li><li>En la tablet, abre la <b>Caja</b> y empieza a vender.</li></ol></div>
   <button class="btn pri wide xl" data-act="cerrar">Entendido</button>` : `
@@ -138,12 +139,13 @@ function drawNav() {
   const items = adm ? `${navBtn("hoy", "nv")}${GRUPOS_ADMIN.map(([g, rs]) => `<div class="grp">${g}</div>${rs.map(r => navBtn(r, "nv")).join("")}`).join("")}` : ["vender", "caja", "inventario"].map(r => navBtn(r, "nv")).join("");
   $("#rail").innerHTML = `<div class="logo">OLI</div>${items}<div class="sp"></div><button class="nv" data-act="ayuda" style="display:flex;align-items:center;gap:12px;border:0;background:none;padding:10px 12px;font-weight:600;color:var(--muted);border-radius:12px">${ic("info", 22)}<span>¿Necesitas ayuda?</span></button>
     ${puedeInstalar() ? `<button class="nv" data-act="instalar" style="display:flex;align-items:center;gap:12px;border:0;background:none;padding:10px 12px;font-weight:600;color:var(--marca-d);border-radius:12px">${ic("descargar", 22)}<span>Instalar OLI</span></button>` : ""}
+    ${DS.backend === "supabase" ? `<button class="nv" data-act="logout" style="display:flex;align-items:center;gap:12px;border:0;background:none;padding:10px 12px;font-weight:600;color:var(--muted);border-radius:12px">${ic("salir", 22)}<span>Cerrar sesión</span></button>` : ""}
     <button class="foot-link" data-act="acerca" style="text-align:left;padding:2px 12px">Acerca de OLI</button>
     <div class="meta">${connPill()}</div>${DS.mode === "local" ? `<button class="btn ghost sm" style="margin:8px 10px 0" data-act="rolLocal">Ver como: ${esAdmin() ? "Administrador" : "Empleado"}</button>` : ""}<div class="meta" style="padding-top:2px"><span class="xs">${esc(DEV.nombre || "")}</span></div>`;
 }
 ACT.mas = () => abrir(() => {
   const g = GRUPOS_ADMIN.map(([t, rs]) => `<h3 style="margin-top:12px">${t}</h3><div class="masgrid">${rs.filter(r => r !== "vender" && r !== "inventario" && r !== "compras").map(r => { const b = badgeDe(r); return `<button data-act="ir" data-r="${r}"${b ? ` data-n="${b.n}"` : ""}>${ic(RUTAS[r].i, 24)}${RUTAS[r].t}</button>`; }).join("")}</div>`).join("");
-  return head("Más opciones") + g + `<div class="btns" style="margin-top:14px"><button class="btn ghost" data-act="ayuda">${ic("info", 18)} ¿Necesitas ayuda?</button><button class="btn ghost" data-act="verEnvio">${ic("rayo", 18)} Estado de envío</button>${btnInstalar()}</div>`;
+  return head("Más opciones") + g + `<div class="btns" style="margin-top:14px"><button class="btn ghost" data-act="ayuda">${ic("info", 18)} ¿Necesitas ayuda?</button><button class="btn ghost" data-act="verEnvio">${ic("rayo", 18)} Estado de envío</button>${btnInstalar()}${btnSalir()}</div>`;
 });
 ACT.ir = (el, d) => { cerrar(); irA(d.r); };
 function irA(r) { if (!rutaOk(r)) { toast("Esa sección es solo para el administrador.", true); r = "vender"; } S.tab = r; try { history.replaceState(null, "", "#" + r); } catch (e) {} window.scrollTo(0, 0); draw(); }

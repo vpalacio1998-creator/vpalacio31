@@ -50,7 +50,12 @@ function orgHTML() {
 ACT.login = async () => { const b = $("#lg-err"); b.textContent = ""; const m = $("#lg-mail").value.trim(), p = $("#lg-pass").value; if (!m || !p) { b.textContent = "Escribe tu correo y tu contraseña."; return; }
   try { await sbLogin(m, p); } catch (e) { b.textContent = navigator.onLine === false ? "No hay conexión a Internet para ingresar por primera vez." : (e.message || "No pudimos ingresar."); } };
 ACT.crearNegocio = async () => { const n = $("#og-n").value.trim(); if (!n) return; try { await sbCrearNegocio(n); } catch (e) { $("#lg-err").textContent = e.message; } };
-ACT.logout = async () => { if (pendientes().length && !(await confirmar({titulo: "Hay ventas sin enviar", texto: "Si sales ahora, quedan guardadas en este equipo y se enviarán cuando vuelvas a ingresar. ¿Salir de todos modos?", si: "Sí, salir", no: "No"}))) return; await sbSalir(); };
+ACT.logout = async () => {
+  if (pendientes().length && conRed()) { toast("Enviando lo pendiente…"); try { await withTimeout(syncNow(), 8000); } catch (e) {} }   // antes de salir, se intenta enviar todo
+  const vp = ventasPendientes();
+  if (vp && !(await confirmar({titulo: vp === 1 ? "Hay 1 venta sin enviar" : "Hay " + vp + " ventas sin enviar", texto: "Quedan guardadas en este equipo y se enviarán cuando esta misma cuenta vuelva a ingresar aquí. ¿Salir de todos modos?", si: "Sí, salir", no: "No"}))) return;
+  await sbSalir();
+};
 function renderView() {
   if (DS.needsLogin) return loginHTML(); if (DS.needsOrg) return orgHTML();
   if (!listo()) return splash();
