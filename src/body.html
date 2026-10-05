@@ -1,0 +1,19 @@
+<div class="app" id="app">
+  <aside class="rail" id="rail" aria-label="Menú principal"></aside>
+  <div class="col">
+    <header class="top">
+      <div class="logo" aria-label="OLI">OLI</div>
+      <div class="when"><b id="fecha"></b><small><i class="dot off" id="dot"></i><span id="estado">Abriendo…</span></small></div>
+      <button class="iconbtn" id="searchbtn" data-act="buscar" aria-label="Buscar" hidden>__ICON_BUSCAR__</button>
+      <button class="iconbtn" id="bell" data-act="campana" aria-label="Avisos" hidden>__ICON_CAMPANA__</button>
+      <button class="iconbtn" data-act="ayuda" aria-label="¿Necesitas ayuda?" style="font-weight:700;font-size:18px">?</button>
+    </header>
+    <div style="max-width:1180px;margin:0 auto;padding:12px 14px 0"><div id="banners"></div></div>
+    <main id="view" aria-live="polite"></main>
+  </div>
+  <aside class="ticket" id="ticket" aria-label="Pedido actual"></aside>
+</div>
+<div id="cartbar"></div>
+<nav class="tabs" id="tabs" aria-label="Secciones"></nav>
+<div class="sheet hidden" id="sheet"><div class="bg"></div><div class="panel" role="dialog" aria-modal="true" id="panel"></div></div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
