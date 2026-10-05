@@ -1,6 +1,6 @@
 import { chromium } from 'playwright'; import fs from 'fs';
-const S = JSON.parse(fs.readFileSync('scenes.json', 'utf8')); fs.mkdirSync('frames', { recursive: true });
-const b = await chromium.launch(); const pg = await b.newPage({ viewport: { width: 1920, height: 1080 } });
+const S = JSON.parse(fs.readFileSync(process.env.SCENES || 'scenes.json', 'utf8')), FR = process.env.FRAMES || 'frames'; fs.mkdirSync(FR, { recursive: true });
+const b = await chromium.launch(process.env.CHROME ? { executablePath: process.env.CHROME, args: ['--headless=new', '--no-sandbox'] } : {}); const pg = await b.newPage({ viewport: { width: 1920, height: 1080 } });
 const img = n => 'data:image/png;base64,' + fs.readFileSync(`shots/${n}.png`).toString('base64');
 // fuentes incrustadas (paquetes @fontsource de npm): no dependen de Google Fonts
 const fuente = (pkg, fam, w) => { const f = `node_modules/@fontsource/${pkg}/files/${pkg}-latin-${w}-normal.woff2`; return fs.existsSync(f) ? `@font-face{font-family:${fam};font-weight:${w};src:url(data:font/woff2;base64,${fs.readFileSync(f).toString('base64')}) format('woff2')}` : ''; };
@@ -44,6 +44,6 @@ for (const s of S) {
     const ok = m.fuente && (m.devIzq === null || m.textoDer < m.devIzq - 20) && (m.devArr === null || (m.devArr >= 0 && m.devAbj <= 1080 && m.devDer <= 1920)) && (m.textoArr === null || (m.textoArr > 130 && m.textoAbj < 1020)) && (m.contraste === null || m.contraste > 12);
     console.log(ok ? 'OK' : 'REVISAR', s.id, JSON.stringify(m)); continue;
   }
-  await pg.screenshot({ path: `frames/${s.id}.png` }); console.log('lamina', s.id);
+  await pg.screenshot({ path: `${FR}/${s.id}.png` }); console.log('lamina', s.id);
 }
 await b.close();
