@@ -5,8 +5,8 @@ const PWA = {hay: false, worker: null, reloading: false, recargado: false, event
 function registrarSW() {
   if (!window.OLI_PWA || !("serviceWorker" in navigator) || !/^https?:$/.test(location.protocol)) return;
   navigator.serviceWorker.register("sw.js").then(reg => {
-    if (reg.waiting && navigator.serviceWorker.controller) { PWA.worker = reg.waiting; PWA.hay = true; changed(); }
-    reg.addEventListener("updatefound", () => { const w = reg.installing; if (!w) return; w.addEventListener("statechange", () => { if (w.state === "installed" && navigator.serviceWorker.controller) { PWA.worker = w; PWA.hay = true; changed(); } }); });
+    if (reg.waiting && navigator.serviceWorker.controller) { PWA.worker = reg.waiting; PWA.hay = true; changed(); setTimeout(() => aplicarActualizacion(false), 1500); }
+    reg.addEventListener("updatefound", () => { const w = reg.installing; if (!w) return; w.addEventListener("statechange", () => { if (w.state === "installed" && navigator.serviceWorker.controller) { PWA.worker = w; PWA.hay = true; changed(); setTimeout(() => aplicarActualizacion(false), 1500); } }); });
     setInterval(() => reg.update().catch(() => {}), 30 * 60 * 1000);
   }).catch(() => {});
   // Solo se recarga cuando OLI pidió aplicar una versión nueva. La primera instalación (clients.claim) no recarga: cortaría un ingreso en curso.

@@ -292,7 +292,7 @@ details.help span{display:block;font-weight:500;font-size:13px;line-height:1.35;
 <div class="sheet hidden" id="sheet"><div class="bg"></div><div class="panel" role="dialog" aria-modal="true" id="panel"></div></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script>window.OLI_BUILD="af1b9afd";</script>
+<script>window.OLI_BUILD="714f36a1";</script>
 <script>
 (function(){
 "use strict";
@@ -861,8 +861,8 @@ const PWA = {hay: false, worker: null, reloading: false, recargado: false, event
 function registrarSW() {
   if (!window.OLI_PWA || !("serviceWorker" in navigator) || !/^https?:$/.test(location.protocol)) return;
   navigator.serviceWorker.register("sw.js").then(reg => {
-    if (reg.waiting && navigator.serviceWorker.controller) { PWA.worker = reg.waiting; PWA.hay = true; changed(); }
-    reg.addEventListener("updatefound", () => { const w = reg.installing; if (!w) return; w.addEventListener("statechange", () => { if (w.state === "installed" && navigator.serviceWorker.controller) { PWA.worker = w; PWA.hay = true; changed(); } }); });
+    if (reg.waiting && navigator.serviceWorker.controller) { PWA.worker = reg.waiting; PWA.hay = true; changed(); setTimeout(() => aplicarActualizacion(false), 1500); }
+    reg.addEventListener("updatefound", () => { const w = reg.installing; if (!w) return; w.addEventListener("statechange", () => { if (w.state === "installed" && navigator.serviceWorker.controller) { PWA.worker = w; PWA.hay = true; changed(); setTimeout(() => aplicarActualizacion(false), 1500); } }); });
     setInterval(() => reg.update().catch(() => {}), 30 * 60 * 1000);
   }).catch(() => {});
   // Solo se recarga cuando OLI pidió aplicar una versión nueva. La primera instalación (clients.claim) no recarga: cortaría un ingreso en curso.
@@ -3718,6 +3718,7 @@ function banners() {
   if (DS.mode === "db" && !SYNC.online) h += `<div class="notice" style="margin:0 0 12px;display:flex;gap:10px;align-items:center">${ic("info", 20)}<span><b>Trabajando sin conexión.</b> Las ventas se enviarán solas cuando vuelva Internet.${ventasPendientes() ? " Pendientes: <b>" + ventasPendientes() + "</b>." : ""}</span></div>`;
   else if (SYNC.estado === "sincronizando" && SYNC.total > 1) h += `<div class="notice ok" style="margin:0 0 12px">Enviando ${Math.min(SYNC.hecho + 1, SYNC.total)}/${SYNC.total}…</div>`;
   if (DS.error) h += `<div class="notice bad" style="margin:0 0 12px">${esc(DS.error)}</div>`;
+  if (PWA.hay) h += `<div class="notice ok" style="margin:0 0 12px;display:flex;gap:10px;align-items:center;justify-content:space-between"><span><b>Hay una versión nueva de OLI.</b> Se aplica sola cuando no haya un pedido abierto.</span><button class="btn pri sm" data-act="actualizarYa">ACTUALIZAR</button></div>`;
   el.innerHTML = h;
 }
 function loginHTML() {

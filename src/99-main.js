@@ -31,6 +31,7 @@ function banners() {
   if (DS.mode === "db" && !SYNC.online) h += `<div class="notice" style="margin:0 0 12px;display:flex;gap:10px;align-items:center">${ic("info", 20)}<span><b>Trabajando sin conexión.</b> Las ventas se enviarán solas cuando vuelva Internet.${ventasPendientes() ? " Pendientes: <b>" + ventasPendientes() + "</b>." : ""}</span></div>`;
   else if (SYNC.estado === "sincronizando" && SYNC.total > 1) h += `<div class="notice ok" style="margin:0 0 12px">Enviando ${Math.min(SYNC.hecho + 1, SYNC.total)}/${SYNC.total}…</div>`;
   if (DS.error) h += `<div class="notice bad" style="margin:0 0 12px">${esc(DS.error)}</div>`;
+  if (PWA.hay) h += `<div class="notice ok" style="margin:0 0 12px;display:flex;gap:10px;align-items:center;justify-content:space-between"><span><b>Hay una versión nueva de OLI.</b> Se aplica sola cuando no haya un pedido abierto.</span><button class="btn pri sm" data-act="actualizarYa">ACTUALIZAR</button></div>`;
   el.innerHTML = h;
 }
 function loginHTML() {
