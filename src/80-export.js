@@ -10,7 +10,8 @@ const LIBS = {
 const cargarScript = src => new Promise((res, rej) => { const s = document.createElement("script"); s.src = src; s.async = true; s.onload = res; s.onerror = () => { s.remove(); rej(new Error(src)); }; document.head.appendChild(s); });
 async function lib(k) {
   const L = LIBS[k]; if (L.ok()) return; if (L.dep) await lib(L.dep);
-  for (const s of (window.OLI_PWA ? ["vendor/" + L.v] : []).concat(L.cdn)) { try { await cargarScript(s); if (L.ok()) return; } catch (e) { /* siguiente fuente */ } }
+  /* primero la copia publicada junto a la app (PWA y artefacto); el CDN queda solo como respaldo */
+  for (const s of ["vendor/" + L.v].concat(L.cdn)) { try { await cargarScript(s); if (L.ok()) return; } catch (e) { /* siguiente fuente */ } }
   throw new Error("No se pudo preparar el generador de archivos. Conéctate a Internet una vez y vuelve a intentarlo.");
 }
 // PWA: deja las librerías guardadas para poder exportar sin Internet

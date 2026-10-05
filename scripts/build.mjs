@@ -10,12 +10,17 @@ const jsFiles = fs.readdirSync(S).filter(f => /^\d\d-.*\.js$/.test(f)).sort();
 const js = jsFiles.map(f => `/* >>> ${f} */\n${rd(f)}`).join("\n");
 const build = process.env.OLI_BUILD || (process.env.VERCEL_GIT_COMMIT_SHA || crypto.createHash("sha1").update(css + js).digest("hex")).slice(0, 8);
 const wrap = j => `(function(){\n"use strict";\n${j}\n})();`;
+try { new Function(wrap(js)); } catch (e) { console.error("OLI: ERROR DE SINTAXIS en src/*.js → " + e.message); process.exit(1); }   // nunca publicar código roto
 const META = `<meta name="author" content="Víctor Palacio"><meta name="copyright" content="VP Visual Project"><meta name="description" content="OLI · Sistema inteligente de gestión y punto de venta. Software propiedad de VP Visual Project · Creado por Víctor Palacio"><meta name="generator" content="OLI">`;
 const FONTS = `<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=Figtree:wght@400;500;600;700&display=swap" rel="stylesheet">`;
 const BANNER = `<!-- OLI · Software propiedad de VP Visual Project · Creado por Víctor Palacio · © 2026 VP Visual Project. Todos los derechos reservados. -->\n`;
 
 // 1) Artefacto de Claude: el contenedor agrega doctype/head/body
 fs.writeFileSync(path.join(R, "dist-artifact.html"), BANNER + `<title>OLI</title>\n${META}\n${FONTS}\n<style>\n${css}\n</style>\n${body}\n<script>window.OLI_BUILD=${JSON.stringify(build)};</script>\n<script>\n${wrap(js)}\n</script>\n`);
+
+// 1b) Capacidades del artefacto: las reglas del servidor salen del mismo RULES que usa el cliente (una sola fuente)
+const rulesSrc = /const RULES = (\[[\s\S]*?\n\]);/.exec(rd("10-data.js"))[1].replace(/\/\/[^\n]*/g, "");
+fs.writeFileSync(path.join(R, "dist-artifact-capabilities.json"), JSON.stringify({ db: { rules: new Function("return " + rulesSrc)() }, user: {}, downloads: true }, null, 2));
 
 // 2) PWA para Vercel
 fs.rmSync(D, { recursive: true, force: true }); fs.mkdirSync(path.join(D, "vendor"), { recursive: true });

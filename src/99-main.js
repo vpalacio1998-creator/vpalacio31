@@ -69,11 +69,14 @@ function draw() {
   const wideT = isWide() && S.tab === "vender";
   $("#app").classList.toggle("has-ticket", wideT); $("#ticket").innerHTML = wideT ? ticketHTML() : "";
   $("#cartbar").innerHTML = !isWide() && S.tab === "vender" ? cartbarHTML() : "";
-  if (prevSync && prevSync !== "sincronizado" && SYNC.estado === "sincronizado" && DS.mode === "db") toast("Todo sincronizado ✓");
+  // avisar solo cuando se recupera la conexión o se resuelve un error (no después de cada venta normal)
+  if (prevSync && (prevSync === "offline" || prevSync === "error") && SYNC.estado === "sincronizado" && DS.mode === "db") toast("Todo sincronizado ✓");
   prevSync = SYNC.estado;
 }
 const DEMO_ACTIVO = () => { const m = col("meta").app; return m && m.modo === "demo"; };
-const isWide = () => window.matchMedia("(min-width:1100px)").matches;
+const MQ_WIDE = window.matchMedia("(min-width:900px)"), isWide = () => MQ_WIDE.matches;
+// al girar la tablet o cambiar el tamaño de la ventana, el pedido pasa de barra inferior a panel lateral (y al revés)
+try { MQ_WIDE.addEventListener("change", () => draw()); } catch (e) { try { MQ_WIDE.addListener(() => draw()); } catch (e2) {} }
 /* dibujo automático (por cambios de datos): no pisa lo que la persona está escribiendo */
 function drawAuto() {
   const ae = document.activeElement, v = $("#view"), tk = $("#ticket");

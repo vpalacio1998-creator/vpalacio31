@@ -1,4 +1,4 @@
-/* OLI — sistema de diseño. Crema cálido + verde menta. Layout: rail ≥900px, barra inferior en celular, ticket a la derecha ≥1100px. */
+/* OLI — sistema de diseño. Crema cálido + verde menta. Layout: rail ≥900px, barra inferior en celular, ticket a la derecha ≥900px (más angosto hasta 1100px). */
 :root{
   --bg:#FAF7F0; --surface:#FFFFFF; --surface-2:#F4F1E8; --ink:#1E2A24; --muted:#66736B; --line:#E7E2D6;
   --marca:#2F7B5A; --marca-d:#235F45; --menta:#8CBA9C; --marca-soft:#E4F1E8; --bar:#BBD9C6; --on-marca:#FFFFFF;
@@ -207,10 +207,16 @@ tr.click{cursor:pointer}tr.click:hover td{background:var(--marca-soft)}
   .kpis{grid-template-columns:repeat(4,1fr)}
   .two.wide-l{grid-template-columns:1.5fr 1fr}
 }
+/* tablet horizontal (900–1099 px, p. ej. iPad 1024×768): el pedido y COBRAR siempre visibles a la derecha */
+@media (min-width:900px){
+  .app.has-ticket{grid-template-columns:200px minmax(0,1fr) 320px}
+  .app.has-ticket .ticket{display:flex;flex-direction:column;position:sticky;top:0;height:100vh;overflow-y:auto;background:var(--surface);border-left:1px solid var(--line);padding:14px}
+  .app.has-ticket .grid{grid-template-columns:repeat(auto-fill,minmax(136px,1fr))}
+}
 @media (min-width:1100px){
   .app.has-ticket{grid-template-columns:232px minmax(0,1fr) 390px}
-  .app.has-ticket .ticket{display:flex;flex-direction:column;position:sticky;top:0;height:100vh;overflow-y:auto;background:var(--surface);border-left:1px solid var(--line);padding:18px}
-  .grid{grid-template-columns:repeat(auto-fill,minmax(164px,1fr))}
+  .app.has-ticket .ticket{padding:18px}
+  .grid,.app.has-ticket .grid{grid-template-columns:repeat(auto-fill,minmax(164px,1fr))}
 }
 .tk-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}.tk-head h3{margin:0}
 .tk-empty{flex:1;display:grid;place-content:center;justify-items:center;gap:10px;text-align:center;color:var(--muted);padding:40px 12px}.tk-empty .ic{color:var(--bar)}
@@ -255,3 +261,6 @@ details.help span{display:block;font-weight:500;font-size:13px;line-height:1.35;
 @media (max-width:719px){.chips.wrap{flex-wrap:nowrap;overflow-x:auto}.hide-sm{display:none!important}}
 .repgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-bottom:14px}
 @media (max-width:719px){.repgrid{grid-template-columns:1fr}}
+.pline{padding:10px 0;border-bottom:1px solid var(--line)}.pline:last-child{border-bottom:0}
+.pl-top{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}.pl-top .l{min-width:0}.pl-top b{overflow-wrap:anywhere}
+.pl-bot{display:flex;align-items:center;justify-content:space-between;margin-top:6px}.pl-tot{font-size:17px;font-variant-numeric:tabular-nums}

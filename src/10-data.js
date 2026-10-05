@@ -18,6 +18,7 @@ const RULES = [
   {path: "anulaciones", write: "interact"}, {path: "confirmaciones", write: "interact"}, {path: "demandaperdida", write: "interact"}, {path: "dispositivos", write: "interact"},
   {path: "costos", read: "admin", write: "admin"}, {path: "recetas", read: "admin", write: "admin"}, {path: "gastos", read: "admin", write: "admin"},
   {path: "compras", read: "admin", write: "admin"}, {path: "config", read: "admin", write: "admin"}, {path: "terceros", read: "admin", write: "admin"}, {path: "movinv", read: "admin", write: "admin"}, {path: "periodos", read: "admin", write: "admin"}, {path: "docelec", read: "admin", write: "admin"},
+  {path: "audit", read: "admin", write: "admin"}, {path: "audit/{self}", read: "interact", write: "interact"},     // cada persona escribe su auditoría; solo el administrador la lee toda
   {path: "data/users", read: "admin", write: "admin"}, {path: "data/users/{self}", read: "interact", write: "interact"}
 ];
 const LV = {view: 1, interact: 2, admin: 3, owner: 4};
@@ -44,7 +45,7 @@ const nivelUsuario = () => DS.isAdmin ? LV.admin : LV.interact;
 function puede(col, accion) { const r = reglaDe(col); return nivelUsuario() >= (LV[r[accion] || (accion === "read" ? "view" : "interact")] || 2); }
 const esAdmin = () => DS.isAdmin;
 function col(name) { if (!puede(name, "read")) return {}; return DS.c[name] || {}; }
-function pathOf(c, id) { if (c === "audit") { const [u, d] = id.split("__"); return "data/users/" + u + "/" + d; } return c + "/" + id; }
+function pathOf(c, id) { if (c === "audit") { const [u, d] = id.split("__"); return "audit/" + u + "/d/" + d; } return c + "/" + id; }
 
 /* ---------- reactividad ---------- */
 let drawQ = 0;
@@ -208,7 +209,7 @@ function subscribe(name) {
 const auditSubs = new Set();
 function subscribeAudit(uid) {
   if (!uid || auditSubs.has(uid) || !DS.isAdmin || DS.mode !== "db") return; auditSubs.add(uid);
-  DS.subs.push(DS.dbh.collection("data/users/" + uid).onSnapshot(snap => { const m = Object.assign({}, DS.c.audit || {}); snap.docs.forEach(d => { m[uid + "__" + d.id] = d.data(); }); DS.c.audit = m; changed(); }, () => {}));
+  DS.subs.push(DS.dbh.collection("audit/" + uid + "/d").onSnapshot(snap => { const m = Object.assign({}, DS.c.audit || {}); snap.docs.forEach(d => { m[uid + "__" + d.id] = d.data(); }); DS.c.audit = m; changed(); }, () => {}));
 }
 function syncAuditSubs() { if (DS.mode !== "db" || DS.backend !== "claude" || !DS.isAdmin) return; if (DS.uid) subscribeAudit(DS.uid); for (const d of Object.values(DS.c.dispositivos || {})) if (d.uid) subscribeAudit(d.uid); for (const d of Object.values(DS.c.ventas || {})) if (d.uid) subscribeAudit(d.uid); }
 

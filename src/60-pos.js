@@ -1,7 +1,7 @@
 /* ============ 60 · punto de venta, caja e inventario (pantallas del empleado) ============
    Venta normal: tocar producto -> COBRAR -> (efectivo ya viene elegido) -> CONFIRMAR. */
 const BILLETES = [2000, 5000, 10000, 20000, 50000, 100000];
-let cobrando = false;
+let cobrando = false, doneTimer = 0;
 function saveCart() { IDB.kvSet("cart", S.cart).catch(() => {}); }
 async function restoreCart() { try { const c = await IDB.get("kv", "cart"); if (Array.isArray(c) && c.length) S.cart = c; } catch (e) {} }
 
@@ -41,10 +41,9 @@ ACT.tile = (el, d) => {
   if (estadoProd(p).k === "agotado") { toast(p.nombre + " está agotado.", true); if (!perdidaRecien[p.id] || Date.now() - perdidaRecien[p.id] > 30000) { perdidaRecien[p.id] = Date.now(); anotarDemandaPerdida(p.id).catch(() => {}); } return; }
   if (agregarAlCarrito(p)) { saveCart(); draw(); }
 };
-function lineasPedido() {
-  return S.cart.map(c => `<div class="row" style="padding:12px 0"><div class="l"><b>${esc(c.n)}</b><div class="small muted">${fmt(c.p)} c/u</div></div>
-    <div class="qty"><button data-act="menos" data-id="${esc(c.pid)}" aria-label="Quitar una unidad de ${esc(c.n)}" style="width:44px;height:44px">−</button><b style="font-size:18px">${c.q}</b><button data-act="mas1" data-id="${esc(c.pid)}" aria-label="Agregar una unidad de ${esc(c.n)}" style="width:44px;height:44px">+</button></div>
-    <div class="r" style="min-width:78px">${fmt(c.p * c.q)}</div><button class="btn ghost sm" data-act="quitar" data-id="${esc(c.pid)}" aria-label="Quitar ${esc(c.n)} del pedido">${ic("x", 16)}</button></div>`).join("");
+function lineasPedido() {   // nombre arriba (ancho completo) y cantidades abajo: se lee bien también en el panel angosto de la tablet
+  return S.cart.map(c => `<div class="pline"><div class="pl-top"><div class="l"><b>${esc(c.n)}</b><div class="small muted">${fmt(c.p)} c/u</div></div><button class="btn ghost sm" data-act="quitar" data-id="${esc(c.pid)}" aria-label="Quitar ${esc(c.n)} del pedido">${ic("x", 16)}</button></div>
+    <div class="pl-bot"><div class="qty"><button data-act="menos" data-id="${esc(c.pid)}" aria-label="Quitar una unidad de ${esc(c.n)}" style="width:44px;height:44px">−</button><b style="font-size:18px">${c.q}</b><button data-act="mas1" data-id="${esc(c.pid)}" aria-label="Agregar una unidad de ${esc(c.n)}" style="width:44px;height:44px">+</button></div><b class="pl-tot">${fmt(c.p * c.q)}</b></div></div>`).join("");
 }
 function pedidoHTML(modal) {
   if (!S.cart.length) return `<div class="tk-empty">${ic("paleta", 48)}<b style="color:var(--ink)">Tu pedido está vacío</b><p style="margin:0">Toca un producto para empezar.</p></div>`;
@@ -108,8 +107,8 @@ ACT.confirmarVenta = async () => {
     const v = await registrarVenta({m: S.metodo, desc: S.desc, recibido: rec, cliente: S.cliente});
     S.cart = []; saveCart(); S.cliente = null; S.desc = 0; S.recibido = "";
     const off = DS.mode === "db" && !SYNC.online;
-    abrir(() => `<div class="done"><div class="tick">${ic("ok", 52)}</div><h2 style="margin:14px 0 4px">Venta realizada</h2><div class="big">${fmt(v.total)}</div><p class="muted" style="margin:6px 0 0">${esc(v.m)}${v.m === "Efectivo" && v.cambio > 0 ? " · Cambio: <b>" + fmt(v.cambio) + "</b>" : ""}</p>${off ? '<p class="small muted">Guardada en este equipo. Se enviará sola cuando vuelva Internet.</p>' : ""}<button class="btn pri xl wide" style="margin-top:16px" data-act="cerrar" autofocus>Nueva venta</button></div>`);
-    setTimeout(() => { if (sheetFn && $("#panel .done")) cerrar(); }, 2600); draw();
+    abrir(() => `<div class="done" data-v="${esc(v.id)}"><div class="tick">${ic("ok", 52)}</div><h2 style="margin:14px 0 4px">Venta realizada</h2><div class="big">${fmt(v.total)}</div><p class="muted" style="margin:6px 0 0">${esc(v.m)}${v.m === "Efectivo" && v.cambio > 0 ? " · Cambio: <b>" + fmt(v.cambio) + "</b>" : ""}</p>${off ? '<p class="small muted">Guardada en este equipo. Se enviará sola cuando vuelva Internet.</p>' : ""}<button class="btn pri xl wide" style="margin-top:16px" data-act="cerrar" autofocus>Nueva venta</button></div>`);
+    clearTimeout(doneTimer); const vid = v.id; doneTimer = setTimeout(() => { const el = $("#panel .done"); if (sheetFn && el && el.dataset.v === vid) cerrar(); }, 2600); draw();
   } catch (e) {
     if (e.abrirCaja) { cerrar(); ACT.abrirCaja(); } else toast(e.message && !e.code ? e.message : errMsg(e), true);
   } finally { cobrando = false; redrawSheet(true); }
