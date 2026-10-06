@@ -6,7 +6,7 @@ function abrirExplicacion(pid, hk) {
   const fechas = fechasHorizonte(hk || S.horiz), r = recomendarCompra(fechas).find(x => x.pid === pid); if (!r) return;
   abrir(() => `${head("¿Por qué " + (r.comprar ? "comprar " + r.comprar : "no comprar") + " " + r.p.nombre + "?")}
     <div class="card flat">${explicarCompra(r).map(([a, b]) => `<div class="row" style="padding:8px 0"><span>${esc(a)}</span><b>${esc(b)}</b></div>`).join("")}</div>
-    <div class="notice ok"><b>Cómo se calcula</b><br>Demanda = ventas promedio × factor del día de la semana × tendencia.<br>A comprar = demanda + stock de seguridad − inventario − pedidos por llegar.</div>
+    <div class="notice ok"><b>Cómo se calcula</b><br>Demanda = ventas promedio × factor del día de la semana × tendencia.<br>Festivos, Semana Santa y puentes: se calculan como tu mejor día de fin de semana (o como tus festivos anteriores, cuando ya hay al menos 2) y se pide ${Math.round(colchonFestivo() * 100)} % más.<br>A comprar = demanda + stock de seguridad − inventario − pedidos por llegar.</div>
     <p class="small muted">Fuente: ventas de los últimos 14 días con venta, inventario actual y tendencia de los últimos 7 días. ${r.avg == null ? "Aún no hay suficientes días con ventas para calcular." : ""}</p>
     <button class="btn pri wide" data-act="cerrar">Entendido</button>`);
 }
@@ -21,13 +21,21 @@ function vPedir() {
   const total = sum(rows.filter(r => S.sel.has(r.pid)), r => (costoActual(r.pid) || 0) * r.comprar), uds = sum(rows.filter(r => S.sel.has(r.pid)), r => r.comprar);
   return `<div class="seg" style="margin-bottom:12px">${HORIZONTES.map(([k, l]) => `<button data-act="horiz" data-v="${k}" aria-pressed="${S.horiz === k}">${l}</button>`).join("")}</div>
   ${S.horiz === "custom" ? `<div class="split" style="margin-bottom:10px"><div><label class="f" for="f-desde">Desde</label><input class="in" type="date" id="f-desde" value="${esc(S.desde || S.today)}" data-act-change="fechas"></div><div><label class="f" for="f-hasta">Hasta</label><input class="in" type="date" id="f-hasta" value="${esc(S.hasta || addDays(S.today, 6))}" data-act-change="fechas"></div></div>` : ""}
+  ${avisoFestivos(fechas)}
   ${sinHist ? `<div class="notice">Todavía hay pocos días de ventas (${hi.n} de ${MIN_DIAS}). Las cantidades usan lo que hay y pueden cambiar mucho. Con más historia serán más confiables.</div>` : ""}
   ${rows.length ? "" : vacio("inventario", "No hay productos con inventario", "Activa el control de inventario en tus productos.")}
   ${rows.map(r => `<div class="card" style="padding:14px"><div style="display:flex;gap:12px;align-items:center"><label class="check" style="flex:none;min-height:48px"><input type="checkbox" data-act-change="selCompra" data-id="${esc(r.pid)}" ${S.sel.has(r.pid) ? "checked" : ""} ${r.comprar > 0 ? "" : "disabled"} aria-label="Incluir ${esc(r.p.nombre)}"></label>
     <div style="flex:1;min-width:0"><b>${esc(r.p.nombre)}</b><div class="small muted"><span class="sev ${r.riesgo === "ok" ? "" : r.riesgo}" style="display:inline-block;margin-right:6px"></span>${r.riesgo === "bad" ? "Urgente" : r.riesgo === "warn" ? "Pronto" : "Normal"} · hay ${r.st == null ? "?" : Math.max(0, r.st)}${r.cov != null && r.cov !== Infinity ? " · alcanza " + fmtN(r.cov, 1) + " días" : ""}</div></div>
     <div style="text-align:right"><div class="small muted">Comprar</div><div class="big" style="font-size:30px">${r.comprar == null ? "–" : r.comprar}</div></div></div>
-    <button class="btn ghost sm" style="margin-top:8px" data-act="porque" data-id="${esc(r.pid)}">¿Por qué?</button></div>`).join("")}
+    <button class="btn ghost sm" style="margin-top:8px" data-act="porque" data-id="${esc(r.pid)}" data-h="${esc(S.horiz)}">¿Por qué?</button></div>`).join("")}
   ${rows.length ? `<div class="card" style="position:sticky;bottom:${isWide() ? 12 : 72}px;box-shadow:0 8px 24px rgba(0,0,0,.12)"><div class="row" style="padding-top:0"><div><b>${S.sel.size} productos · ${uds} unidades</b><div class="small muted">${total ? "Costo estimado " + fmt(total) : "Sin costo registrado"}</div></div></div><button class="btn pri xl wide" data-act="generarPedido" ${S.sel.size ? "" : "disabled"}>${ic("compras", 20)} GENERAR PEDIDO</button></div>` : ""}`;
+}
+/* aviso de festivos: los que caen en las fechas del pedido y, si no están, el próximo fin de semana largo */
+function avisoFestivos(fechas) {
+  const esp = fechas.map(f => ({f, e: diaEspecial(f)})).filter(o => o.e), pp = proximoPuente(10), pc = Math.round(colchonFestivo() * 100);
+  if (esp.length) return `<div class="notice warn"><b>Incluye ${esp.length === 1 ? "un día especial" : esp.length + " días especiales"}:</b> ${esp.map(o => esc(diaCorto(o.f) + " (" + o.e.n + ")")).join(", ")}. Para esos días OLI pide ${pc} % más.</div>`;
+  if (pp && !pp.fechas.every(f => fechas.includes(f))) return `<div class="notice">Se viene fin de semana largo: <b>${esc(rangoFechasTxt(pp.fechas))}</b> (${esc(pp.nombres.join(", "))}). <button class="btn ghost sm" data-act="horiz" data-v="finde">Pedir para esos ${pp.fechas.length} días</button></div>`;
+  return "";
 }
 ACT.horiz = (el, d) => { S.horiz = d.v; S.sel = null; draw(); };
 document.addEventListener("change", e => {
@@ -47,7 +55,9 @@ ACT.doPedido = async () => {
 };
 function vFinde() {
   const pf = prepararFinde(), r = pf.rows.filter(x => x.comprar > 0 || x.riesgoF !== "ok");
-  return `<div class="card"><div class="small muted">${pf.fechas.map(diaCorto).join(" y ")}</div><h3 style="margin:2px 0 8px">${pf.enRiesgo.length ? pf.enRiesgo.length + " productos presentan riesgo de agotamiento durante el fin de semana." : "El inventario cubre la demanda esperada del fin de semana."}</h3>
+  const largo = pf.fechas.length > 2, nom = [...new Set(pf.fechas.map(festivoDe).filter(Boolean).map(x => x.n))];
+  return `<div class="card"><div class="small muted">${pf.fechas.map(diaCorto).join(", ")}${largo ? " · fin de semana largo" : ""}</div><h3 style="margin:2px 0 8px">${pf.enRiesgo.length ? pf.enRiesgo.length + " productos presentan riesgo de agotamiento durante el fin de semana." : "El inventario cubre la demanda esperada del fin de semana."}</h3>
+    ${largo ? `<div class="notice warn">${esc(nom.join(", "))}: OLI calcula los ${pf.fechas.length} días y pide ${Math.round(colchonFestivo() * 100)} % más para los festivos y el puente.</div>` : ""}
     <div class="kpis" style="grid-template-columns:repeat(2,1fr)"><div class="kpi"><span>Ventas esperadas</span><b>${fmtK(pf.ventasEsp)}</b></div><div class="kpi"><span>Unidades a comprar</span><b>${sum(pf.rows, x => x.comprar || 0)}</b></div></div>
     ${pf.basico ? `<div class="notice">Estimación básica: aún no hay 3 sábados y 3 domingos con ventas. Mejora con el tiempo.</div>` : `<p class="xs muted">Basado en ${dowFactors().n[6]} sábados y ${dowFactors().n[0]} domingos anteriores, ventas recientes y stock de seguridad.</p>`}</div>
   ${r.length ? r.map(x => `<div class="card" style="padding:14px"><div class="row" style="padding:0;border:0"><b>${esc(x.p.nombre)}</b><span class="pill ${x.riesgoF === "bad" ? "bad" : x.riesgoF === "warn" ? "warn" : "ok"}">${x.riesgoF === "bad" ? "Riesgo alto" : x.riesgoF === "warn" ? "Ajustado" : "Sin riesgo"}</span></div>

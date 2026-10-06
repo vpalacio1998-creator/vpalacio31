@@ -11,7 +11,7 @@ const unidadesHoy = pid => (unidadesDia()[pid] || {})[S.today] || 0;
 /* ---- factor por día de la semana (a nivel tienda) ---- */
 function dowFactors() {
   return memo("dowf", () => {
-    const t = S.today, dias = diasAbiertos(addDays(t, -56), addDays(t, -1)), by = {};
+    const t = S.today, dias = diasAbiertos(addDays(t, -56), addDays(t, -1)).filter(d => !diaEspecial(d)), by = {};   // los festivos no inflan el factor del lunes
     for (const d of dias) (by[dowOf(d)] = by[dowOf(d)] || []).push(histVentasDia()[d].total);
     const all = dias.map(d => histVentasDia()[d].total), avg = all.length ? sum(all) / all.length : 0, span = dias.length ? diffDays(t, dias[0]) : 0, f = {}, ok = {}, n = {};
     for (let k = 0; k < 7; k++) { const arr = by[k] || []; n[k] = arr.length; ok[k] = arr.length >= 3; f[k] = ok[k] && avg ? (sum(arr) / arr.length) / avg : (span >= 28 && !arr.length ? 0 : 1); if (span >= 28 && !arr.length) ok[k] = true; }
@@ -23,16 +23,35 @@ function avgDaily(pid, win = 14) { const dias = histInfo().dias.slice(-win); if 
 function unidadesVent(pid, n, desfase = 0) { const dias = histInfo().dias; const sl = dias.slice(Math.max(0, dias.length - n - desfase), dias.length - desfase); const u = unidadesDia()[pid] || {}; return {u: sum(sl, d => u[d] || 0), dias: sl.length}; }
 function tendencia(pid) { const a = unidadesVent(pid, 7, 0), b = unidadesVent(pid, 7, 7); if (a.dias < 7 || b.dias < 7 || b.u < 5) return null; return a.u / b.u; }
 const tendTienda = () => memo("tt", () => { const a = sum(histInfo().dias.slice(-7), d => histVentasDia()[d].total), b = sum(histInfo().dias.slice(-14, -7), d => histVentasDia()[d].total); return histInfo().n >= 14 && b > 0 ? a / b : null; });
+/* ---- festivos medidos con tus propias ventas: cuánto vende un festivo frente a los días normales de alrededor ---- */
+function factorFestivoMedido() {
+  return memo("ffest", () => {
+    const h = histVentasDia(), rs = [];
+    for (const d of Object.keys(h)) { const e = diaEspecial(d); if (!e || e.tipo === "puente" || d >= S.today) continue;
+      const vec = Object.keys(h).filter(x => x !== d && Math.abs(diffDays(x, d)) <= 28 && !diaEspecial(x)); if (vec.length < 7) continue;
+      const prom = sum(vec, x => h[x].total) / vec.length; if (prom > 0) rs.push(h[d].total / prom); }
+    return rs.length >= 2 ? {f: sum(rs) / rs.length, n: rs.length} : null;
+  });
+}
+/* factor del día: día de la semana (de tus ventas) y, si es festivo, Semana Santa o puente, el colchón para pedir más */
+function factorDia(fecha) {
+  const df = dowFactors(), w = dowOf(fecha), base = df.f[w] != null ? df.f[w] : 1, e = diaEspecial(fecha);
+  if (!e) return {fac: base, esp: null};
+  const cc = colchonFestivo();
+  if (e.tipo === "puente") return {fac: base * (1 + cc), esp: e, fuente: "fin de semana + " + Math.round(cc * 100) + " %"};
+  const fm = factorFestivoMedido(), finde = Math.max(df.f[6] != null ? df.f[6] : 1, df.f[0] != null ? df.f[0] : 1, base);
+  return fm ? {fac: fm.f * (1 + cc), esp: e, fuente: "medido en " + fm.n + " festivos + " + Math.round(cc * 100) + " %"} : {fac: finde * (1 + cc), esp: e, fuente: "como tu mejor día de fin de semana + " + Math.round(cc * 100) + " %"};
+}
 function demandaDia(pid, fecha, parcial) {
   const base = avgDaily(pid); if (base == null) return null;
-  const df = dowFactors(), fac = df.f[dowOf(fecha)] != null ? df.f[dowOf(fecha)] : 1, tp = tendencia(pid), tr = clamp(tp != null ? tp : (tendTienda() != null ? tendTienda() : 1), 0.75, 1.35);
+  const fac = factorDia(fecha).fac, tp = tendencia(pid), tr = clamp(tp != null ? tp : (tendTienda() != null ? tendTienda() : 1), 0.75, 1.35);
   let d = base * fac * tr; if (parcial) d = Math.max(0, d - unidadesHoy(pid)); return d;
 }
 function demanda(pid, fechas) { let s = 0; for (const f of fechas) { const d = demandaDia(pid, f, f === S.today); if (d == null) return null; s += d; } return s; }
 function fechasHorizonte(k) {
   const t = S.today;
   if (k === "hoy") return [t]; if (k === "3") return [t, addDays(t, 1), addDays(t, 2)]; if (k === "7") return Array.from({length: 7}, (_, i) => addDays(t, i));
-  if (k === "finde") { let s = dowOf(t); const sab = s === 6 ? t : s === 0 ? addDays(t, 6) : addDays(t, 6 - s); return [sab, addDays(sab, 1)]; }
+  if (k === "finde") { let s = dowOf(t); const sab = s === 6 ? t : s === 0 ? addDays(t, 6) : addDays(t, 6 - s); return bloqueFinde(sab); }   // con lunes festivo o Semana Santa, el fin de semana es más largo
   if (k === "custom") { const a = S.desde || t, b = S.hasta || addDays(t, 6), out = []; for (let d = a < t ? t : a; d <= b && out.length < 60; d = addDays(d, 1)) out.push(d); return out.length ? out : [t]; }
   return [t];
 }
@@ -55,7 +74,7 @@ function recomendarCompra(fechas) {
     const need = dem == null ? null : dem + seg - Math.max(st == null ? 0 : st, 0) - pend;
     let comprar = need == null ? null : Math.max(0, Math.ceil(need)); const pack = p.pack || 1; if (comprar && pack > 1) comprar = Math.ceil(comprar / pack) * pack;
     const ag = agotaEn(p.id), riesgo = st != null && st <= 0 ? "bad" : (ag && ag.dias <= 2) ? "bad" : (ag && ag.dias <= 5) ? "warn" : st != null && st <= (p.min || 0) ? "warn" : "ok";
-    return {pid: p.id, p, st, avg, dem, seg, pend, cov, comprar, riesgo, ag, why: {avg, u7: u7.u, dias7: u7.dias, tend: tp, st, cov, dem, seg, pend, comprar, fechas, pack, fac: fechas.map(f => dowFactors().f[dowOf(f)])}};
+    return {pid: p.id, p, st, avg, dem, seg, pend, cov, comprar, riesgo, ag, why: {avg, u7: u7.u, dias7: u7.dias, tend: tp, st, cov, dem, seg, pend, comprar, fechas, pack, fac: fechas.map(f => factorDia(f).fac), esp: fechas.map(f => ({f, x: factorDia(f)})).filter(o => o.x.esp)}};
   }).sort((a, b) => ({bad: 0, warn: 1, ok: 2}[a.riesgo] - {bad: 0, warn: 1, ok: 2}[b.riesgo]) || (b.comprar || 0) - (a.comprar || 0));
 }
 function explicarCompra(r) {
@@ -63,7 +82,9 @@ function explicarCompra(r) {
   l.push(["Ventas promedio", w.avg == null ? "sin datos" : fmtN(w.avg, 1) + " /día"], ["Ventas últimos 7 días", w.u7 + " unidades"],
     ["Tendencia", w.tend == null ? "sin datos" : (w.tend >= 1 ? "+" : "") + Math.round((w.tend - 1) * 100) + "%"], ["Inventario actual", r.st == null ? "sin contar" : String(Math.max(0, r.st))],
     ["Cobertura", w.cov == null ? "sin datos" : w.cov === Infinity ? "sin ventas" : fmtN(w.cov, 1) + " días"], ["Demanda estimada", w.dem == null ? "sin datos" : fmtN(w.dem, 0)],
-    ["Stock de seguridad", String(w.seg)], ["Pedidos por llegar", String(w.pend)], ["Cantidad recomendada", w.comprar == null ? "—" : String(w.comprar)]);
+    ["Stock de seguridad", String(w.seg)], ["Pedidos por llegar", String(w.pend)]);
+  for (const o of w.esp || []) l.push([diaCorto(o.f) + " · " + o.x.esp.n, (o.x.esp.tipo === "festivo" ? "Festivo" : o.x.esp.tipo === "temporada" ? "Semana Santa" : "Puente") + ": " + o.x.fuente]);
+  l.push(["Cantidad recomendada", w.comprar == null ? "—" : String(w.comprar)]);
   return l;
 }
 function riesgosStock() {
@@ -241,6 +262,7 @@ function alertas() {
     if (adm) {
       for (const a of anomalias()) out.push({sev: a.sev, tipo: "anomalia", t: a.t, d: a.d, tab: a.ir === "hoy" ? "hoy" : a.ir === "compras" ? "compras" : a.ir === "inventario" ? "inventario" : a.ir === "cierres" ? "reportes" : "reportes", anom: true});
       for (const a of alertasCostos()) out.push({sev: a.tipo === "sube" ? "warn" : "ok", tipo: "costo", t: (a.insumo ? "El costo de " : "El costo de ") + a.p.nombre + (a.tipo === "sube" ? " aumentó " : " bajó ") + Math.round(Math.abs(a.ch) * 100) + "%.", d: a.insumo ? "Costo anterior " + fmt(a.prev) + ", nuevo " + fmt(a.nuevo) + ". Revisa precio o receta." : "Margen de " + pct(a.mPrev) + " a " + pct(a.mNuevo) + ". Revisa precio o receta.", tab: "productos", pid: a.p.id});
+      const pp = proximoPuente(7); if (pp) out.push({sev: "warn", tipo: "compra", t: "Se viene fin de semana largo: " + rangoFechasTxt(pp.fechas) + ".", d: (pp.nombres.join(", ") || "Festivo") + ". Haz el pedido para los " + pp.fechas.length + " días: OLI ya pide " + Math.round(colchonFestivo() * 100) + " % más para esos días.", tab: "compras"});
       const cp = Object.values(col("compras")).filter(x => x.estado === "pedido"); if (cp.length) out.push({sev: "ok", tipo: "compra", t: cp.length + (cp.length === 1 ? " compra pendiente por recibir." : " compras pendientes por recibir."), d: "Registra la llegada para actualizar el inventario.", tab: "compras"});
       const ta = dispositivosEstado().filter(d => !d.mine && !d.online && d.hace > 10 * 60000 && d.hace < 12 * 3600000);
       for (const d of ta) { const cj = cajaDe(S.today, d.dev); if (cj && cajaEstado(cj) === "abierta") out.push({sev: "warn", tipo: "sync", t: d.nombre + " lleva " + Math.round(d.hace / 60000) + " minutos sin sincronizar.", d: "Puede estar sin Internet. Sus ventas aparecerán cuando se reconecte.", tab: "equipo"}); }

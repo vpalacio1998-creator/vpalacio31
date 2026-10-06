@@ -292,7 +292,7 @@ details.help span{display:block;font-weight:500;font-size:13px;line-height:1.35;
 <div class="sheet hidden" id="sheet"><div class="bg"></div><div class="panel" role="dialog" aria-modal="true" id="panel"></div></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script>window.OLI_BUILD="ecaa409b";</script>
+<script>window.OLI_BUILD="a3027885";</script>
 <script>
 (function(){
 "use strict";
@@ -1031,6 +1031,61 @@ function rangoFechas(k) {
 }
 const RANGOS = [["hoy", "Hoy"], ["7", "7 días"], ["30", "30 días"], ["mes", "Mes"], ["custom", "Personalizado"]];
 
+/* >>> 25-festivos.js */
+/* ============ 25 · festivos de Colombia y temporadas ============
+   No es una tabla escrita a mano: se calculan con la Ley 51 de 1983 (los festivos "Emiliani" pasan al lunes siguiente)
+   y la fecha de Pascua, así sirven para cualquier año. Sábado Santo y Domingo de Resurrección NO son festivos legales:
+   se marcan como "temporada" porque en una paletería venden como festivo. Un "puente" es el sábado o domingo pegado a
+   un festivo (por ejemplo, el fin de semana antes de un lunes festivo). */
+function pascua(y) {                                   // algoritmo de Meeus/Jones/Butcher (calendario gregoriano)
+  const a = y % 19, b = Math.floor(y / 100), c = y % 100, d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25), g = Math.floor((b - f + 1) / 3),
+    h = (19 * a + b - d - g + 15) % 30, i = Math.floor(c / 4), k = c % 4, l = (32 + 2 * e + 2 * i - h - k) % 7, m = Math.floor((a + 11 * h + 22 * l) / 451),
+    mes = Math.floor((h + l - 7 * m + 114) / 31), dia = ((h + l - 7 * m + 114) % 31) + 1;
+  return ymd(new Date(y, mes - 1, dia));
+}
+const lunesSig = s => addDays(s, (8 - dowOf(s)) % 7);   // el mismo día si ya es lunes
+const FEST_FIJOS = [["01-01", "Año Nuevo"], ["05-01", "Día del Trabajo"], ["07-20", "Día de la Independencia"], ["08-07", "Batalla de Boyacá"], ["12-08", "Inmaculada Concepción"], ["12-25", "Navidad"]];
+const FEST_LUNES = [["01-06", "Reyes Magos"], ["03-19", "San José"], ["06-29", "San Pedro y San Pablo"], ["08-15", "Asunción de la Virgen"], ["10-12", "Día de la Raza"], ["11-01", "Todos los Santos"], ["11-11", "Independencia de Cartagena"]];
+function festivosAnio(y) {
+  return memo("fest:" + y, () => {
+    const m = {}, add = (f, n, tipo) => { if (m[f]) { m[f].n += " y " + n; if (tipo === "festivo") m[f].tipo = "festivo"; } else m[f] = {f, n, tipo}; }, e = pascua(y);
+    for (const [md, n] of FEST_FIJOS) add(y + "-" + md, n, "festivo");
+    for (const [md, n] of FEST_LUNES) add(lunesSig(y + "-" + md), n, "festivo");
+    add(addDays(e, -3), "Jueves Santo", "festivo"); add(addDays(e, -2), "Viernes Santo", "festivo");
+    add(addDays(e, -1), "Sábado Santo", "temporada"); add(e, "Domingo de Resurrección", "temporada");
+    add(addDays(e, 43), "Ascensión del Señor", "festivo"); add(addDays(e, 64), "Corpus Christi", "festivo"); add(addDays(e, 71), "Sagrado Corazón", "festivo");
+    return m;
+  });
+}
+const festivoDe = f => festivosAnio(Number(f.slice(0, 4)))[f] || null;
+const esFestivo = f => { const x = festivoDe(f); return !!(x && x.tipo === "festivo"); };
+/* ¿el día es especial para la demanda? festivo, temporada (Semana Santa) o puente (fin de semana pegado a un festivo) */
+function diaEspecial(f) {
+  const x = festivoDe(f); if (x) return {tipo: x.tipo, n: x.n};
+  const w = dowOf(f);
+  if (w === 6 && (esFestivo(addDays(f, -1)) || esFestivo(addDays(f, 2)))) return {tipo: "puente", n: "Puente de " + (festivoDe(addDays(f, 2)) || festivoDe(addDays(f, -1))).n};
+  if (w === 0 && (esFestivo(addDays(f, 1)) || esFestivo(addDays(f, -2)))) return {tipo: "puente", n: "Puente de " + (festivoDe(addDays(f, 1)) || festivoDe(addDays(f, -2))).n};
+  return null;
+}
+/* festivos y temporadas entre dos fechas (para la lista de Ajustes) */
+function festivosEntre(a, b) { const out = []; for (let y = Number(a.slice(0, 4)); y <= Number(b.slice(0, 4)); y++) for (const x of Object.values(festivosAnio(y))) if (x.f >= a && x.f <= b) out.push(x); return out.sort((p, q) => p.f < q.f ? -1 : 1); }
+/* el próximo fin de semana largo (sábado + domingo + festivos pegados) que empieza en los próximos `dias` días */
+function proximoPuente(dias = 7) {
+  for (let i = 0; i <= dias; i++) { const f = addDays(S.today, i); if (dowOf(f) !== 6) continue; const fs = bloqueFinde(f); if (fs.length > 2) return {fechas: fs, nombres: [...new Set(fs.map(festivoDe).filter(Boolean).map(x => x.n))]}; }
+  return null;
+}
+/* sábado y domingo más los festivos y días de temporada pegados antes o después (Semana Santa: jueves a domingo) */
+function bloqueFinde(sab) {
+  const out = [sab, addDays(sab, 1)]; let a = addDays(sab, -1), b = addDays(sab, 2);
+  while (a >= S.today && festivoDe(a) && out.length < 6) { out.unshift(a); a = addDays(a, -1); }
+  while (festivoDe(b) && out.length < 6) { out.push(b); b = addDays(b, 1); }
+  return out;
+}
+/* colchón: cuánto más pedir para festivos, temporadas y puentes. Lo decide el administrador (por defecto 20 %). */
+const COLCHON_FESTIVO = 0.2;
+const colchonFestivo = () => { const c = configNeg().colchonFestivo; return c != null ? clamp(c, 0, 1) : COLCHON_FESTIVO; };
+const rangoFechasTxt = fs => fs.length ? (fs.length === 1 ? diaCorto(fs[0]) : diaCorto(fs[0]) + " a " + diaCorto(fs[fs.length - 1])) : "";
+
 /* >>> 30-insights.js */
 /* ============ 30 · inteligencia de negocio ============
    Todo sale de los datos reales (ventas, inventario, costos, caja). Cada recomendación guarda sus números
@@ -1045,7 +1100,7 @@ const unidadesHoy = pid => (unidadesDia()[pid] || {})[S.today] || 0;
 /* ---- factor por día de la semana (a nivel tienda) ---- */
 function dowFactors() {
   return memo("dowf", () => {
-    const t = S.today, dias = diasAbiertos(addDays(t, -56), addDays(t, -1)), by = {};
+    const t = S.today, dias = diasAbiertos(addDays(t, -56), addDays(t, -1)).filter(d => !diaEspecial(d)), by = {};   // los festivos no inflan el factor del lunes
     for (const d of dias) (by[dowOf(d)] = by[dowOf(d)] || []).push(histVentasDia()[d].total);
     const all = dias.map(d => histVentasDia()[d].total), avg = all.length ? sum(all) / all.length : 0, span = dias.length ? diffDays(t, dias[0]) : 0, f = {}, ok = {}, n = {};
     for (let k = 0; k < 7; k++) { const arr = by[k] || []; n[k] = arr.length; ok[k] = arr.length >= 3; f[k] = ok[k] && avg ? (sum(arr) / arr.length) / avg : (span >= 28 && !arr.length ? 0 : 1); if (span >= 28 && !arr.length) ok[k] = true; }
@@ -1057,16 +1112,35 @@ function avgDaily(pid, win = 14) { const dias = histInfo().dias.slice(-win); if 
 function unidadesVent(pid, n, desfase = 0) { const dias = histInfo().dias; const sl = dias.slice(Math.max(0, dias.length - n - desfase), dias.length - desfase); const u = unidadesDia()[pid] || {}; return {u: sum(sl, d => u[d] || 0), dias: sl.length}; }
 function tendencia(pid) { const a = unidadesVent(pid, 7, 0), b = unidadesVent(pid, 7, 7); if (a.dias < 7 || b.dias < 7 || b.u < 5) return null; return a.u / b.u; }
 const tendTienda = () => memo("tt", () => { const a = sum(histInfo().dias.slice(-7), d => histVentasDia()[d].total), b = sum(histInfo().dias.slice(-14, -7), d => histVentasDia()[d].total); return histInfo().n >= 14 && b > 0 ? a / b : null; });
+/* ---- festivos medidos con tus propias ventas: cuánto vende un festivo frente a los días normales de alrededor ---- */
+function factorFestivoMedido() {
+  return memo("ffest", () => {
+    const h = histVentasDia(), rs = [];
+    for (const d of Object.keys(h)) { const e = diaEspecial(d); if (!e || e.tipo === "puente" || d >= S.today) continue;
+      const vec = Object.keys(h).filter(x => x !== d && Math.abs(diffDays(x, d)) <= 28 && !diaEspecial(x)); if (vec.length < 7) continue;
+      const prom = sum(vec, x => h[x].total) / vec.length; if (prom > 0) rs.push(h[d].total / prom); }
+    return rs.length >= 2 ? {f: sum(rs) / rs.length, n: rs.length} : null;
+  });
+}
+/* factor del día: día de la semana (de tus ventas) y, si es festivo, Semana Santa o puente, el colchón para pedir más */
+function factorDia(fecha) {
+  const df = dowFactors(), w = dowOf(fecha), base = df.f[w] != null ? df.f[w] : 1, e = diaEspecial(fecha);
+  if (!e) return {fac: base, esp: null};
+  const cc = colchonFestivo();
+  if (e.tipo === "puente") return {fac: base * (1 + cc), esp: e, fuente: "fin de semana + " + Math.round(cc * 100) + " %"};
+  const fm = factorFestivoMedido(), finde = Math.max(df.f[6] != null ? df.f[6] : 1, df.f[0] != null ? df.f[0] : 1, base);
+  return fm ? {fac: fm.f * (1 + cc), esp: e, fuente: "medido en " + fm.n + " festivos + " + Math.round(cc * 100) + " %"} : {fac: finde * (1 + cc), esp: e, fuente: "como tu mejor día de fin de semana + " + Math.round(cc * 100) + " %"};
+}
 function demandaDia(pid, fecha, parcial) {
   const base = avgDaily(pid); if (base == null) return null;
-  const df = dowFactors(), fac = df.f[dowOf(fecha)] != null ? df.f[dowOf(fecha)] : 1, tp = tendencia(pid), tr = clamp(tp != null ? tp : (tendTienda() != null ? tendTienda() : 1), 0.75, 1.35);
+  const fac = factorDia(fecha).fac, tp = tendencia(pid), tr = clamp(tp != null ? tp : (tendTienda() != null ? tendTienda() : 1), 0.75, 1.35);
   let d = base * fac * tr; if (parcial) d = Math.max(0, d - unidadesHoy(pid)); return d;
 }
 function demanda(pid, fechas) { let s = 0; for (const f of fechas) { const d = demandaDia(pid, f, f === S.today); if (d == null) return null; s += d; } return s; }
 function fechasHorizonte(k) {
   const t = S.today;
   if (k === "hoy") return [t]; if (k === "3") return [t, addDays(t, 1), addDays(t, 2)]; if (k === "7") return Array.from({length: 7}, (_, i) => addDays(t, i));
-  if (k === "finde") { let s = dowOf(t); const sab = s === 6 ? t : s === 0 ? addDays(t, 6) : addDays(t, 6 - s); return [sab, addDays(sab, 1)]; }
+  if (k === "finde") { let s = dowOf(t); const sab = s === 6 ? t : s === 0 ? addDays(t, 6) : addDays(t, 6 - s); return bloqueFinde(sab); }   // con lunes festivo o Semana Santa, el fin de semana es más largo
   if (k === "custom") { const a = S.desde || t, b = S.hasta || addDays(t, 6), out = []; for (let d = a < t ? t : a; d <= b && out.length < 60; d = addDays(d, 1)) out.push(d); return out.length ? out : [t]; }
   return [t];
 }
@@ -1089,7 +1163,7 @@ function recomendarCompra(fechas) {
     const need = dem == null ? null : dem + seg - Math.max(st == null ? 0 : st, 0) - pend;
     let comprar = need == null ? null : Math.max(0, Math.ceil(need)); const pack = p.pack || 1; if (comprar && pack > 1) comprar = Math.ceil(comprar / pack) * pack;
     const ag = agotaEn(p.id), riesgo = st != null && st <= 0 ? "bad" : (ag && ag.dias <= 2) ? "bad" : (ag && ag.dias <= 5) ? "warn" : st != null && st <= (p.min || 0) ? "warn" : "ok";
-    return {pid: p.id, p, st, avg, dem, seg, pend, cov, comprar, riesgo, ag, why: {avg, u7: u7.u, dias7: u7.dias, tend: tp, st, cov, dem, seg, pend, comprar, fechas, pack, fac: fechas.map(f => dowFactors().f[dowOf(f)])}};
+    return {pid: p.id, p, st, avg, dem, seg, pend, cov, comprar, riesgo, ag, why: {avg, u7: u7.u, dias7: u7.dias, tend: tp, st, cov, dem, seg, pend, comprar, fechas, pack, fac: fechas.map(f => factorDia(f).fac), esp: fechas.map(f => ({f, x: factorDia(f)})).filter(o => o.x.esp)}};
   }).sort((a, b) => ({bad: 0, warn: 1, ok: 2}[a.riesgo] - {bad: 0, warn: 1, ok: 2}[b.riesgo]) || (b.comprar || 0) - (a.comprar || 0));
 }
 function explicarCompra(r) {
@@ -1097,7 +1171,9 @@ function explicarCompra(r) {
   l.push(["Ventas promedio", w.avg == null ? "sin datos" : fmtN(w.avg, 1) + " /día"], ["Ventas últimos 7 días", w.u7 + " unidades"],
     ["Tendencia", w.tend == null ? "sin datos" : (w.tend >= 1 ? "+" : "") + Math.round((w.tend - 1) * 100) + "%"], ["Inventario actual", r.st == null ? "sin contar" : String(Math.max(0, r.st))],
     ["Cobertura", w.cov == null ? "sin datos" : w.cov === Infinity ? "sin ventas" : fmtN(w.cov, 1) + " días"], ["Demanda estimada", w.dem == null ? "sin datos" : fmtN(w.dem, 0)],
-    ["Stock de seguridad", String(w.seg)], ["Pedidos por llegar", String(w.pend)], ["Cantidad recomendada", w.comprar == null ? "—" : String(w.comprar)]);
+    ["Stock de seguridad", String(w.seg)], ["Pedidos por llegar", String(w.pend)]);
+  for (const o of w.esp || []) l.push([diaCorto(o.f) + " · " + o.x.esp.n, (o.x.esp.tipo === "festivo" ? "Festivo" : o.x.esp.tipo === "temporada" ? "Semana Santa" : "Puente") + ": " + o.x.fuente]);
+  l.push(["Cantidad recomendada", w.comprar == null ? "—" : String(w.comprar)]);
   return l;
 }
 function riesgosStock() {
@@ -1275,6 +1351,7 @@ function alertas() {
     if (adm) {
       for (const a of anomalias()) out.push({sev: a.sev, tipo: "anomalia", t: a.t, d: a.d, tab: a.ir === "hoy" ? "hoy" : a.ir === "compras" ? "compras" : a.ir === "inventario" ? "inventario" : a.ir === "cierres" ? "reportes" : "reportes", anom: true});
       for (const a of alertasCostos()) out.push({sev: a.tipo === "sube" ? "warn" : "ok", tipo: "costo", t: (a.insumo ? "El costo de " : "El costo de ") + a.p.nombre + (a.tipo === "sube" ? " aumentó " : " bajó ") + Math.round(Math.abs(a.ch) * 100) + "%.", d: a.insumo ? "Costo anterior " + fmt(a.prev) + ", nuevo " + fmt(a.nuevo) + ". Revisa precio o receta." : "Margen de " + pct(a.mPrev) + " a " + pct(a.mNuevo) + ". Revisa precio o receta.", tab: "productos", pid: a.p.id});
+      const pp = proximoPuente(7); if (pp) out.push({sev: "warn", tipo: "compra", t: "Se viene fin de semana largo: " + rangoFechasTxt(pp.fechas) + ".", d: (pp.nombres.join(", ") || "Festivo") + ". Haz el pedido para los " + pp.fechas.length + " días: OLI ya pide " + Math.round(colchonFestivo() * 100) + " % más para esos días.", tab: "compras"});
       const cp = Object.values(col("compras")).filter(x => x.estado === "pedido"); if (cp.length) out.push({sev: "ok", tipo: "compra", t: cp.length + (cp.length === 1 ? " compra pendiente por recibir." : " compras pendientes por recibir."), d: "Registra la llegada para actualizar el inventario.", tab: "compras"});
       const ta = dispositivosEstado().filter(d => !d.mine && !d.online && d.hace > 10 * 60000 && d.hace < 12 * 3600000);
       for (const d of ta) { const cj = cajaDe(S.today, d.dev); if (cj && cajaEstado(cj) === "abierta") out.push({sev: "warn", tipo: "sync", t: d.nombre + " lleva " + Math.round(d.hace / 60000) + " minutos sin sincronizar.", d: "Puede estar sin Internet. Sus ventas aparecerán cuando se reconecte.", tab: "equipo"}); }
@@ -2193,7 +2270,7 @@ ACT.resolver = (el, d) => { const p = prod(d.id), q = Number(d.q) || 1; abrir(()
   <button class="btn pri xl wide" style="margin-top:14px" data-act="doResolver" data-id="${esc(d.id)}">CREAR PEDIDO</button>`); };
 ACT.doResolver = async (el, d) => { const q = num($("#rs-q").value), p = prod(d.id), prov = $("#rs-prov").value.trim(); S.ultimoProv = prov;
   await guardar(async () => { await crearCompra({proveedor: prov, lineas: [{pid: d.id, q, costo: costoActual(d.id), ok: false}]}); cerrar(); irA("compras"); }, "Pedido creado: " + q + " de " + p.nombre); };
-ACT.porque = (el, d) => abrirExplicacion(d.id, "3");
+ACT.porque = (el, d) => abrirExplicacion(d.id, d.h || "3");
 function bDinero() {
   const t = S.today, f = finanzas(t, t); let cmp = comparacion(S.comp); const modo = S.comp; if (cmp.delta == null && modo === "dow") { const alt = comparacion("7"); if (alt.delta != null) cmp = alt; }
   const m = metaHoy(), est = estimarCierre(), up = cmp.delta != null && cmp.delta >= 0;
@@ -2348,7 +2425,7 @@ function abrirExplicacion(pid, hk) {
   const fechas = fechasHorizonte(hk || S.horiz), r = recomendarCompra(fechas).find(x => x.pid === pid); if (!r) return;
   abrir(() => `${head("¿Por qué " + (r.comprar ? "comprar " + r.comprar : "no comprar") + " " + r.p.nombre + "?")}
     <div class="card flat">${explicarCompra(r).map(([a, b]) => `<div class="row" style="padding:8px 0"><span>${esc(a)}</span><b>${esc(b)}</b></div>`).join("")}</div>
-    <div class="notice ok"><b>Cómo se calcula</b><br>Demanda = ventas promedio × factor del día de la semana × tendencia.<br>A comprar = demanda + stock de seguridad − inventario − pedidos por llegar.</div>
+    <div class="notice ok"><b>Cómo se calcula</b><br>Demanda = ventas promedio × factor del día de la semana × tendencia.<br>Festivos, Semana Santa y puentes: se calculan como tu mejor día de fin de semana (o como tus festivos anteriores, cuando ya hay al menos 2) y se pide ${Math.round(colchonFestivo() * 100)} % más.<br>A comprar = demanda + stock de seguridad − inventario − pedidos por llegar.</div>
     <p class="small muted">Fuente: ventas de los últimos 14 días con venta, inventario actual y tendencia de los últimos 7 días. ${r.avg == null ? "Aún no hay suficientes días con ventas para calcular." : ""}</p>
     <button class="btn pri wide" data-act="cerrar">Entendido</button>`);
 }
@@ -2363,13 +2440,21 @@ function vPedir() {
   const total = sum(rows.filter(r => S.sel.has(r.pid)), r => (costoActual(r.pid) || 0) * r.comprar), uds = sum(rows.filter(r => S.sel.has(r.pid)), r => r.comprar);
   return `<div class="seg" style="margin-bottom:12px">${HORIZONTES.map(([k, l]) => `<button data-act="horiz" data-v="${k}" aria-pressed="${S.horiz === k}">${l}</button>`).join("")}</div>
   ${S.horiz === "custom" ? `<div class="split" style="margin-bottom:10px"><div><label class="f" for="f-desde">Desde</label><input class="in" type="date" id="f-desde" value="${esc(S.desde || S.today)}" data-act-change="fechas"></div><div><label class="f" for="f-hasta">Hasta</label><input class="in" type="date" id="f-hasta" value="${esc(S.hasta || addDays(S.today, 6))}" data-act-change="fechas"></div></div>` : ""}
+  ${avisoFestivos(fechas)}
   ${sinHist ? `<div class="notice">Todavía hay pocos días de ventas (${hi.n} de ${MIN_DIAS}). Las cantidades usan lo que hay y pueden cambiar mucho. Con más historia serán más confiables.</div>` : ""}
   ${rows.length ? "" : vacio("inventario", "No hay productos con inventario", "Activa el control de inventario en tus productos.")}
   ${rows.map(r => `<div class="card" style="padding:14px"><div style="display:flex;gap:12px;align-items:center"><label class="check" style="flex:none;min-height:48px"><input type="checkbox" data-act-change="selCompra" data-id="${esc(r.pid)}" ${S.sel.has(r.pid) ? "checked" : ""} ${r.comprar > 0 ? "" : "disabled"} aria-label="Incluir ${esc(r.p.nombre)}"></label>
     <div style="flex:1;min-width:0"><b>${esc(r.p.nombre)}</b><div class="small muted"><span class="sev ${r.riesgo === "ok" ? "" : r.riesgo}" style="display:inline-block;margin-right:6px"></span>${r.riesgo === "bad" ? "Urgente" : r.riesgo === "warn" ? "Pronto" : "Normal"} · hay ${r.st == null ? "?" : Math.max(0, r.st)}${r.cov != null && r.cov !== Infinity ? " · alcanza " + fmtN(r.cov, 1) + " días" : ""}</div></div>
     <div style="text-align:right"><div class="small muted">Comprar</div><div class="big" style="font-size:30px">${r.comprar == null ? "–" : r.comprar}</div></div></div>
-    <button class="btn ghost sm" style="margin-top:8px" data-act="porque" data-id="${esc(r.pid)}">¿Por qué?</button></div>`).join("")}
+    <button class="btn ghost sm" style="margin-top:8px" data-act="porque" data-id="${esc(r.pid)}" data-h="${esc(S.horiz)}">¿Por qué?</button></div>`).join("")}
   ${rows.length ? `<div class="card" style="position:sticky;bottom:${isWide() ? 12 : 72}px;box-shadow:0 8px 24px rgba(0,0,0,.12)"><div class="row" style="padding-top:0"><div><b>${S.sel.size} productos · ${uds} unidades</b><div class="small muted">${total ? "Costo estimado " + fmt(total) : "Sin costo registrado"}</div></div></div><button class="btn pri xl wide" data-act="generarPedido" ${S.sel.size ? "" : "disabled"}>${ic("compras", 20)} GENERAR PEDIDO</button></div>` : ""}`;
+}
+/* aviso de festivos: los que caen en las fechas del pedido y, si no están, el próximo fin de semana largo */
+function avisoFestivos(fechas) {
+  const esp = fechas.map(f => ({f, e: diaEspecial(f)})).filter(o => o.e), pp = proximoPuente(10), pc = Math.round(colchonFestivo() * 100);
+  if (esp.length) return `<div class="notice warn"><b>Incluye ${esp.length === 1 ? "un día especial" : esp.length + " días especiales"}:</b> ${esp.map(o => esc(diaCorto(o.f) + " (" + o.e.n + ")")).join(", ")}. Para esos días OLI pide ${pc} % más.</div>`;
+  if (pp && !pp.fechas.every(f => fechas.includes(f))) return `<div class="notice">Se viene fin de semana largo: <b>${esc(rangoFechasTxt(pp.fechas))}</b> (${esc(pp.nombres.join(", "))}). <button class="btn ghost sm" data-act="horiz" data-v="finde">Pedir para esos ${pp.fechas.length} días</button></div>`;
+  return "";
 }
 ACT.horiz = (el, d) => { S.horiz = d.v; S.sel = null; draw(); };
 document.addEventListener("change", e => {
@@ -2389,7 +2474,9 @@ ACT.doPedido = async () => {
 };
 function vFinde() {
   const pf = prepararFinde(), r = pf.rows.filter(x => x.comprar > 0 || x.riesgoF !== "ok");
-  return `<div class="card"><div class="small muted">${pf.fechas.map(diaCorto).join(" y ")}</div><h3 style="margin:2px 0 8px">${pf.enRiesgo.length ? pf.enRiesgo.length + " productos presentan riesgo de agotamiento durante el fin de semana." : "El inventario cubre la demanda esperada del fin de semana."}</h3>
+  const largo = pf.fechas.length > 2, nom = [...new Set(pf.fechas.map(festivoDe).filter(Boolean).map(x => x.n))];
+  return `<div class="card"><div class="small muted">${pf.fechas.map(diaCorto).join(", ")}${largo ? " · fin de semana largo" : ""}</div><h3 style="margin:2px 0 8px">${pf.enRiesgo.length ? pf.enRiesgo.length + " productos presentan riesgo de agotamiento durante el fin de semana." : "El inventario cubre la demanda esperada del fin de semana."}</h3>
+    ${largo ? `<div class="notice warn">${esc(nom.join(", "))}: OLI calcula los ${pf.fechas.length} días y pide ${Math.round(colchonFestivo() * 100)} % más para los festivos y el puente.</div>` : ""}
     <div class="kpis" style="grid-template-columns:repeat(2,1fr)"><div class="kpi"><span>Ventas esperadas</span><b>${fmtK(pf.ventasEsp)}</b></div><div class="kpi"><span>Unidades a comprar</span><b>${sum(pf.rows, x => x.comprar || 0)}</b></div></div>
     ${pf.basico ? `<div class="notice">Estimación básica: aún no hay 3 sábados y 3 domingos con ventas. Mejora con el tiempo.</div>` : `<p class="xs muted">Basado en ${dowFactors().n[6]} sábados y ${dowFactors().n[0]} domingos anteriores, ventas recientes y stock de seguridad.</p>`}</div>
   ${r.length ? r.map(x => `<div class="card" style="padding:14px"><div class="row" style="padding:0;border:0"><b>${esc(x.p.nombre)}</b><span class="pill ${x.riesgoF === "bad" ? "bad" : x.riesgoF === "warn" ? "warn" : "ok"}">${x.riesgoF === "bad" ? "Riesgo alto" : x.riesgoF === "warn" ? "Ajustado" : "Sin riesgo"}</span></div>
@@ -2652,11 +2739,21 @@ VIEWS.ajustes = () => {
     <label class="check" style="margin-top:10px"><input type="checkbox" id="aj-mov" ${(col("meta").permisos || {}).movimientosEmpleado !== false && c.movimientosEmpleado !== false ? "checked" : ""}> Los empleados pueden sacar dinero de caja o pagar cosas pequeñas</label>
     <button class="btn pri" style="margin-top:12px" data-act="guardarAjustes">GUARDAR</button></div>
   <div class="card"><h3>Gastos fijos del mes</h3><p class="small muted" style="margin-top:-4px">Arriendo, nómina, servicios. Se usan para el punto de equilibrio y las proyecciones.</p>${gastosFijosPlan().map(g => `<div class="row"><span>${esc(g.n)}</span><b>${fmt(g.v)}</b></div>`).join("") || '<p class="muted">Sin gastos fijos definidos.</p>'}<div class="row"><b>Total</b><b>${fmt(totalFijos())}</b></div><button class="btn ghost sm" style="margin-top:8px" data-act="editFijos">Editar gastos fijos</button></div>
+  <div class="card"><h3>Festivos y temporadas</h3><p class="small muted" style="margin-top:-4px">OLI conoce los festivos de Colombia (incluida la Semana Santa) y los puentes. En esos días pide más para no quedarte sin producto.</p>
+    <label class="f" for="aj-col">Pedir más en festivos, Semana Santa y puentes (%) ${ayuda("Se suma a la demanda de esos días. Cuando ya tengas al menos 2 festivos con ventas, OLI usa lo que de verdad vendiste en ellos y le suma este porcentaje.")}</label><input class="in plain" id="aj-col" inputmode="numeric" value="${Math.round(colchonFestivo() * 100)}">
+    <div class="btns" style="margin-top:10px"><button class="btn pri" data-act="guardarColchon">GUARDAR</button><button class="btn ghost" data-act="verFestivos">Ver festivos de los próximos 2 años</button></div></div>
   <div class="card"><h3>Apariencia</h3><div class="seg">${[["auto", "Automática"], ["light", "Clara"], ["dark", "Oscura"]].map(([k, l]) => `<button data-act="tema" data-v="${k}" aria-pressed="${temaActual() === k}">${l}</button>`).join("")}</div></div>
   <div class="card"><h3>Datos de demostración</h3><p class="small muted" style="margin-top:-4px">Para explorar OLI con un mes completo de ventas de ejemplo. No se mezcla con tu información real: puedes borrarlos cuando quieras.</p>${demo ? '<div class="notice">Estás usando datos de demostración.</div>' : ""}<div class="btns"><button class="btn ghost" data-act="cargarDemo">Cargar datos de demostración</button>${demo ? '<button class="btn danger" data-act="borrarDemo">Borrar datos de demostración</button>' : ""}</div></div>
   <div class="card"><h3>Estado de OLI</h3><div class="row"><span>Productos</span><b>${n}</b></div><div class="row"><span>Almacenamiento en este equipo</span><b>${IDB.ok ? "IndexedDB" : "Respaldo básico"}</b></div><div class="row"><span>Conexión</span><b>${esc(connInfo().txt)}</b></div><div class="row"><span>Este equipo</span><b>${esc(DEV.nombre || DEV.id)}</b></div><div class="row"><span>Versión</span><b>${esc(versionTxt())}</b></div><div class="btns" style="margin-top:8px"><button class="btn ghost sm" data-act="ayuda">${ic("info", 16)} ¿Necesitas ayuda?</button><button class="btn ghost sm" data-act="verEnvio">Estado de envío</button><button class="btn ghost sm" data-act="acerca">Acerca de OLI</button></div><p class="xs muted" style="margin:10px 0 0">${esc(BRAND.texto)}</p></div>`;
 };
 ACT.guardarAjustes = async () => { await guardar(async () => { const mov = $("#aj-mov").checked; await put("meta", "permisos", Object.assign({}, col("meta").permisos || {}, {movimientosEmpleado: mov})); return guardarConfig({nombre: $("#aj-nom").value.trim() || "OLI", margenObjetivo: clamp(num($("#aj-mo").value) / 100, .05, .95), movimientosEmpleado: mov}); }, "Guardado"); };
+ACT.guardarColchon = async () => { const v = num($("#aj-col").value); if (!(v >= 0 && v <= 100)) { toast("Escribe un porcentaje entre 0 y 100.", true); return; } await guardar(() => guardarConfig({colchonFestivo: v / 100}), "Guardado"); };
+ACT.verFestivos = () => {
+  const ls = festivosEntre(S.today, addDays(S.today, 730)); let anio = "";
+  abrir(() => head("Festivos y temporadas") + `<p class="muted" style="margin-top:0">Desde hoy hasta ${diaCorto(addDays(S.today, 730))}. Calculados con la ley de festivos de Colombia (Ley 51 de 1983) y la fecha de Pascua. Sábado Santo y Domingo de Resurrección no son festivos legales, pero OLI los trata como días de mucha venta.</p>` +
+    ls.map(x => { const y = x.f.slice(0, 4), h = y !== anio ? `<h3 style="margin:14px 0 4px">${y}</h3>` : ""; anio = y; return h + `<div class="row"><span>${esc(diaLargo(x.f))}</span><b>${esc(x.n)}${x.tipo === "temporada" ? ' <span class="pill">temporada</span>' : ""}</b></div>`; }).join("") +
+    `<button class="btn pri wide" style="margin-top:14px" data-act="cerrar">Entendido</button>`);
+};
 ACT.editFijos = () => { S.fijosDraft = deepClone(gastosFijosPlan()); abrir(fijosSheet); };
 const fijosSheet = () => head("Gastos fijos del mes") + S.fijosDraft.map((g, i) => `<div class="split" style="margin-bottom:8px"><input class="in plain" data-fn="${i}" value="${esc(g.n)}" placeholder="Concepto"><input class="in money" data-fv="${i}" inputmode="numeric" value="${g.v ? fmt(g.v) : ""}" placeholder="$0"></div>`).join("") + `<button class="btn ghost sm" data-act="addFijo">${ic("plus", 16)} Agregar otro</button><button class="btn pri xl wide" style="margin-top:14px" data-act="doFijos">GUARDAR</button>`;
 ACT.addFijo = () => { leerFijos(); S.fijosDraft.push({n: "", v: 0}); redrawSheet(true); };

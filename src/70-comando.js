@@ -47,7 +47,7 @@ ACT.resolver = (el, d) => { const p = prod(d.id), q = Number(d.q) || 1; abrir(()
   <button class="btn pri xl wide" style="margin-top:14px" data-act="doResolver" data-id="${esc(d.id)}">CREAR PEDIDO</button>`); };
 ACT.doResolver = async (el, d) => { const q = num($("#rs-q").value), p = prod(d.id), prov = $("#rs-prov").value.trim(); S.ultimoProv = prov;
   await guardar(async () => { await crearCompra({proveedor: prov, lineas: [{pid: d.id, q, costo: costoActual(d.id), ok: false}]}); cerrar(); irA("compras"); }, "Pedido creado: " + q + " de " + p.nombre); };
-ACT.porque = (el, d) => abrirExplicacion(d.id, "3");
+ACT.porque = (el, d) => abrirExplicacion(d.id, d.h || "3");
 function bDinero() {
   const t = S.today, f = finanzas(t, t); let cmp = comparacion(S.comp); const modo = S.comp; if (cmp.delta == null && modo === "dow") { const alt = comparacion("7"); if (alt.delta != null) cmp = alt; }
   const m = metaHoy(), est = estimarCierre(), up = cmp.delta != null && cmp.delta >= 0;
