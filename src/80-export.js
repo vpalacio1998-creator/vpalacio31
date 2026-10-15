@@ -45,7 +45,7 @@ function filtrosTxt(F) {
 const hayFiltro = F => !!(F && (F.cat || F.pid || F.uid || F.m || F.dev));
 function datosInforme(a, b, F) {
   F = Object.assign({cat: "", pid: "", uid: "", m: "", dev: ""}, F || {});
-  const ventas = filasVentas(a, b, F); for (const r of ventas) { const c = costoUnit(r.pid, r.t); r.costo = c == null ? null : Math.round(c * r.cantidad); }
+  const ventas = filasVentas(a, b, F); for (const r of ventas) { const c = r.costoU !== undefined ? r.costoU : costoUnit(r.pid, r.t); r.costo = c == null ? null : Math.round(c * r.cantidad); }
   const ok = ventas.filter(r => r.estado === "Confirmada"), ids = uniq(ok.map(r => r.id)), tot = sum(ok, r => r.total), desc = sum(ok, r => r.descuento), costo = sum(ok, r => r.costo || 0), bruto = tot + desc;
   const anuladas = uniq(ventas.filter(r => r.estado === "Anulada").map(r => r.id)), anuladoTot = sum(ventas.filter(r => r.estado === "Anulada"), r => r.total);
   const gastos = filasGastos(a, b), gastosOp = hayFiltro(F) ? null : sum(gastos.filter(g => g.categoria !== BASE_COSTO), g => g.total), bruta = tot - costo, util = gastosOp == null ? null : bruta - gastosOp;

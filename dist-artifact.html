@@ -292,7 +292,7 @@ details.help span{display:block;font-weight:500;font-size:13px;line-height:1.35;
 <div class="sheet hidden" id="sheet"><div class="bg"></div><div class="panel" role="dialog" aria-modal="true" id="panel"></div></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script>window.OLI_BUILD="21ba48c2";</script>
+<script>window.OLI_BUILD="4faaaa10";</script>
 <script>
 (function(){
 "use strict";
@@ -455,16 +455,16 @@ const SEDE = "principal";
 const RULES = [
   {path: "", read: "interact", write: "admin"},
   {path: "ventas", write: "interact"}, {path: "cajas", write: "interact"}, {path: "mermas", write: "interact"}, {path: "checklists", write: "interact"},
-  {path: "anulaciones", write: "interact"}, {path: "confirmaciones", write: "interact"}, {path: "demandaperdida", write: "interact"}, {path: "dispositivos", write: "interact"},
+  {path: "anulaciones", write: "interact"}, {path: "confirmaciones", write: "interact"}, {path: "demandaperdida", write: "interact"}, {path: "dispositivos", write: "interact"}, {path: "cajashelado", write: "interact"},
   {path: "costos", read: "admin", write: "admin"}, {path: "recetas", read: "admin", write: "admin"}, {path: "gastos", read: "admin", write: "admin"},
   {path: "compras", read: "admin", write: "admin"}, {path: "config", read: "admin", write: "admin"}, {path: "terceros", read: "admin", write: "admin"}, {path: "movinv", read: "interact", write: "admin"}, {path: "periodos", read: "admin", write: "admin"}, {path: "docelec", read: "admin", write: "admin"},
   {path: "audit", read: "admin", write: "admin"}, {path: "audit/{self}", read: "interact", write: "interact"},     // cada persona escribe su auditoría; solo el administrador la lee toda
   {path: "data/users", read: "admin", write: "admin"}, {path: "data/users/{self}", read: "interact", write: "interact"}
 ];
 const LV = {view: 1, interact: 2, admin: 3, owner: 4};
-const SHARED_COLS = ["productos", "stock", "movinv", "ventas", "cajas", "mermas", "checklists", "anulaciones", "confirmaciones", "demandaperdida", "dispositivos", "reaperturas", "meta"];
+const SHARED_COLS = ["productos", "stock", "movinv", "ventas", "cajas", "mermas", "checklists", "anulaciones", "confirmaciones", "demandaperdida", "dispositivos", "reaperturas", "meta", "cajashelado"];
 const ADMIN_COLS = ["costos", "recetas", "gastos", "compras", "config", "terceros", "periodos", "docelec"];
-const RANGED = new Set(["ventas", "cajas", "mermas", "checklists", "anulaciones", "confirmaciones", "demandaperdida", "reaperturas", "movinv"]);
+const RANGED = new Set(["ventas", "cajas", "mermas", "checklists", "anulaciones", "confirmaciones", "demandaperdida", "reaperturas", "movinv", "cajashelado"]);
 const HIST_DIAS = 95;
 
 const DS = {lastRemote: 0, mode: "loading", dbh: null, uid: null, isAdmin: false, canWrite: true, c: {}, v: 0, ready: {}, error: null, fromCache: true, localRole: "admin", subs: [], remoteSeen: false};
@@ -651,7 +651,7 @@ function persistCol(name) {
 }
 /* integridad: ventas, movimientos de caja, cierres, mermas y anulaciones nunca se borran. Si un documento del servidor
    llega con menos elementos de los que este equipo ya vio (otra ventana o alguien lo sobrescribió), el administrador lo restaura uniendo por id. */
-const UNION = {ventas: ["ventas"], cajas: ["movs", "cierres"], mermas: ["items"], anulaciones: ["items"], confirmaciones: ["items"], reaperturas: ["items"], movinv: ["items"], demandaperdida: ["items"]};
+const UNION = {ventas: ["ventas"], cajas: ["movs", "cierres"], mermas: ["items"], anulaciones: ["items"], confirmaciones: ["items"], reaperturas: ["items"], movinv: ["items"], demandaperdida: ["items"], cajashelado: ["items"]};
 function restaurarPerdidos(name, map) {
   if (!UNION[name] || !DS.isAdmin || DS.mode !== "db") return;                                   // también en la primera carga: si el servidor perdió algo, lo guardado en este equipo lo restaura
   const prev = DS.c[name] || {}, fix = [];
@@ -952,17 +952,35 @@ const ventasAll = () => memo("ventasAll", () => {
 });
 const ventasOk = () => memo("ventasOk", () => ventasAll().filter(v => !v.anulada));
 const ventasEn = (a, b) => ventasOk().filter(v => v.fecha >= a && v.fecha <= b);
-function lineasExp(v) { const out = []; for (const it of (v.items || [])) { const p = prod(it.pid); if (p && p.combo) for (const c of p.combo) out.push({pid: c.pid, q: c.q * it.q, t: v.t}); else out.push({pid: it.pid, q: it.q, t: v.t}); } return out; }
+/* qué inventario gasta una línea (de una venta o del pedido): los combos se abren en sus componentes; un cono gasta su barquillo y su cucurucho o vaso.
+   Las bolas de helado no se descuentan una a una: se miden por caja de cada sabor (ver 63-conos). */
+function consumoLinea(it) {
+  if (Array.isArray(it.gasta)) return it.gasta;                       // lo que se guardó al vender (no cambia si después se edita el producto)
+  const p = prod(it.pid);
+  if (p && p.combo) return p.combo.map(c => ({pid: c.pid, q: c.q * it.q}));
+  if (p && p.cono) return gastoCono(p, it.pres, it.q);
+  return [{pid: it.pid, q: it.q}];
+}
+const gastoCono = (p, pres, q) => [p.cono.barquillo, pres === "vaso" ? p.cono.vaso : p.cono.cucurucho].filter(Boolean).map(pid => ({pid, q}));
+function lineasExp(v) {
+  const out = [];
+  for (const it of (v.items || [])) {
+    for (const x of consumoLinea(it)) out.push({pid: x.pid, q: x.q, t: v.t});
+    if (Array.isArray(it.sab)) for (const s of it.sab) out.push({pid: s, q: it.q / bolasCaja(), t: v.t, porCaja: true});   // bolas en fracción de caja: para costo y consumo, no para el inventario (ese baja al abrir cada caja)
+  }
+  return out;
+}
 
 /* ---------- inventario ---------- */
 const mermasAll = () => memo("mermasAll", () => { const out = []; for (const [docId, d] of Object.entries(col("mermas"))) for (const m of (d.items || [])) out.push(Object.assign({fecha: d.fecha, dev: d.dev, docId}, m)); return out.sort((a, b) => a.t - b.t); });
 const stockDocs = () => col("stock");
 const stockMap = () => memo("stockMap", () => {
-  const sold = {}, mer = {}, del = {};
-  for (const v of ventasOk()) for (const l of lineasExp(v)) (sold[l.pid] = sold[l.pid] || []).push(l);
+  const sold = {}, mer = {}, del = {}, ab = {};
+  for (const e of eventosHelado()) if (e.motivo !== "inicio") (ab[e.sabor] = ab[e.sabor] || []).push(e);   // abrir una caja de helado resta una caja cerrada
+  for (const v of ventasOk()) for (const l of lineasExp(v)) if (!l.porCaja) (sold[l.pid] = sold[l.pid] || []).push(l);
   for (const m of mermasAll()) (mer[m.pid] = mer[m.pid] || []).push(m);
   for (const d of Object.values(col("movinv"))) for (const x of (d.items || [])) if (x.delta) (del[x.pid] = del[x.pid] || []).push(x);   // entradas, compras, producción, consumo
-  const out = {}, base = id => { const s = stockDocs()[id]; if (!s || s.base == null) return null; let q = s.base; const t0 = s.t || 0; for (const x of (sold[id] || [])) if (x.t > t0) q -= x.q; for (const x of (mer[id] || [])) if (x.t > t0) q -= x.q; for (const x of (del[id] || [])) if (x.t > t0) q += x.q; return Math.round(q * 1000) / 1000; };
+  const out = {}, base = id => { const s = stockDocs()[id]; if (!s || s.base == null) return null; let q = s.base; const t0 = s.t || 0; for (const x of (sold[id] || [])) if (x.t > t0) q -= x.q; for (const x of (mer[id] || [])) if (x.t > t0) q -= x.q; for (const x of (del[id] || [])) if (x.t > t0) q += x.q; for (const x of (ab[id] || [])) if (x.t > t0) q -= 1; return Math.round(q * 1000) / 1000; };
   for (const p of prods()) if (p.controla !== false && !p.combo) out[p.id] = base(p.id);
   for (const p of prods()) if (p.combo) { let m = Infinity; for (const c of p.combo) { const s = out[c.pid]; if (s == null) { m = null; break; } m = Math.min(m, Math.floor(s / c.q)); } out[p.id] = m === Infinity ? null : m; }
   return out;
@@ -1023,7 +1041,7 @@ function rentabilidad(a, b) {
   const rows = {};
   for (const v of ventasEn(a, b)) for (const it of (v.items || [])) {
     const p = prod(it.pid), r = rows[it.pid] = rows[it.pid] || {pid: it.pid, n: (p && p.nombre) || it.n || "?", cat: p ? p.cat : "Otros", uds: 0, ing: 0, costo: 0, sinCosto: 0};
-    r.uds += it.q; r.ing += it.p * it.q; const c = costoUnit(it.pid, v.t); if (c == null) r.sinCosto += it.q; else r.costo += c * it.q;
+    r.uds += it.q; r.ing += it.p * it.q; const c = costoItem(it, v.t); if (c == null) r.sinCosto += it.q; else r.costo += c * it.q;
   }
   return Object.values(rows).map(r => Object.assign(r, {util: r.ing - r.costo, margen: r.ing ? (r.ing - r.costo) / r.ing : NaN}));
 }
@@ -1374,6 +1392,7 @@ function alertas() {
       for (const a of anomalias()) out.push({sev: a.sev, tipo: "anomalia", t: a.t, d: a.d, tab: a.ir === "hoy" ? "hoy" : a.ir === "compras" ? "compras" : a.ir === "inventario" ? "inventario" : a.ir === "cierres" ? "reportes" : "reportes", anom: true});
       for (const a of alertasCostos()) out.push({sev: a.tipo === "sube" ? "warn" : "ok", tipo: "costo", t: (a.insumo ? "El costo de " : "El costo de ") + a.p.nombre + (a.tipo === "sube" ? " aumentó " : " bajó ") + Math.round(Math.abs(a.ch) * 100) + "%.", d: a.insumo ? "Costo anterior " + fmt(a.prev) + ", nuevo " + fmt(a.nuevo) + ". Revisa precio o receta." : "Margen de " + pct(a.mPrev) + " a " + pct(a.mNuevo) + ". Revisa precio o receta.", tab: "productos", pid: a.p.id});
       const pp = proximoPuente(7); if (pp) out.push({sev: "warn", tipo: "compra", t: "Se viene fin de semana largo: " + rangoFechasTxt(pp.fechas) + ".", d: (pp.nombres.join(", ") || "Festivo") + ". Haz el pedido para los " + pp.fechas.length + " días: OLI ya pide " + Math.round(colchonFestivo() * 100) + " % más para esos días.", tab: "compras"});
+      for (const a of alertasHelado()) out.push({sev: a.sev, tipo: "helado", t: a.t, d: a.d, tab: "inventario"});
       const cp = Object.values(col("compras")).filter(x => x.estado === "pedido"); if (cp.length) out.push({sev: "ok", tipo: "compra", t: cp.length + (cp.length === 1 ? " compra pendiente por recibir." : " compras pendientes por recibir."), d: "Registra la llegada para actualizar el inventario.", tab: "compras"});
       const ta = dispositivosEstado().filter(d => !d.mine && !d.online && d.hace > 10 * 60000 && d.hace < 12 * 3600000);
       for (const d of ta) { const cj = cajaDe(S.today, d.dev); if (cj && cajaEstado(cj) === "abierta") out.push({sev: "warn", tipo: "sync", t: d.nombre + " lleva " + Math.round(d.hace / 60000) + " minutos sin sincronizar.", d: "Puede estar sin Internet. Sus ventas aparecerán cuando se reconecte.", tab: "equipo"}); }
@@ -1582,12 +1601,13 @@ const cantCarrito = () => sum(S.cart, c => c.q);
 const enCarrito = pid => sum(S.cart.filter(c => c.pid === pid), c => c.q);
 // demanda real del pedido por producto que lleva inventario (los combos se abren en sus componentes)
 function demandaPedido(cart) {
-  const m = {}; for (const c of cart) { const p = prod(c.pid); if (!p) continue; if (p.combo) for (const x of p.combo) m[x.pid] = (m[x.pid] || 0) + x.q * c.q; else m[c.pid] = (m[c.pid] || 0) + c.q; }
+  const m = {}; for (const c of cart) { if (!prod(c.pid)) continue; for (const x of consumoLinea(c)) m[x.pid] = (m[x.pid] || 0) + x.q; }
   return m;
 }
 function faltante(cart) {   // primer producto cuyo inventario no alcanza para el pedido, o null
   const d = demandaPedido(cart);
-  for (const [pid, q] of Object.entries(d)) { const p = prod(pid); if (!p || p.controla === false) continue; const st = stockDe(pid); if (st != null && q > Math.max(0, st)) return {p, st: Math.max(0, st)}; }
+  // un insumo (barquillo, vaso…) avisa cuando se acaba, pero no frena la venta
+  for (const [pid, q] of Object.entries(d)) { const p = prod(pid); if (!p || p.controla === false || p.tipo === "insumo") continue; const st = stockDe(pid); if (st != null && q > Math.max(0, st)) return {p, st: Math.max(0, st)}; }
   return null;
 }
 function agregarAlCarrito(p) {
@@ -1596,9 +1616,10 @@ function agregarAlCarrito(p) {
   const f = faltante(prueba); if (f) { toast("Solo hay " + f.st + " de " + f.p.nombre + ".", true); return false; }
   const ex = S.cart.find(c => c.pid === p.id); if (ex) ex.q++; else S.cart.push({pid: p.id, n: p.nombre, q: 1, p: p.precio}); return true;
 }
-function cambiarCantidad(pid, d) {
-  const c = S.cart.find(x => x.pid === pid); if (!c) return; const p = prod(pid);
-  if (d > 0 && p) { const prueba = S.cart.map(x => Object.assign({}, x, x.pid === pid ? {q: x.q + d} : {})), f = faltante(prueba); if (f) { toast("No hay más inventario de " + f.p.nombre + ".", true); return; } }
+const claveLinea = c => c.k || c.pid;            // un cono con sabores y presentación es una línea propia (clave k); lo demás se agrupa por producto
+function cambiarCantidad(key, d) {
+  const c = S.cart.find(x => claveLinea(x) === key); if (!c) return; const p = prod(c.pid);
+  if (d > 0 && p) { const prueba = S.cart.map(x => Object.assign({}, x, x === c ? {q: x.q + d} : {})), f = faltante(prueba); if (f) { toast("No hay más inventario de " + f.p.nombre + ".", true); return; } }
   c.q += d; if (c.q <= 0) S.cart = S.cart.filter(x => x !== c);
 }
 /* impuesto de la línea: se toma del tratamiento configurado en el producto. Si no está validado, no se asume. */
@@ -1618,7 +1639,7 @@ async function registrarVenta(opts) {
   const falta = faltante(S.cart); if (falta) throw new Error("No alcanza el inventario de " + falta.p.nombre + " (hay " + falta.st + ").");
   const sub = totalCarrito(), desc = clamp(Math.round(opts.desc || 0), 0, sub), total = sub - desc, seq = await nextSeq();
   let resto = desc;   // el descuento se reparte por línea y la suma cuadra exacto con el total
-  const items = S.cart.map((c, k) => { const p = prod(c.pid), bruto = c.p * c.q, d = k === S.cart.length - 1 ? resto : Math.round(sub ? desc * bruto / sub : 0); resto -= d; const i = impLinea(p, bruto - d); return {pid: c.pid, n: c.n, q: c.q, p: c.p, d, imp: {t: i.t, r: i.r, base: i.base, v: i.imp}}; });
+  const items = S.cart.map((c, k) => { const p = prod(c.pid), bruto = c.p * c.q, d = k === S.cart.length - 1 ? resto : Math.round(sub ? desc * bruto / sub : 0); resto -= d; const i = impLinea(p, bruto - d); return Object.assign({pid: c.pid, n: c.n, q: c.q, p: c.p, d, imp: {t: i.t, r: i.r, base: i.base, v: i.imp}}, c.sab ? {sab: c.sab.slice(), pres: c.pres, det: c.det, gasta: consumoLinea(c)} : {}); });
   const t = Date.now(), fecha = ymd(new Date(t));
   const venta = {id: DEV.id + "-" + t.toString(36) + "-" + seq, n: seq, num: (DEV.nombre || DEV.id) + " #" + seq, t, fecha, uid: uidActual(), dev: DEV.id, m: opts.m, total, sub, desc, recibido: opts.m === "Efectivo" ? (opts.recibido || total) : total, cambio: opts.m === "Efectivo" ? Math.max(0, (opts.recibido || total) - total) : 0, ref: opts.ref || "", cliente: opts.cliente || null, estado: "confirmada"};
   venta.items = items;
@@ -1949,11 +1970,12 @@ ACT.tile = (el, d) => {
   const p = prod(d.id); if (!p) return; if (!DS.canWrite) { toast("Tienes acceso de solo lectura.", true); return; }
   if (cajaEstado(cajaHoy()) === "cerrada") { toast("La caja de hoy está cerrada.", true); return; }
   if (estadoProd(p).k === "agotado") { toast(p.nombre + " está agotado.", true); if (!perdidaRecien[p.id] || Date.now() - perdidaRecien[p.id] > 30000) { perdidaRecien[p.id] = Date.now(); anotarDemandaPerdida(p.id).catch(() => {}); } return; }
+  if (p.cono) { abrirCono(p); return; }                                       // los conos piden sabor(es) y cucurucho o vaso
   if (agregarAlCarrito(p)) { saveCart(); draw(); }
 };
 function lineasPedido() {   // nombre arriba (ancho completo) y cantidades abajo: se lee bien también en el panel angosto de la tablet
-  return S.cart.map(c => `<div class="pline"><div class="pl-top"><div class="l"><b>${esc(c.n)}</b><div class="small muted">${fmt(c.p)} c/u</div></div><button class="btn ghost sm" data-act="quitar" data-id="${esc(c.pid)}" aria-label="Quitar ${esc(c.n)} del pedido">${ic("x", 16)}</button></div>
-    <div class="pl-bot"><div class="qty"><button data-act="menos" data-id="${esc(c.pid)}" aria-label="Quitar una unidad de ${esc(c.n)}" style="width:44px;height:44px">−</button><b style="font-size:18px">${c.q}</b><button data-act="mas1" data-id="${esc(c.pid)}" aria-label="Agregar una unidad de ${esc(c.n)}" style="width:44px;height:44px">+</button></div><b class="pl-tot">${fmt(c.p * c.q)}</b></div></div>`).join("");
+  return S.cart.map(c => `<div class="pline"><div class="pl-top"><div class="l"><b>${esc(c.n)}</b>${c.det ? `<div class="small" style="font-weight:600">${esc(c.det)}</div>` : ""}<div class="small muted">${fmt(c.p)} c/u</div></div><button class="btn ghost sm" data-act="quitar" data-id="${esc(claveLinea(c))}" aria-label="Quitar ${esc(c.n)} del pedido">${ic("x", 16)}</button></div>
+    <div class="pl-bot"><div class="qty"><button data-act="menos" data-id="${esc(claveLinea(c))}" aria-label="Quitar una unidad de ${esc(c.n)}" style="width:44px;height:44px">−</button><b style="font-size:18px">${c.q}</b><button data-act="mas1" data-id="${esc(claveLinea(c))}" aria-label="Agregar una unidad de ${esc(c.n)}" style="width:44px;height:44px">+</button></div><b class="pl-tot">${fmt(c.p * c.q)}</b></div></div>`).join("");
 }
 function pedidoHTML(modal) {
   if (!S.cart.length) return `<div class="tk-empty">${ic("paleta", 48)}<b style="color:var(--ink)">Tu pedido está vacío</b><p style="margin:0">Toca un producto para empezar.</p></div>`;
@@ -1969,7 +1991,7 @@ function cartbarHTML() {
 ACT.verPedido = () => abrir(() => head("Tu pedido", "Seguir vendiendo") + `<div style="display:flex;flex-direction:column">${pedidoHTML(true)}</div>`);
 ACT.menos = (el, d) => { cambiarCantidad(d.id, -1); saveCart(); draw(); redrawSheet(true); if (!S.cart.length) cerrar(); };
 ACT.mas1 = (el, d) => { cambiarCantidad(d.id, 1); saveCart(); draw(); redrawSheet(true); };
-ACT.quitar = (el, d) => { S.cart = S.cart.filter(c => c.pid !== d.id); saveCart(); draw(); redrawSheet(true); if (!S.cart.length) cerrar(); };
+ACT.quitar = (el, d) => { S.cart = S.cart.filter(c => claveLinea(c) !== d.id); saveCart(); draw(); redrawSheet(true); if (!S.cart.length) cerrar(); };
 ACT.vaciar = async () => { if (!S.cart.length) return; if (cantCarrito() >= 3 && !(await confirmar({titulo: "¿Cancelar la venta?", texto: "Se borrará todo el pedido.", si: "Sí, cancelar", no: "No, seguir", peligro: true}))) return; S.cart = []; saveCart(); cerrar(); draw(); };
 
 /* ---------- cobrar ---------- */
@@ -2109,12 +2131,13 @@ ACT.reabrir = async (el, d) => { const c = d.id ? cajasAll().find(x => x.id === 
 /* ============ 62 · inventario completo ============
    Empleado: consulta, alertas y pérdidas. Administrador: entradas, conteos, movimientos (kardex) con saldo, insumos y valor.
    Las ventas descuentan solas; cada cambio manual deja registro con antes y después. */
-const TIPO_MOV = {venta: "Venta", perdida: "Pérdida", entrada: "Llegó mercancía", compra: "Compra recibida", conteo: "Conteo", produccion: "Producción", consumo: "Consumo de insumo", rebase: "Corte automático"};
+const TIPO_MOV = {aperturaCaja: "Se abrió una caja", inicioCaja: "Empezó a contarse la caja abierta", venta: "Venta", perdida: "Pérdida", entrada: "Llegó mercancía", compra: "Compra recibida", conteo: "Conteo", produccion: "Producción", consumo: "Consumo de insumo", rebase: "Corte automático"};
 S.invTab = "resumen"; S.invEstado = "todos"; S.invCat = "Todas"; S.movRango = "7"; S.movPid = "";
 function movimientosInv(pid) { return memo("movs:" + (pid || "*"), () => movsCalc(pid || null)); }
 function movsCalc(pid) {
   const out = [];
-  for (const v of ventasOk()) for (const l of lineasExp(v)) if (!pid || l.pid === pid) out.push({t: v.t, fecha: v.fecha, pid: l.pid, tipo: "venta", q: -l.q, det: v.num || "", uid: v.uid});
+  for (const v of ventasOk()) for (const l of lineasExp(v)) if (!l.porCaja && (!pid || l.pid === pid)) out.push({t: v.t, fecha: v.fecha, pid: l.pid, tipo: "venta", q: -l.q, det: v.num || "", uid: v.uid});
+  for (const e of eventosHelado()) if (!pid || e.sabor === pid) out.push({t: e.t, fecha: e.fecha, pid: e.sabor, tipo: e.motivo === "inicio" ? "inicioCaja" : "aperturaCaja", q: e.motivo === "inicio" ? 0 : -1, det: e.motivo === "danada" ? "la anterior se dañó" + (e.obs ? " · " + e.obs : "") : "", uid: e.uid});
   for (const m of mermasAll()) if (!pid || m.pid === pid) out.push({t: m.t, fecha: m.fecha, pid: m.pid, tipo: "perdida", q: -m.q, det: m.motivo || "", uid: m.uid});
   const conMov = new Set();
   for (const d of Object.values(col("movinv"))) for (const x of (d.items || [])) { if (x.compra) conMov.add(x.compra); if (!pid || x.pid === pid) out.push({t: x.t, fecha: ymd(new Date(x.t)), pid: x.pid, tipo: x.tipo, q: x.q, delta: !!x.delta, antes: x.antes, despues: x.despues, det: (x.motivo || "") + (x.ref ? " · " + x.ref : ""), uid: x.uid}); }
@@ -2165,6 +2188,7 @@ function resumenInventario() {
   const filas = ps.map(p => ({p, e: estadoProd(p), a: consumoDia(p.id), cov: cobertura(p.id), ag: agotaEn(p.id)})).filter(x => x.e.k === "agotado" || x.e.k === "bajo" || (x.ag && x.ag.dias <= 5)).sort((x, y) => (x.e.k === "agotado" ? -1 : 0) - (y.e.k === "agotado" ? -1 : 0) || (x.cov == null ? 99 : x.cov) - (y.cov == null ? 99 : y.cov));
   return `<div class="kpis"><div class="kpi"><span>${ic("x", 13)} Agotados</span><b style="color:${cnt("agotado") ? "var(--danger)" : "inherit"}">${cnt("agotado")}</b></div><div class="kpi"><span>${ic("alerta", 13)} Quedan pocos</span><b>${cnt("bajo")}</b></div><div class="kpi"><span>${ic("ok", 13)} Normales</span><b>${cnt("disponible")}</b></div>${adm ? `<div class="kpi"><span>Valor del inventario</span><b>${fmtK(valor)}</b><small>a costo</small></div>` : `<div class="kpi"><span>Sin contar</span><b>${cnt("sin")}</b></div>`}</div>
     ${rh.length ? `<div class="alertrow" style="border-color:var(--warn)"><span class="sev warn"></span><div><b>${esc(rh[0].p.nombre)} probablemente se agotará antes de las ${hora(rh[0].hora)}.</b><span>Quedan ${Math.max(0, rh[0].st)} y se venden ~${fmtN(rh[0].r, 1)} por hora.</span></div></div>` : ""}
+    ${cardHelados()}
     <div class="card"><h3>Alertas de inventario</h3>${rs.length ? rs.slice(0, 8).map(r => `<div class="row" style="align-items:flex-start;cursor:pointer" data-act="verProd" data-id="${esc(r.pid)}"><span class="sev ${r.sev}" style="margin-top:7px"></span><div class="l" style="flex:1"><b>${esc(r.t)}</b><div class="small muted">${esc(r.d || "")}</div></div></div>`).join("") : '<p class="muted" style="margin:0">Todo el inventario está en orden.</p>'}</div>
     ${filas.length ? `<div class="card"><h3>Riesgo de agotarse</h3>${tablaVista([{h: "Producto", f: x => esc(x.p.nombre)}, {h: "Hay", n: 1, f: x => x.e.st == null ? "–" : Math.max(0, x.e.st)}, {h: "Se vende/día", n: 1, f: x => x.a == null ? "–" : fmtN(x.a, 1)}, {h: "Alcanza", n: 1, f: x => x.e.k === "agotado" ? "0" : x.cov == null ? "–" : x.cov === Infinity ? "∞" : fmtN(x.cov, 1) + " d"}, {h: "Riesgo", f: x => `<span class="pill ${x.e.k === "agotado" || (x.ag && x.ag.dias <= 1) ? "bad" : "warn"}">${x.e.k === "agotado" ? "Agotado" : x.ag && x.ag.dias <= 1 ? "Alto" : "Medio"}</span>`}], filas)}${adm ? '<button class="btn pri" style="margin-top:4px" data-act="ir" data-r="compras">Ver qué pedir</button>' : '<p class="small muted" style="margin:6px 0 0">Avísale al administrador para hacer el pedido.</p>'}</div>` : ""}`;
 }
@@ -2243,6 +2267,147 @@ ACT.merma = (el, d) => { S.mermaPid = (d && d.id) || ""; abrir(() => {
 ACT.mermaProd = (el, d) => { S.mermaPid = d.id; document.querySelectorAll("#panel .tile").forEach(t => t.classList.toggle("inc", t.dataset.id === d.id)); };
 ACT.doMerma = async () => { if (!S.mermaPid) { toast("Elige el producto.", true); return; } const mot = selVal("mm-mot"); if (!mot) { toast("Elige por qué fue.", true); return; }
   await guardar(async () => { await registrarMerma(S.mermaPid, numDec($("#mm-q").value), mot, ($("#mm-obs") || {value: ""}).value.trim()); cerrar(); }, "Pérdida anotada"); };
+
+/* >>> 63-conos.js */
+/* ============ 63 · conos de helado: sabores, cucurucho o vaso, y rendimiento de cada caja ============
+   Cono sencillo (1 bola) o doble (2 bolas, pueden ser de sabores distintos). Cada cono gasta 1 barquillo y 1 cucurucho o 1 vaso (ver consumoLinea).
+   La crema viene en cajas y hay UNA caja abierta por sabor. Cuando se acaba, la empleada marca "Cambié la caja": eso resta una caja cerrada
+   del inventario y cierra la cuenta de bolas de la caja anterior. El administrador ve cuántas bolas dio cada caja: lo esperado lo dice el
+   proveedor (30 por defecto) y fuera del rango aceptable (27 a 33 por defecto, se cambia en Ajustes) OLI avisa. No se asume fraude: también
+   puede ser el tamaño de la bola o un sabor mal marcado al vender. */
+const CONO_DEF = {bolasCaja: 30, min: 27, max: 33};
+const confConos = () => Object.assign({}, CONO_DEF, configNeg().conos || {});
+const bolasCaja = () => confConos().bolasCaja || CONO_DEF.bolasCaja;
+const saboresHelado = () => prods().filter(p => p.sabor && p.activo !== false).sort((a, b) => (a.orden || 0) - (b.orden || 0) || a.nombre.localeCompare(b.nombre, "es"));
+const nombreSabor = pid => ((prod(pid) || {}).nombre || pid).replace(/^Helado\s+/i, "");
+const PRES_TXT = {cucurucho: "cucurucho", vaso: "vaso"};
+const eventosHelado = () => memo("evHel", () => { const out = []; for (const [docId, d] of Object.entries(col("cajashelado"))) for (const x of (d.items || [])) if (x && x.sabor) out.push(Object.assign({fecha: d.fecha, dev: d.dev, docId}, x)); return out.sort((a, b) => a.t - b.t); });
+const bolasVendidas = () => memo("bolasV", () => { const m = {}; for (const v of ventasOk()) for (const it of (v.items || [])) if (Array.isArray(it.sab)) for (const s of it.sab) (m[s] = m[s] || []).push({t: v.t, q: it.q}); return m; });
+
+/* cada caja de un sabor va de un cambio de caja al siguiente; la última sigue abierta */
+function rendimientoCajas() {
+  return memo("rendCajas", () => {
+    const c = confConos(), ev = eventosHelado(), bv = bolasVendidas(), out = {};
+    for (const s of uniq(ev.map(e => e.sabor))) {
+      const es = ev.filter(e => e.sabor === s), ls = bv[s] || [], cajas = [];
+      for (let i = 0; i < es.length; i++) {
+        const desde = es[i].t, fin = es[i + 1] || null, hasta = fin ? fin.t : null, bolas = sum(ls.filter(x => x.t >= desde && (hasta == null || x.t < hasta)), x => x.q);
+        const estado = fin && fin.motivo === "danada" ? "danada" : bolas > c.max ? "muchas" : !fin ? "abierta" : bolas < c.min ? "pocas" : "ok";
+        cajas.push({sabor: s, desde, hasta, bolas, estado, abierta: !fin, apertura: es[i], cierre: fin});
+      }
+      out[s] = cajas;
+    }
+    return out;
+  });
+}
+const cajasCerradasHelado = () => Object.values(rendimientoCajas()).flat().filter(k => !k.abierta).sort((a, b) => b.hasta - a.hasta);
+const ESTADO_CAJA = {ok: ["ok", "Dentro del rango"], pocas: ["bad", "Pocas bolas"], muchas: ["warn", "Muchas bolas"], danada: ["", "Dañada (pérdida)"], abierta: ["", "Abierta"]};
+const pillCaja = k => `<span class="pill ${ESTADO_CAJA[k.estado][0]}">${ESTADO_CAJA[k.estado][1]}</span>`;
+function alertasHelado() {
+  const c = confConos(), out = [], desde = Date.now() - 14 * 864e5, rango = `lo esperado es ${c.bolasCaja}; aceptable ${c.min} a ${c.max}`;
+  const nota = " También pasa si al vender se marca un sabor distinto al que se sirvió.";
+  for (const k of Object.values(rendimientoCajas()).flat()) {
+    const n = nombreSabor(k.sabor);
+    if (k.estado === "pocas" && k.hasta >= desde) out.push({sev: "bad", sabor: k.sabor, t: `La caja de ${n} dio ${k.bolas} bolas (${rango}).`, d: "Se están sirviendo bolas más grandes o se perdió producto: es plata que se pierde." + nota});
+    else if (k.estado === "muchas" && (k.abierta || k.hasta >= desde)) out.push({sev: "warn", sabor: k.sabor, t: k.abierta ? `La caja abierta de ${n} ya va en ${k.bolas} bolas (máximo aceptable ${c.max}).` : `La caja de ${n} dio ${k.bolas} bolas (${rango}).`, d: "Se están sirviendo bolas más pequeñas de lo que se le ofrece al cliente." + nota});
+  }
+  return out;
+}
+/* una caja abierta que se dañó es pérdida: lo que faltaba por servir, en fracción de caja */
+function perdidasHelado(a, b) {
+  return cajasCerradasHelado().filter(k => k.estado === "danada" && k.cierre.fecha >= a && k.cierre.fecha <= b).map(k => {
+    const frac = Math.max(0, Math.round((bolasCaja() - k.bolas) / bolasCaja() * 100) / 100), c = costoUnit(k.sabor, k.hasta);
+    return {producto: "Helado " + nombreSabor(k.sabor) + " (caja abierta)", fecha: k.cierre.fecha, cantidad: frac, unidad: "cajas", costo: c, total: c == null ? null : Math.round(c * frac), motivo: "Caja dañada o derretida", empleado: empNombre(k.cierre.uid), obs: k.cierre.obs || ""};
+  });
+}
+/* costo de una unidad de una línea vendida: un cono suma barquillo, cucurucho o vaso y sus bolas (costo de la caja ÷ bolas por caja) */
+function costoItem(it, t) {
+  if (!Array.isArray(it.sab)) return costoUnit(it.pid, t);
+  let s = 0; const q = it.q || 1;
+  for (const x of consumoLinea(it)) { const c = costoUnit(x.pid, t); if (c == null) return null; s += c * x.q / q; }
+  for (const sb of it.sab) { const c = costoUnit(sb, t); if (c == null) return null; s += c / bolasCaja(); }
+  return Math.round(s);
+}
+
+/* ---------- vender un cono: sabor(es) y cucurucho o vaso ---------- */
+S.cono = null;
+function abrirCono(p) {
+  if (!saboresHelado().length) { toast("Todavía no hay sabores de helado. " + (esAdmin() ? "Créalos en Productos." : "Pídele al administrador que los agregue."), true); return; }
+  S.cono = {pid: p.id, sab: [], pres: "cucurucho"}; abrir(conoSheet);
+}
+function conoSheet() {
+  const c = S.cono, p = c && prod(c.pid); if (!p || !p.cono) return head("Cono") + "";
+  const n = p.cono.bolas || 1, falta = n - c.sab.length;
+  return head(p.nombre + " · " + fmt(p.precio)) + `<p class="muted" style="margin-top:0">${n === 1 ? "Elige el sabor." : "Elige 2 sabores: pueden ser iguales o distintos."}</p>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">${Array.from({length: n}, (_, i) => `<span class="pill ${c.sab[i] ? "ok" : ""}" style="font-size:15px">${n > 1 ? (i + 1) + ". " : ""}${c.sab[i] ? esc(nombreSabor(c.sab[i])) : "—"}</span>`).join("")}${c.sab.length ? '<button class="btn ghost sm" data-act="conoBorrar">Borrar</button>' : ""}</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px">${saboresHelado().map(s => `<button class="btn ${c.sab.includes(s.id) ? "pri" : "ghost"}" style="min-height:56px" data-act="conoSabor" data-id="${esc(s.id)}" ${falta <= 0 ? "disabled" : ""}>${esc(nombreSabor(s.id))}</button>`).join("")}</div>
+    <label class="f">¿Cómo lo lleva?</label><div class="seg">${Object.entries(PRES_TXT).map(([k, l]) => `<button data-act="conoPres" data-v="${k}" aria-pressed="${c.pres === k}">${cap1(l)}</button>`).join("")}</div>
+    <button class="btn pri xl wide" style="margin-top:14px" data-act="conoAgregar" ${falta > 0 ? "disabled" : ""}>${falta > 0 ? (n === 1 ? "ELIGE EL SABOR" : falta === 1 ? "ELIGE 1 SABOR MÁS" : "ELIGE 2 SABORES") : "AGREGAR AL PEDIDO"}</button>
+    <button class="btn ghost wide" style="margin-top:8px" data-act="cambioCaja">¿Se acabó una caja? Marcar cambio de caja</button>`;
+}
+ACT.conoSabor = (el, d) => { const c = S.cono, p = c && prod(c.pid); if (!p || c.sab.length >= (p.cono.bolas || 1)) return; c.sab.push(d.id); redrawSheet(true); };
+ACT.conoBorrar = () => { if (S.cono) { S.cono.sab = []; redrawSheet(true); } };
+ACT.conoPres = (el, d) => { if (S.cono && PRES_TXT[d.v]) { S.cono.pres = d.v; redrawSheet(true); } };
+ACT.conoAgregar = () => {
+  const c = S.cono, p = c && prod(c.pid); if (!p || c.sab.length !== (p.cono.bolas || 1)) return;
+  if (agregarCono(p, c.sab, c.pres)) { S.cono = null; saveCart(); cerrar(); draw(); }
+};
+function agregarCono(p, sab, pres) {
+  const ss = sab.slice().sort(), k = p.id + "|" + ss.join("+") + "|" + pres, det = ss.map(nombreSabor).join(" + ") + " · " + PRES_TXT[pres];
+  const prueba = S.cart.map(c => Object.assign({}, c)), ex0 = prueba.find(c => claveLinea(c) === k); if (ex0) ex0.q++; else prueba.push({k, pid: p.id, q: 1, sab: ss, pres});
+  const f = faltante(prueba); if (f) { toast("Solo hay " + f.st + " de " + f.p.nombre + ".", true); return false; }
+  const ex = S.cart.find(c => claveLinea(c) === k); if (ex) ex.q++; else S.cart.push({k, pid: p.id, n: p.nombre, q: 1, p: p.precio, sab: ss, pres, det}); return true;
+}
+
+/* ---------- cambio de caja (empleada o administrador) ---------- */
+S.cambio = null;
+ACT.cambioCaja = (el, d) => {
+  if (!saboresHelado().length) { toast("Todavía no hay sabores de helado.", true); return; }
+  const s = d && d.id && prod(d.id) && prod(d.id).sabor ? d.id : ""; S.cambio = {sabor: s, motivo: s ? motivoInicial(s) : "acabo"}; abrir(cambioSheet);
+};
+const motivoInicial = s => eventosHelado().some(e => e.sabor === s) ? "acabo" : "inicio";
+function cambioSheet() {
+  const c = S.cambio || {}, medido = c.sabor && eventosHelado().some(e => e.sabor === c.sabor);
+  const ops = !c.sabor ? [] : medido ? [["acabo", "Se acabó y puse una caja nueva"], ["danada", "Se dañó o se derritió y puse una caja nueva"]] : [["inicio", "Es la caja que ya estaba abierta: empezar a contar desde ahora"], ["acabo", "Abrí una caja nueva"]];
+  return head("Cambio de caja de helado") + `<p class="muted" style="margin-top:0">Márcalo cuando pongas una caja nueva. OLI descuenta una caja cerrada y cuenta cuántas bolas dio la anterior.</p>
+    <label class="f">¿De qué sabor?</label><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px">${saboresHelado().map(s => `<button class="btn ${c.sabor === s.id ? "pri" : "ghost"}" style="min-height:52px" data-act="cambioSabor" data-id="${esc(s.id)}">${esc(nombreSabor(s.id))}</button>`).join("")}</div>
+    ${ops.length ? `<label class="f">¿Qué pasó?</label><div style="display:flex;flex-direction:column;gap:8px">${ops.map(([k, l]) => `<button class="btn ${c.motivo === k ? "pri" : "ghost"}" style="justify-content:flex-start;text-align:left" data-act="cambioMotivo" data-v="${k}" aria-pressed="${c.motivo === k}">${l}</button>`).join("")}</div>` : ""}
+    ${c.motivo === "danada" ? `<label class="f" for="cc-obs">Cuéntanos qué pasó (opcional)</label><input class="in plain" id="cc-obs" placeholder="Ej: se derritió por un corte de luz">` : ""}
+    <button class="btn pri xl wide" style="margin-top:14px" data-act="doCambioCaja" ${c.sabor ? "" : "disabled"}>GUARDAR</button>`;
+}
+ACT.cambioSabor = (el, d) => { if (!S.cambio) return; S.cambio.sabor = d.id; S.cambio.motivo = motivoInicial(d.id); redrawSheet(true); };
+ACT.cambioMotivo = (el, d) => { if (S.cambio && ["acabo", "danada", "inicio"].includes(d.v)) { S.cambio.motivo = d.v; redrawSheet(true); } };
+ACT.doCambioCaja = async () => {
+  const c = S.cambio; if (!c || !c.sabor) { toast("Elige el sabor.", true); return; }
+  const obs = (($("#cc-obs") || {}).value || "").trim(), antes = (rendimientoCajas()[c.sabor] || []).find(k => k.abierta);
+  await guardar(async () => { await registrarCambioCaja(c.sabor, c.motivo, obs); S.cambio = null; cerrar(); },
+    c.motivo === "inicio" ? "Listo: desde ahora se cuentan las bolas de " + nombreSabor(c.sabor) : "Caja de " + nombreSabor(c.sabor) + " cambiada" + (esAdmin() && antes && c.motivo === "acabo" ? " · la anterior dio " + antes.bolas + " bolas" : ""));
+};
+async function registrarCambioCaja(sabor, motivo, obs) {
+  const p = prod(sabor); if (!p || !p.sabor) throw new Error("Elige el sabor.");
+  if (!["acabo", "danada", "inicio"].includes(motivo)) throw new Error("Elige qué pasó.");
+  const f = S.today, id = cajaId(f), cur = col("cajashelado")[id] || {fecha: f, dev: DEV.id, items: []};
+  await put("cajashelado", id, Object.assign({}, cur, {fecha: f, dev: DEV.id, items: (cur.items || []).concat([{id: newId(), t: Date.now(), sabor, motivo, obs: obs || "", uid: uidActual()}])}));
+  audit("CAMBIO_CAJA_HELADO", sabor, nombreSabor(sabor) + " · " + ({acabo: "se acabó", danada: "dañada o derretida", inicio: "empieza a contarse"}[motivo]) + (obs ? " · " + obs : ""));
+}
+
+/* ---------- tarjeta en Inventario y detalle para el administrador ---------- */
+function cardHelados() {
+  const ss = saboresHelado(); if (!ss.length) return "";
+  const adm = esAdmin(), r = rendimientoCajas(), c = confConos();
+  return `<div class="card"><div class="row" style="border:0;padding-top:0;align-items:center"><h3 style="margin:0">Cajas de helado</h3><button class="btn pri sm" data-act="cambioCaja">Cambié una caja</button></div>
+    ${ss.map(s => { const cs = r[s.id] || [], ab = cs.find(k => k.abierta), st = stockDe(s.id), ult = cs.filter(k => !k.abierta).slice(-1)[0];
+      return `<div class="row" style="padding:9px 0;align-items:flex-start"><div class="l" style="flex:1"><b>${esc(nombreSabor(s.id))}</b>
+        <div class="small muted">${st == null ? "Cajas cerradas: sin contar" : "Cajas cerradas: " + fmtN(Math.max(0, st), 0)} · ${ab ? "abierta desde " + diaCorto(ymd(new Date(ab.desde))) + " " + hora(ab.desde) + (adm ? " · lleva " + ab.bolas + (ab.bolas === 1 ? " bola" : " bolas") : "") : "aún no se cuenta"}</div>
+        ${adm && (ult || (ab && ab.estado === "muchas")) ? `<div class="small" style="margin-top:3px">${ab && ab.estado === "muchas" ? pillCaja(ab) + " la abierta ya pasó de " + c.max : pillCaja(ult) + " última caja: " + ult.bolas + " bolas"}</div>` : ""}</div></div>`; }).join("")}
+    ${adm ? `<p class="xs muted" style="margin:8px 0 0">Esperado ${c.bolasCaja} bolas por caja · aceptable ${c.min} a ${c.max} (se cambia en Ajustes).</p><button class="btn ghost sm" style="margin-top:8px" data-act="verRendimiento">Ver todas las cajas</button>` : ""}</div>`;
+}
+ACT.verRendimiento = () => abrir(() => {
+  const ks = cajasCerradasHelado().slice(0, 60), c = confConos();
+  return head("Rendimiento de cajas de helado") + `<p class="muted" style="margin-top:0">Esperado ${c.bolasCaja} bolas por caja; aceptable de ${c.min} a ${c.max}. Una caja dañada no cuenta para el rendimiento: va a pérdidas.</p>
+    ${ks.length ? `<div class="card flat">${ks.map(k => { pedirNombres([k.cierre.uid]); return `<div class="row" style="align-items:flex-start;padding:9px 0"><div class="l" style="flex:1"><b>${esc(nombreSabor(k.sabor))} · ${k.bolas} bolas</b><div class="small muted">${diaCorto(ymd(new Date(k.desde)))} ${hora(k.desde)} → ${diaCorto(ymd(new Date(k.hasta)))} ${hora(k.hasta)} · cambió ${esc(nombreDe(k.cierre.uid) || "—")}${k.cierre.obs ? " · " + esc(k.cierre.obs) : ""}</div></div>${pillCaja(k)}</div>`; }).join("")}</div>` : '<p class="muted">Todavía no se ha terminado ninguna caja. Cuando se marque el primer cambio, aparecerá aquí cuántas bolas dio.</p>'}
+    <button class="btn pri wide" style="margin-top:12px" data-act="cerrar">Entendido</button>`;
+});
 
 /* >>> 70-comando.js */
 /* ============ 70 · CENTRO DE COMANDO OLI (inicio del administrador) ============
@@ -2580,6 +2745,7 @@ ACT.editProd = (el, d) => {
       <div><label class="f" for="pr-s">Reserva de seguridad ${ayuda("Unidades extra que quieres tener siempre por si se vende más de lo esperado. OLI las suma al recomendar compras.")}</label><input class="in plain" id="pr-s" inputmode="numeric" value="${p && p.seg != null ? p.seg : ""}" placeholder="0"></div></div>
       <label class="f">Tipo</label>${sel("pr-tipo", ["Producto que vendo", "Insumo"], p && p.tipo === "insumo" ? "Insumo" : "Producto que vendo")}
       <label class="check" style="margin-top:10px"><input type="checkbox" id="pr-ctl" ${!p || p.controla !== false ? "checked" : ""}> Llevar inventario de este producto</label>
+      <label class="check" style="margin-top:6px"><input type="checkbox" id="pr-sabor" ${p && p.sabor ? "checked" : ""}> Es un sabor de helado para conos (insumo que se cuenta por cajas) ${ayuda("Aparece al vender un cono sencillo o doble. La empleada marca cuándo cambia la caja y OLI mide cuántas bolas dio cada caja.")}</label>
       <label class="check"><input type="checkbox" id="pr-act" ${!p || p.activo !== false ? "checked" : ""}> Disponible para vender</label>
       <label class="f" for="pr-foto">Foto (opcional)</label><input class="in plain" id="pr-foto" type="file" accept="image/*" data-act-change="fotoProd"><div id="pr-prev" class="small muted">${S.prodImg ? "Foto cargada" : "Sin foto: OLI dibuja el producto con su color."}</div>
       <div class="split"><div><label class="f" for="pr-pack">Viene en cajas de</label><input class="in plain" id="pr-pack" inputmode="numeric" value="${p && p.pack ? p.pack : ""}" placeholder="1"></div><div><label class="f" for="pr-max">Cantidad ideal (insumos)</label><input class="in plain" id="pr-max" inputmode="numeric" value="${p && p.max ? p.max : ""}"></div></div>
@@ -2606,6 +2772,7 @@ ACT.doGuardarProd = async (el, d) => {
   const impT = (IMP_TIPOS.find(x => x[1] === selVal("pr-imp")) || IMP_TIPOS[0])[0], tar = numDec($("#pr-tar").value) / 100, ant = d.id ? prod(d.id) : null;
   const dat = {nombre: n, cat: selVal("pr-cat") || "Otros", tipo: selVal("pr-tipo") === "Insumo" ? "insumo" : "terminado", precio: pr, unidad: $("#pr-u").value.trim() || "und", min: $("#pr-m").value.trim() === "" ? 3 : num($("#pr-m").value), seg: num($("#pr-s").value), pack: num($("#pr-pack").value) || 1, max: num($("#pr-max").value) || null,
     controla: $("#pr-ctl").checked, activo: $("#pr-act").checked, imp: {t: impT, r: tar || 0, cuenta: $("#pr-cta").value.trim()}};
+  if ($("#pr-sabor") && $("#pr-sabor").checked) { if (dat.tipo !== "insumo") { toast("Un sabor de helado debe ser de tipo “Insumo”.", true); return; } dat.sabor = true; dat.controla = true; } else dat.sabor = false;
   if (S.prodImg) dat.foto = S.prodImg; else delete dat.foto; if (ant && ant.combo) dat.combo = ant.combo;
   await guardar(async () => {
     const costoRaw = $("#pr-c").value.trim(), id = await guardarProducto(d.id, dat, costoRaw ? num(costoRaw) : null);
@@ -2763,6 +2930,9 @@ VIEWS.ajustes = () => {
     <label class="check" style="margin-top:10px"><input type="checkbox" id="aj-mov" ${(col("meta").permisos || {}).movimientosEmpleado !== false && c.movimientosEmpleado !== false ? "checked" : ""}> Los empleados pueden sacar dinero de caja o pagar cosas pequeñas</label>
     <button class="btn pri" style="margin-top:12px" data-act="guardarAjustes">GUARDAR</button></div>
   <div class="card"><h3>Gastos fijos del mes</h3><p class="small muted" style="margin-top:-4px">Arriendo, nómina, servicios. Se usan para el punto de equilibrio y las proyecciones.</p>${gastosFijosPlan().map(g => `<div class="row"><span>${esc(g.n)}</span><b>${fmt(g.v)}</b></div>`).join("") || '<p class="muted">Sin gastos fijos definidos.</p>'}<div class="row"><b>Total</b><b>${fmt(totalFijos())}</b></div><button class="btn ghost sm" style="margin-top:8px" data-act="editFijos">Editar gastos fijos</button></div>
+  ${saboresHelado().length ? `<div class="card"><h3>Conos de helado</h3><p class="small muted" style="margin-top:-4px">Cuántas bolas debe dar cada caja de crema (lo dice el proveedor) y desde cuántas OLI avisa. Fuera del rango aceptable, OLI te avisa: pocas bolas puede ser bola grande o producto perdido; muchas, bola pequeña.</p>
+    <div class="split"><div><label class="f" for="aj-bc">Bolas por caja</label><input class="in plain" id="aj-bc" inputmode="numeric" value="${confConos().bolasCaja}"></div><div><label class="f" for="aj-bmin">Mínimo aceptable</label><input class="in plain" id="aj-bmin" inputmode="numeric" value="${confConos().min}"></div><div><label class="f" for="aj-bmax">Máximo aceptable</label><input class="in plain" id="aj-bmax" inputmode="numeric" value="${confConos().max}"></div></div>
+    <button class="btn pri" style="margin-top:10px" data-act="guardarConos">GUARDAR</button></div>` : ""}
   <div class="card"><h3>Festivos y temporadas</h3><p class="small muted" style="margin-top:-4px">OLI conoce los festivos de Colombia (incluida la Semana Santa) y los puentes. En esos días pide más para no quedarte sin producto.</p>
     <label class="f" for="aj-col">Pedir más en festivos, Semana Santa y puentes (%) ${ayuda("Se suma a la demanda de esos días. Cuando ya tengas al menos 2 festivos con ventas, OLI usa lo que de verdad vendiste en ellos y le suma este porcentaje.")}</label><input class="in plain" id="aj-col" inputmode="numeric" value="${Math.round(colchonFestivo() * 100)}">
     <div class="btns" style="margin-top:10px"><button class="btn pri" data-act="guardarColchon">GUARDAR</button><button class="btn ghost" data-act="verFestivos">Ver festivos de los próximos 2 años</button></div></div>
@@ -2771,6 +2941,11 @@ VIEWS.ajustes = () => {
   <div class="card"><h3>Estado de OLI</h3><div class="row"><span>Productos</span><b>${n}</b></div><div class="row"><span>Almacenamiento en este equipo</span><b>${IDB.ok ? "IndexedDB" : "Respaldo básico"}</b></div><div class="row"><span>Conexión</span><b>${esc(connInfo().txt)}</b></div><div class="row"><span>Este equipo</span><b>${esc(DEV.nombre || DEV.id)}</b></div><div class="row"><span>Versión</span><b>${esc(versionTxt())}</b></div><div class="btns" style="margin-top:8px"><button class="btn ghost sm" data-act="ayuda">${ic("info", 16)} ¿Necesitas ayuda?</button><button class="btn ghost sm" data-act="verEnvio">Estado de envío</button><button class="btn ghost sm" data-act="acerca">Acerca de OLI</button></div><p class="xs muted" style="margin:10px 0 0">${esc(BRAND.texto)}</p></div>`;
 };
 ACT.guardarAjustes = async () => { await guardar(async () => { const mov = $("#aj-mov").checked; await put("meta", "permisos", Object.assign({}, col("meta").permisos || {}, {movimientosEmpleado: mov})); return guardarConfig({nombre: $("#aj-nom").value.trim() || "OLI", margenObjetivo: clamp(num($("#aj-mo").value) / 100, .05, .95), movimientosEmpleado: mov}); }, "Guardado"); };
+ACT.guardarConos = async () => {
+  const b = num($("#aj-bc").value), mn = num($("#aj-bmin").value), mx = num($("#aj-bmax").value);
+  if (!(b >= 1 && mn >= 0 && mx >= mn && b >= mn && b <= mx)) { toast("Revisa los números: el mínimo debe ser menor o igual a las bolas por caja, y estas menores o iguales al máximo.", true); return; }
+  await guardar(() => guardarConfig({conos: {bolasCaja: b, min: mn, max: mx}}), "Guardado");
+};
 ACT.guardarColchon = async () => { const v = num($("#aj-col").value); if (!(v >= 0 && v <= 100)) { toast("Escribe un porcentaje entre 0 y 100.", true); return; } await guardar(() => guardarConfig({colchonFestivo: v / 100}), "Guardado"); };
 ACT.verFestivos = () => {
   const ls = festivosEntre(S.today, addDays(S.today, 730)); let anio = "";
@@ -2801,8 +2976,8 @@ function filasVentas(a, b, F) {
   const out = [];
   for (const v of ventasAll()) if (v.fecha >= a && v.fecha <= b && pasaF(v, null, F)) for (const it of (v.items || [])) {
     if (!pasaF(v, it, F)) continue; const neto = lineaNeta(it), iv = (it.imp && it.imp.v) || 0, p = prod(it.pid);
-    out.push({id: v.id, num: v.num || "", fecha: v.fecha, hora: hora(v.t), t: v.t, caja: devNombre(v.dev), empleado: empNombre(v.uid), producto: it.n, pid: it.pid, categoria: (p && p.cat) || "", cantidad: it.q, precio: it.p, descuento: it.d || 0,
-      subtotal: neto - iv, impuesto: iv, impTipo: (it.imp && it.imp.t) || "validar", impTarifa: (it.imp && it.imp.r) || 0, total: neto, metodo: v.m, cliente: v.cliente ? "Pidió factura" : "", estado: v.anulada ? "Anulada" : "Confirmada", sync: ventaSyncTxt(ventaSync(v))});
+    out.push({id: v.id, num: v.num || "", fecha: v.fecha, hora: hora(v.t), t: v.t, caja: devNombre(v.dev), empleado: empNombre(v.uid), producto: it.n + (it.det ? " (" + it.det + ")" : ""), pid: it.pid, categoria: (p && p.cat) || "", cantidad: it.q, precio: it.p, descuento: it.d || 0,
+      subtotal: neto - iv, impuesto: iv, impTipo: (it.imp && it.imp.t) || "validar", impTarifa: (it.imp && it.imp.r) || 0, total: neto, metodo: v.m, costoU: costoItem(it, v.t), cliente: v.cliente ? "Pidió factura" : "", estado: v.anulada ? "Anulada" : "Confirmada", sync: ventaSyncTxt(ventaSync(v))});
   }
   return out.sort((x, y) => x.t - y.t);
 }
@@ -2842,7 +3017,7 @@ function filasCajas(a, b) {
 }
 function filasMovCaja(a, b) { const out = []; for (const c of cajasAll()) if (c.fecha >= a && c.fecha <= b) for (const m of (c.movs || [])) out.push({fecha: c.fecha, hora: hora(m.t), caja: devNombre(c.dev), tipo: m.tipo === "retiro" ? "Salida de dinero" : m.tipo === "ingreso" ? "Entrada de dinero" : "Pago desde caja", valor: m.monto, motivo: m.motivo, usuario: empNombre(m.uid), soporte: ""}); return out; }
 function filasGastos(a, b) { return gastosEn(a, b).map(g => ({fecha: g.fecha, proveedor: g.proveedor || "", categoria: g.cat || "", descripcion: g.desc || "", base: g.base || (g.iva ? g.valor - g.iva : g.valor), iva: g.iva || 0, retencion: g.retencion || 0, total: g.valor, metodo: g.m || "", cuenta: g.origen === "caja" || g.m === "Efectivo" ? "Caja" : "Banco", usuario: empNombre(g.uid), soporte: (g.soporte && g.soporte.ref) || "", estado: g.origen === "caja" ? "Desde caja" : (g.estado || "Registrado")})).sort((x, y) => x.fecha.localeCompare(y.fecha)); }
-function filasMermas(a, b) { return mermasAll().filter(m => m.fecha >= a && m.fecha <= b).map(m => { const p = prod(m.pid), c = costoUnit(m.pid, m.t); return {producto: (p && p.nombre) || m.pid, fecha: m.fecha, cantidad: m.q, unidad: (p && p.unidad) || "und", costo: c, total: c == null ? null : c * m.q, motivo: m.motivo, empleado: empNombre(m.uid), obs: m.obs || ""}; }); }
+function filasMermas(a, b) { return mermasAll().filter(m => m.fecha >= a && m.fecha <= b).map(m => { const p = prod(m.pid), c = costoUnit(m.pid, m.t); return {producto: (p && p.nombre) || m.pid, fecha: m.fecha, cantidad: m.q, unidad: (p && p.unidad) || "und", costo: c, total: c == null ? null : c * m.q, motivo: m.motivo, empleado: empNombre(m.uid), obs: m.obs || ""}; }).concat(perdidasHelado(a, b)); }
 function filasRentabilidad(a, b) {
   const desc = {}, mer = {}; for (const r of filasVentas(a, b, {})) if (r.estado === "Confirmada") desc[r.pid] = (desc[r.pid] || 0) + r.descuento;
   for (const m of filasMermas(a, b)) { const p = prods().find(x => x.nombre === m.producto); if (p) mer[p.id] = (mer[p.id] || 0) + (m.total || 0); }
@@ -3263,7 +3438,7 @@ function filtrosTxt(F) {
 const hayFiltro = F => !!(F && (F.cat || F.pid || F.uid || F.m || F.dev));
 function datosInforme(a, b, F) {
   F = Object.assign({cat: "", pid: "", uid: "", m: "", dev: ""}, F || {});
-  const ventas = filasVentas(a, b, F); for (const r of ventas) { const c = costoUnit(r.pid, r.t); r.costo = c == null ? null : Math.round(c * r.cantidad); }
+  const ventas = filasVentas(a, b, F); for (const r of ventas) { const c = r.costoU !== undefined ? r.costoU : costoUnit(r.pid, r.t); r.costo = c == null ? null : Math.round(c * r.cantidad); }
   const ok = ventas.filter(r => r.estado === "Confirmada"), ids = uniq(ok.map(r => r.id)), tot = sum(ok, r => r.total), desc = sum(ok, r => r.descuento), costo = sum(ok, r => r.costo || 0), bruto = tot + desc;
   const anuladas = uniq(ventas.filter(r => r.estado === "Anulada").map(r => r.id)), anuladoTot = sum(ventas.filter(r => r.estado === "Anulada"), r => r.total);
   const gastos = filasGastos(a, b), gastosOp = hayFiltro(F) ? null : sum(gastos.filter(g => g.categoria !== BASE_COSTO), g => g.total), bruta = tot - costo, util = gastosOp == null ? null : bruta - gastosOp;
@@ -3939,7 +4114,7 @@ function puedeAnular(v) {
 ACT.verVenta = (el, d) => { const v = ventasAll().find(x => x.id === d.id); if (!v) return; const an = v.anulada ? anulacionDe(v.id) : null; if (an) pedirNombres([an.uid]); pedirNombres([v.uid]); const pa = puedeAnular(v);
   abrir(() => `${head(v.num || "Venta")}<div class="notice ${v.anulada ? "bad" : "ok"}">${v.anulada ? "<b>Venta anulada.</b>" + (an ? " " + diaCorto(ymd(new Date(an.t))) + " " + hora(an.t) + " por " + esc(nombreDe(an.uid) || "—") + (an.motivo ? " · Motivo: " + esc(an.motivo) : "") : "") : "Venta confirmada."} · ${esc(ventaSyncTxt(ventaSync(v)))}</div>
     <div class="row"><span>Fecha</span><b>${diaCorto(v.fecha)} ${hora(v.t)}</b></div><div class="row"><span>Caja</span><b>${esc((col("dispositivos")[v.dev] || {}).nombre || v.dev || "")}</b></div><div class="row"><span>Vendió</span><b>${esc(nombreDe(v.uid) || "—")}</b></div><div class="row"><span>Pago</span><b>${esc(v.m)}${v.m === "Efectivo" && v.cambio ? " · recibió " + fmt(v.recibido) + ", cambio " + fmt(v.cambio) : ""}</b></div>
-    ${(v.items || []).map(i => `<div class="row"><span>${i.q} × ${esc(i.n)}</span><b>${fmt(i.p * i.q)}</b></div>`).join("")}${v.desc ? `<div class="row"><span>Descuento</span><b>- ${fmt(v.desc)}</b></div>` : ""}<div class="row"><b>Total</b><b class="big" style="font-size:24px">${fmt(v.total)}</b></div>
+    ${(v.items || []).map(i => `<div class="row"><span>${i.q} × ${esc(i.n)}${i.det ? `<span class="small muted" style="display:block">${esc(i.det)}</span>` : ""}</span><b>${fmt(i.p * i.q)}</b></div>`).join("")}${v.desc ? `<div class="row"><span>Descuento</span><b>- ${fmt(v.desc)}</b></div>` : ""}<div class="row"><b>Total</b><b class="big" style="font-size:24px">${fmt(v.total)}</b></div>
     ${pa.ok ? `<button class="btn danger wide" style="margin-top:10px" data-act="anular" data-id="${esc(v.id)}">Anular esta venta</button>` : pa.txt ? `<p class="small muted" style="margin-top:10px">${pa.txt}</p>` : ""}`); };
 ACT.anular = (el, d) => { const v = ventasAll().find(x => x.id === d.id); if (!v) return;
   abrir(() => `${head("Anular " + (v.num || "venta"))}<p class="muted" style="margin-top:0">La venta de ${fmt(v.total)} se descuenta de las ventas y el inventario vuelve a su lugar. No se borra: queda en el historial con tu nombre, la hora y el motivo.</p>

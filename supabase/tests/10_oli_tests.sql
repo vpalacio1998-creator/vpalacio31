@@ -173,6 +173,18 @@ begin
   perform t_assert((select count(*) from sale_voids where id in ('an-1','an-2')) = 2 and (select count(*) from sale_voids where id in ('an-x1','an-x2')) = 0, 'solo quedan las anulaciones permitidas');
   perform t_assert((select reason from sale_voids where id = 'an-1') = 'Error al marcar · marqué dos' and (select user_id from sale_voids where id = 'an-1') = e1::text, 'el historial guarda quién y por qué');
   perform t_assert((select count(*) from sales where id in ('d1-vv-1','d1-aaa-1')) = 2, 'las ventas anuladas no se borran');
+  -- T22: cambios de caja de helado — la empleada escribe solo en el documento de su equipo; se unen sin perder registros
+  reset role; set role authenticated; perform t_as(e1);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','ch1','col','cajashelado','id','2026-10-03_d1','t',30000,'data','{"fecha":"2026-10-03","dev":"d1","items":[{"id":"c1","t":30000,"sabor":"h-choco","motivo":"inicio","uid":"x"}]}'::jsonb)), 'd1', '1.0');
+  perform t_assert(r->0->>'status' = 'applied', 'la empleada registra un cambio de caja en su equipo');
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','ch2','col','cajashelado','id','2026-10-03_d1','t',30100,'data','{"fecha":"2026-10-03","dev":"d1","items":[{"id":"c2","t":30100,"sabor":"h-choco","motivo":"acabo","uid":"x"}]}'::jsonb)), 'd1', '1.0');
+  perform t_assert((select jsonb_array_length(data->'items') from oli_docs where collection='cajashelado' and doc_id='2026-10-03_d1') = 2, 'dos cambios enviados por separado se unen (no se pierde ninguno)');
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','ch3','col','cajashelado','id','2026-10-03_d2','t',30200,'data','{"fecha":"2026-10-03","dev":"d2","items":[]}'::jsonb)), 'd1', '1.0');
+  perform t_assert(r->0->>'status' = 'rejected', 'la empleada no puede escribir el documento de otro equipo');
+  reset role; set role authenticated; perform t_as(e2);
+  perform t_assert((select count(*) from oli_docs where collection='cajashelado') = 1, 'otro empleado del negocio ve los cambios de caja');
+  reset role; set role authenticated; perform t_as(x);
+  perform t_assert((select count(*) from oli_docs where collection='cajashelado') = 0, 'alguien de otro negocio no los ve');
   -- T16: coherencia de totales
   reset role;
   perform t_assert((select sum(total) from sales) = (select sum(amount) from payments), 'total de ventas = total de pagos');

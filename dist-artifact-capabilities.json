@@ -39,6 +39,10 @@
         "write": "interact"
       },
       {
+        "path": "cajashelado",
+        "write": "interact"
+      },
+      {
         "path": "costos",
         "read": "admin",
         "write": "admin"

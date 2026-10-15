@@ -28,17 +28,35 @@ const ventasAll = () => memo("ventasAll", () => {
 });
 const ventasOk = () => memo("ventasOk", () => ventasAll().filter(v => !v.anulada));
 const ventasEn = (a, b) => ventasOk().filter(v => v.fecha >= a && v.fecha <= b);
-function lineasExp(v) { const out = []; for (const it of (v.items || [])) { const p = prod(it.pid); if (p && p.combo) for (const c of p.combo) out.push({pid: c.pid, q: c.q * it.q, t: v.t}); else out.push({pid: it.pid, q: it.q, t: v.t}); } return out; }
+/* qué inventario gasta una línea (de una venta o del pedido): los combos se abren en sus componentes; un cono gasta su barquillo y su cucurucho o vaso.
+   Las bolas de helado no se descuentan una a una: se miden por caja de cada sabor (ver 63-conos). */
+function consumoLinea(it) {
+  if (Array.isArray(it.gasta)) return it.gasta;                       // lo que se guardó al vender (no cambia si después se edita el producto)
+  const p = prod(it.pid);
+  if (p && p.combo) return p.combo.map(c => ({pid: c.pid, q: c.q * it.q}));
+  if (p && p.cono) return gastoCono(p, it.pres, it.q);
+  return [{pid: it.pid, q: it.q}];
+}
+const gastoCono = (p, pres, q) => [p.cono.barquillo, pres === "vaso" ? p.cono.vaso : p.cono.cucurucho].filter(Boolean).map(pid => ({pid, q}));
+function lineasExp(v) {
+  const out = [];
+  for (const it of (v.items || [])) {
+    for (const x of consumoLinea(it)) out.push({pid: x.pid, q: x.q, t: v.t});
+    if (Array.isArray(it.sab)) for (const s of it.sab) out.push({pid: s, q: it.q / bolasCaja(), t: v.t, porCaja: true});   // bolas en fracción de caja: para costo y consumo, no para el inventario (ese baja al abrir cada caja)
+  }
+  return out;
+}
 
 /* ---------- inventario ---------- */
 const mermasAll = () => memo("mermasAll", () => { const out = []; for (const [docId, d] of Object.entries(col("mermas"))) for (const m of (d.items || [])) out.push(Object.assign({fecha: d.fecha, dev: d.dev, docId}, m)); return out.sort((a, b) => a.t - b.t); });
 const stockDocs = () => col("stock");
 const stockMap = () => memo("stockMap", () => {
-  const sold = {}, mer = {}, del = {};
-  for (const v of ventasOk()) for (const l of lineasExp(v)) (sold[l.pid] = sold[l.pid] || []).push(l);
+  const sold = {}, mer = {}, del = {}, ab = {};
+  for (const e of eventosHelado()) if (e.motivo !== "inicio") (ab[e.sabor] = ab[e.sabor] || []).push(e);   // abrir una caja de helado resta una caja cerrada
+  for (const v of ventasOk()) for (const l of lineasExp(v)) if (!l.porCaja) (sold[l.pid] = sold[l.pid] || []).push(l);
   for (const m of mermasAll()) (mer[m.pid] = mer[m.pid] || []).push(m);
   for (const d of Object.values(col("movinv"))) for (const x of (d.items || [])) if (x.delta) (del[x.pid] = del[x.pid] || []).push(x);   // entradas, compras, producción, consumo
-  const out = {}, base = id => { const s = stockDocs()[id]; if (!s || s.base == null) return null; let q = s.base; const t0 = s.t || 0; for (const x of (sold[id] || [])) if (x.t > t0) q -= x.q; for (const x of (mer[id] || [])) if (x.t > t0) q -= x.q; for (const x of (del[id] || [])) if (x.t > t0) q += x.q; return Math.round(q * 1000) / 1000; };
+  const out = {}, base = id => { const s = stockDocs()[id]; if (!s || s.base == null) return null; let q = s.base; const t0 = s.t || 0; for (const x of (sold[id] || [])) if (x.t > t0) q -= x.q; for (const x of (mer[id] || [])) if (x.t > t0) q -= x.q; for (const x of (del[id] || [])) if (x.t > t0) q += x.q; for (const x of (ab[id] || [])) if (x.t > t0) q -= 1; return Math.round(q * 1000) / 1000; };
   for (const p of prods()) if (p.controla !== false && !p.combo) out[p.id] = base(p.id);
   for (const p of prods()) if (p.combo) { let m = Infinity; for (const c of p.combo) { const s = out[c.pid]; if (s == null) { m = null; break; } m = Math.min(m, Math.floor(s / c.q)); } out[p.id] = m === Infinity ? null : m; }
   return out;
@@ -99,7 +117,7 @@ function rentabilidad(a, b) {
   const rows = {};
   for (const v of ventasEn(a, b)) for (const it of (v.items || [])) {
     const p = prod(it.pid), r = rows[it.pid] = rows[it.pid] || {pid: it.pid, n: (p && p.nombre) || it.n || "?", cat: p ? p.cat : "Otros", uds: 0, ing: 0, costo: 0, sinCosto: 0};
-    r.uds += it.q; r.ing += it.p * it.q; const c = costoUnit(it.pid, v.t); if (c == null) r.sinCosto += it.q; else r.costo += c * it.q;
+    r.uds += it.q; r.ing += it.p * it.q; const c = costoItem(it, v.t); if (c == null) r.sinCosto += it.q; else r.costo += c * it.q;
   }
   return Object.values(rows).map(r => Object.assign(r, {util: r.ing - r.costo, margen: r.ing ? (r.ing - r.costo) / r.ing : NaN}));
 }

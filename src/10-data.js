@@ -15,16 +15,16 @@ const SEDE = "principal";
 const RULES = [
   {path: "", read: "interact", write: "admin"},
   {path: "ventas", write: "interact"}, {path: "cajas", write: "interact"}, {path: "mermas", write: "interact"}, {path: "checklists", write: "interact"},
-  {path: "anulaciones", write: "interact"}, {path: "confirmaciones", write: "interact"}, {path: "demandaperdida", write: "interact"}, {path: "dispositivos", write: "interact"},
+  {path: "anulaciones", write: "interact"}, {path: "confirmaciones", write: "interact"}, {path: "demandaperdida", write: "interact"}, {path: "dispositivos", write: "interact"}, {path: "cajashelado", write: "interact"},
   {path: "costos", read: "admin", write: "admin"}, {path: "recetas", read: "admin", write: "admin"}, {path: "gastos", read: "admin", write: "admin"},
   {path: "compras", read: "admin", write: "admin"}, {path: "config", read: "admin", write: "admin"}, {path: "terceros", read: "admin", write: "admin"}, {path: "movinv", read: "interact", write: "admin"}, {path: "periodos", read: "admin", write: "admin"}, {path: "docelec", read: "admin", write: "admin"},
   {path: "audit", read: "admin", write: "admin"}, {path: "audit/{self}", read: "interact", write: "interact"},     // cada persona escribe su auditoría; solo el administrador la lee toda
   {path: "data/users", read: "admin", write: "admin"}, {path: "data/users/{self}", read: "interact", write: "interact"}
 ];
 const LV = {view: 1, interact: 2, admin: 3, owner: 4};
-const SHARED_COLS = ["productos", "stock", "movinv", "ventas", "cajas", "mermas", "checklists", "anulaciones", "confirmaciones", "demandaperdida", "dispositivos", "reaperturas", "meta"];
+const SHARED_COLS = ["productos", "stock", "movinv", "ventas", "cajas", "mermas", "checklists", "anulaciones", "confirmaciones", "demandaperdida", "dispositivos", "reaperturas", "meta", "cajashelado"];
 const ADMIN_COLS = ["costos", "recetas", "gastos", "compras", "config", "terceros", "periodos", "docelec"];
-const RANGED = new Set(["ventas", "cajas", "mermas", "checklists", "anulaciones", "confirmaciones", "demandaperdida", "reaperturas", "movinv"]);
+const RANGED = new Set(["ventas", "cajas", "mermas", "checklists", "anulaciones", "confirmaciones", "demandaperdida", "reaperturas", "movinv", "cajashelado"]);
 const HIST_DIAS = 95;
 
 const DS = {lastRemote: 0, mode: "loading", dbh: null, uid: null, isAdmin: false, canWrite: true, c: {}, v: 0, ready: {}, error: null, fromCache: true, localRole: "admin", subs: [], remoteSeen: false};
@@ -211,7 +211,7 @@ function persistCol(name) {
 }
 /* integridad: ventas, movimientos de caja, cierres, mermas y anulaciones nunca se borran. Si un documento del servidor
    llega con menos elementos de los que este equipo ya vio (otra ventana o alguien lo sobrescribió), el administrador lo restaura uniendo por id. */
-const UNION = {ventas: ["ventas"], cajas: ["movs", "cierres"], mermas: ["items"], anulaciones: ["items"], confirmaciones: ["items"], reaperturas: ["items"], movinv: ["items"], demandaperdida: ["items"]};
+const UNION = {ventas: ["ventas"], cajas: ["movs", "cierres"], mermas: ["items"], anulaciones: ["items"], confirmaciones: ["items"], reaperturas: ["items"], movinv: ["items"], demandaperdida: ["items"], cajashelado: ["items"]};
 function restaurarPerdidos(name, map) {
   if (!UNION[name] || !DS.isAdmin || DS.mode !== "db") return;                                   // también en la primera carga: si el servidor perdió algo, lo guardado en este equipo lo restaura
   const prev = DS.c[name] || {}, fix = [];

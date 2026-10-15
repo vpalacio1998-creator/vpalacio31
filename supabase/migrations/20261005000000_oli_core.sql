@@ -189,17 +189,17 @@ create or replace function oli.col_read_min(c text) returns int language sql imm
 $$ select case when c in ('costos','recetas','gastos','compras','config','terceros','periodos','docelec','audit') then 3 else 2 end $$;
 
 create or replace function oli.col_write_min(c text) returns int language sql immutable as
-$$ select case when c in ('ventas','cajas','mermas','checklists','anulaciones','confirmaciones','demandaperdida','dispositivos','audit') then 2 else 3 end $$;
+$$ select case when c in ('ventas','cajas','mermas','checklists','anulaciones','confirmaciones','demandaperdida','dispositivos','audit','cajashelado') then 2 else 3 end $$;
 
 -- colecciones donde cada dispositivo escribe SOLO sus documentos
 create or replace function oli.single_writer(c text) returns boolean language sql immutable as
-$$ select c in ('ventas','cajas','mermas','checklists','anulaciones','confirmaciones','demandaperdida') $$;
+$$ select c in ('ventas','cajas','mermas','checklists','anulaciones','confirmaciones','demandaperdida','cajashelado') $$;
 
 -- arreglos que se unen por id (crecen, no se reemplazan)
 create or replace function oli.merge_fields(c text) returns text[] language sql immutable as
 $$ select case c when 'ventas' then array['ventas'] when 'cajas' then array['movs','cierres'] when 'mermas' then array['items']
   when 'anulaciones' then array['items'] when 'confirmaciones' then array['items'] when 'demandaperdida' then array['items']
-  when 'reaperturas' then array['items'] when 'movinv' then array['items'] when 'audit' then array['items'] else array[]::text[] end $$;
+  when 'reaperturas' then array['items'] when 'movinv' then array['items'] when 'audit' then array['items'] when 'cajashelado' then array['items'] else array[]::text[] end $$;
 
 create or replace function oli.my_membership(p_org uuid default null)
 returns table (org_id uuid, store_id uuid, role text) language sql stable security definer set search_path = public as
@@ -407,7 +407,7 @@ begin
       if split_part(id, '__', 1) <> uid::text then status := 'rejected'; detail := 'auditoría ajena';
       elsif del and lvl < 3 then status := 'rejected'; detail := 'la auditoría no se puede borrar'; end if;
     elsif lvl < wmin then status := 'rejected'; detail := 'sin permiso para ' || c;
-    elsif c not in ('productos','costos','stock','recetas','ventas','cajas','mermas','checklists','anulaciones','confirmaciones','demandaperdida','dispositivos','reaperturas','meta','gastos','compras','config','terceros','periodos','docelec','movinv') then status := 'rejected'; detail := 'colección desconocida';
+    elsif c not in ('productos','costos','stock','recetas','ventas','cajas','mermas','checklists','anulaciones','confirmaciones','demandaperdida','dispositivos','reaperturas','meta','gastos','compras','config','terceros','periodos','docelec','movinv','cajashelado') then status := 'rejected'; detail := 'colección desconocida';
     elsif oli.single_writer(c) and lvl < 3 and (d is null or del or coalesce(d->>'dev','') <> coalesce(dev,'') or right(id, length(coalesce(dev,'')) + 1) <> '_' || coalesce(dev,'')) then status := 'rejected'; detail := 'solo el dispositivo dueño puede escribir este documento';
     elsif c = 'dispositivos' and lvl < 3 and id <> coalesce(dev,'') then status := 'rejected'; detail := 'dispositivo ajeno';
     elsif c = 'anulaciones' and lvl < 3 and not oli.void_ok(mem.org_id, uid, dev, id, d) then status := 'rejected'; detail := 'el empleado solo anula su propia venta en los 10 minutos siguientes';

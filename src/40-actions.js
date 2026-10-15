@@ -11,12 +11,13 @@ const cantCarrito = () => sum(S.cart, c => c.q);
 const enCarrito = pid => sum(S.cart.filter(c => c.pid === pid), c => c.q);
 // demanda real del pedido por producto que lleva inventario (los combos se abren en sus componentes)
 function demandaPedido(cart) {
-  const m = {}; for (const c of cart) { const p = prod(c.pid); if (!p) continue; if (p.combo) for (const x of p.combo) m[x.pid] = (m[x.pid] || 0) + x.q * c.q; else m[c.pid] = (m[c.pid] || 0) + c.q; }
+  const m = {}; for (const c of cart) { if (!prod(c.pid)) continue; for (const x of consumoLinea(c)) m[x.pid] = (m[x.pid] || 0) + x.q; }
   return m;
 }
 function faltante(cart) {   // primer producto cuyo inventario no alcanza para el pedido, o null
   const d = demandaPedido(cart);
-  for (const [pid, q] of Object.entries(d)) { const p = prod(pid); if (!p || p.controla === false) continue; const st = stockDe(pid); if (st != null && q > Math.max(0, st)) return {p, st: Math.max(0, st)}; }
+  // un insumo (barquillo, vaso…) avisa cuando se acaba, pero no frena la venta
+  for (const [pid, q] of Object.entries(d)) { const p = prod(pid); if (!p || p.controla === false || p.tipo === "insumo") continue; const st = stockDe(pid); if (st != null && q > Math.max(0, st)) return {p, st: Math.max(0, st)}; }
   return null;
 }
 function agregarAlCarrito(p) {
@@ -25,9 +26,10 @@ function agregarAlCarrito(p) {
   const f = faltante(prueba); if (f) { toast("Solo hay " + f.st + " de " + f.p.nombre + ".", true); return false; }
   const ex = S.cart.find(c => c.pid === p.id); if (ex) ex.q++; else S.cart.push({pid: p.id, n: p.nombre, q: 1, p: p.precio}); return true;
 }
-function cambiarCantidad(pid, d) {
-  const c = S.cart.find(x => x.pid === pid); if (!c) return; const p = prod(pid);
-  if (d > 0 && p) { const prueba = S.cart.map(x => Object.assign({}, x, x.pid === pid ? {q: x.q + d} : {})), f = faltante(prueba); if (f) { toast("No hay más inventario de " + f.p.nombre + ".", true); return; } }
+const claveLinea = c => c.k || c.pid;            // un cono con sabores y presentación es una línea propia (clave k); lo demás se agrupa por producto
+function cambiarCantidad(key, d) {
+  const c = S.cart.find(x => claveLinea(x) === key); if (!c) return; const p = prod(c.pid);
+  if (d > 0 && p) { const prueba = S.cart.map(x => Object.assign({}, x, x === c ? {q: x.q + d} : {})), f = faltante(prueba); if (f) { toast("No hay más inventario de " + f.p.nombre + ".", true); return; } }
   c.q += d; if (c.q <= 0) S.cart = S.cart.filter(x => x !== c);
 }
 /* impuesto de la línea: se toma del tratamiento configurado en el producto. Si no está validado, no se asume. */
@@ -47,7 +49,7 @@ async function registrarVenta(opts) {
   const falta = faltante(S.cart); if (falta) throw new Error("No alcanza el inventario de " + falta.p.nombre + " (hay " + falta.st + ").");
   const sub = totalCarrito(), desc = clamp(Math.round(opts.desc || 0), 0, sub), total = sub - desc, seq = await nextSeq();
   let resto = desc;   // el descuento se reparte por línea y la suma cuadra exacto con el total
-  const items = S.cart.map((c, k) => { const p = prod(c.pid), bruto = c.p * c.q, d = k === S.cart.length - 1 ? resto : Math.round(sub ? desc * bruto / sub : 0); resto -= d; const i = impLinea(p, bruto - d); return {pid: c.pid, n: c.n, q: c.q, p: c.p, d, imp: {t: i.t, r: i.r, base: i.base, v: i.imp}}; });
+  const items = S.cart.map((c, k) => { const p = prod(c.pid), bruto = c.p * c.q, d = k === S.cart.length - 1 ? resto : Math.round(sub ? desc * bruto / sub : 0); resto -= d; const i = impLinea(p, bruto - d); return Object.assign({pid: c.pid, n: c.n, q: c.q, p: c.p, d, imp: {t: i.t, r: i.r, base: i.base, v: i.imp}}, c.sab ? {sab: c.sab.slice(), pres: c.pres, det: c.det, gasta: consumoLinea(c)} : {}); });
   const t = Date.now(), fecha = ymd(new Date(t));
   const venta = {id: DEV.id + "-" + t.toString(36) + "-" + seq, n: seq, num: (DEV.nombre || DEV.id) + " #" + seq, t, fecha, uid: uidActual(), dev: DEV.id, m: opts.m, total, sub, desc, recibido: opts.m === "Efectivo" ? (opts.recibido || total) : total, cambio: opts.m === "Efectivo" ? Math.max(0, (opts.recibido || total) - total) : 0, ref: opts.ref || "", cliente: opts.cliente || null, estado: "confirmada"};
   venta.items = items;

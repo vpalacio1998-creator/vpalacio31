@@ -39,11 +39,12 @@ ACT.tile = (el, d) => {
   const p = prod(d.id); if (!p) return; if (!DS.canWrite) { toast("Tienes acceso de solo lectura.", true); return; }
   if (cajaEstado(cajaHoy()) === "cerrada") { toast("La caja de hoy está cerrada.", true); return; }
   if (estadoProd(p).k === "agotado") { toast(p.nombre + " está agotado.", true); if (!perdidaRecien[p.id] || Date.now() - perdidaRecien[p.id] > 30000) { perdidaRecien[p.id] = Date.now(); anotarDemandaPerdida(p.id).catch(() => {}); } return; }
+  if (p.cono) { abrirCono(p); return; }                                       // los conos piden sabor(es) y cucurucho o vaso
   if (agregarAlCarrito(p)) { saveCart(); draw(); }
 };
 function lineasPedido() {   // nombre arriba (ancho completo) y cantidades abajo: se lee bien también en el panel angosto de la tablet
-  return S.cart.map(c => `<div class="pline"><div class="pl-top"><div class="l"><b>${esc(c.n)}</b><div class="small muted">${fmt(c.p)} c/u</div></div><button class="btn ghost sm" data-act="quitar" data-id="${esc(c.pid)}" aria-label="Quitar ${esc(c.n)} del pedido">${ic("x", 16)}</button></div>
-    <div class="pl-bot"><div class="qty"><button data-act="menos" data-id="${esc(c.pid)}" aria-label="Quitar una unidad de ${esc(c.n)}" style="width:44px;height:44px">−</button><b style="font-size:18px">${c.q}</b><button data-act="mas1" data-id="${esc(c.pid)}" aria-label="Agregar una unidad de ${esc(c.n)}" style="width:44px;height:44px">+</button></div><b class="pl-tot">${fmt(c.p * c.q)}</b></div></div>`).join("");
+  return S.cart.map(c => `<div class="pline"><div class="pl-top"><div class="l"><b>${esc(c.n)}</b>${c.det ? `<div class="small" style="font-weight:600">${esc(c.det)}</div>` : ""}<div class="small muted">${fmt(c.p)} c/u</div></div><button class="btn ghost sm" data-act="quitar" data-id="${esc(claveLinea(c))}" aria-label="Quitar ${esc(c.n)} del pedido">${ic("x", 16)}</button></div>
+    <div class="pl-bot"><div class="qty"><button data-act="menos" data-id="${esc(claveLinea(c))}" aria-label="Quitar una unidad de ${esc(c.n)}" style="width:44px;height:44px">−</button><b style="font-size:18px">${c.q}</b><button data-act="mas1" data-id="${esc(claveLinea(c))}" aria-label="Agregar una unidad de ${esc(c.n)}" style="width:44px;height:44px">+</button></div><b class="pl-tot">${fmt(c.p * c.q)}</b></div></div>`).join("");
 }
 function pedidoHTML(modal) {
   if (!S.cart.length) return `<div class="tk-empty">${ic("paleta", 48)}<b style="color:var(--ink)">Tu pedido está vacío</b><p style="margin:0">Toca un producto para empezar.</p></div>`;
@@ -59,7 +60,7 @@ function cartbarHTML() {
 ACT.verPedido = () => abrir(() => head("Tu pedido", "Seguir vendiendo") + `<div style="display:flex;flex-direction:column">${pedidoHTML(true)}</div>`);
 ACT.menos = (el, d) => { cambiarCantidad(d.id, -1); saveCart(); draw(); redrawSheet(true); if (!S.cart.length) cerrar(); };
 ACT.mas1 = (el, d) => { cambiarCantidad(d.id, 1); saveCart(); draw(); redrawSheet(true); };
-ACT.quitar = (el, d) => { S.cart = S.cart.filter(c => c.pid !== d.id); saveCart(); draw(); redrawSheet(true); if (!S.cart.length) cerrar(); };
+ACT.quitar = (el, d) => { S.cart = S.cart.filter(c => claveLinea(c) !== d.id); saveCart(); draw(); redrawSheet(true); if (!S.cart.length) cerrar(); };
 ACT.vaciar = async () => { if (!S.cart.length) return; if (cantCarrito() >= 3 && !(await confirmar({titulo: "¿Cancelar la venta?", texto: "Se borrará todo el pedido.", si: "Sí, cancelar", no: "No, seguir", peligro: true}))) return; S.cart = []; saveCart(); cerrar(); draw(); };
 
 /* ---------- cobrar ---------- */

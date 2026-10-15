@@ -137,6 +137,7 @@ ACT.editProd = (el, d) => {
       <div><label class="f" for="pr-s">Reserva de seguridad ${ayuda("Unidades extra que quieres tener siempre por si se vende más de lo esperado. OLI las suma al recomendar compras.")}</label><input class="in plain" id="pr-s" inputmode="numeric" value="${p && p.seg != null ? p.seg : ""}" placeholder="0"></div></div>
       <label class="f">Tipo</label>${sel("pr-tipo", ["Producto que vendo", "Insumo"], p && p.tipo === "insumo" ? "Insumo" : "Producto que vendo")}
       <label class="check" style="margin-top:10px"><input type="checkbox" id="pr-ctl" ${!p || p.controla !== false ? "checked" : ""}> Llevar inventario de este producto</label>
+      <label class="check" style="margin-top:6px"><input type="checkbox" id="pr-sabor" ${p && p.sabor ? "checked" : ""}> Es un sabor de helado para conos (insumo que se cuenta por cajas) ${ayuda("Aparece al vender un cono sencillo o doble. La empleada marca cuándo cambia la caja y OLI mide cuántas bolas dio cada caja.")}</label>
       <label class="check"><input type="checkbox" id="pr-act" ${!p || p.activo !== false ? "checked" : ""}> Disponible para vender</label>
       <label class="f" for="pr-foto">Foto (opcional)</label><input class="in plain" id="pr-foto" type="file" accept="image/*" data-act-change="fotoProd"><div id="pr-prev" class="small muted">${S.prodImg ? "Foto cargada" : "Sin foto: OLI dibuja el producto con su color."}</div>
       <div class="split"><div><label class="f" for="pr-pack">Viene en cajas de</label><input class="in plain" id="pr-pack" inputmode="numeric" value="${p && p.pack ? p.pack : ""}" placeholder="1"></div><div><label class="f" for="pr-max">Cantidad ideal (insumos)</label><input class="in plain" id="pr-max" inputmode="numeric" value="${p && p.max ? p.max : ""}"></div></div>
@@ -163,6 +164,7 @@ ACT.doGuardarProd = async (el, d) => {
   const impT = (IMP_TIPOS.find(x => x[1] === selVal("pr-imp")) || IMP_TIPOS[0])[0], tar = numDec($("#pr-tar").value) / 100, ant = d.id ? prod(d.id) : null;
   const dat = {nombre: n, cat: selVal("pr-cat") || "Otros", tipo: selVal("pr-tipo") === "Insumo" ? "insumo" : "terminado", precio: pr, unidad: $("#pr-u").value.trim() || "und", min: $("#pr-m").value.trim() === "" ? 3 : num($("#pr-m").value), seg: num($("#pr-s").value), pack: num($("#pr-pack").value) || 1, max: num($("#pr-max").value) || null,
     controla: $("#pr-ctl").checked, activo: $("#pr-act").checked, imp: {t: impT, r: tar || 0, cuenta: $("#pr-cta").value.trim()}};
+  if ($("#pr-sabor") && $("#pr-sabor").checked) { if (dat.tipo !== "insumo") { toast("Un sabor de helado debe ser de tipo “Insumo”.", true); return; } dat.sabor = true; dat.controla = true; } else dat.sabor = false;
   if (S.prodImg) dat.foto = S.prodImg; else delete dat.foto; if (ant && ant.combo) dat.combo = ant.combo;
   await guardar(async () => {
     const costoRaw = $("#pr-c").value.trim(), id = await guardarProducto(d.id, dat, costoRaw ? num(costoRaw) : null);

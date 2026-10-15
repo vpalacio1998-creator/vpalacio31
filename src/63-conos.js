@@ -1,0 +1,139 @@
+/* ============ 63 · conos de helado: sabores, cucurucho o vaso, y rendimiento de cada caja ============
+   Cono sencillo (1 bola) o doble (2 bolas, pueden ser de sabores distintos). Cada cono gasta 1 barquillo y 1 cucurucho o 1 vaso (ver consumoLinea).
+   La crema viene en cajas y hay UNA caja abierta por sabor. Cuando se acaba, la empleada marca "Cambié la caja": eso resta una caja cerrada
+   del inventario y cierra la cuenta de bolas de la caja anterior. El administrador ve cuántas bolas dio cada caja: lo esperado lo dice el
+   proveedor (30 por defecto) y fuera del rango aceptable (27 a 33 por defecto, se cambia en Ajustes) OLI avisa. No se asume fraude: también
+   puede ser el tamaño de la bola o un sabor mal marcado al vender. */
+const CONO_DEF = {bolasCaja: 30, min: 27, max: 33};
+const confConos = () => Object.assign({}, CONO_DEF, configNeg().conos || {});
+const bolasCaja = () => confConos().bolasCaja || CONO_DEF.bolasCaja;
+const saboresHelado = () => prods().filter(p => p.sabor && p.activo !== false).sort((a, b) => (a.orden || 0) - (b.orden || 0) || a.nombre.localeCompare(b.nombre, "es"));
+const nombreSabor = pid => ((prod(pid) || {}).nombre || pid).replace(/^Helado\s+/i, "");
+const PRES_TXT = {cucurucho: "cucurucho", vaso: "vaso"};
+const eventosHelado = () => memo("evHel", () => { const out = []; for (const [docId, d] of Object.entries(col("cajashelado"))) for (const x of (d.items || [])) if (x && x.sabor) out.push(Object.assign({fecha: d.fecha, dev: d.dev, docId}, x)); return out.sort((a, b) => a.t - b.t); });
+const bolasVendidas = () => memo("bolasV", () => { const m = {}; for (const v of ventasOk()) for (const it of (v.items || [])) if (Array.isArray(it.sab)) for (const s of it.sab) (m[s] = m[s] || []).push({t: v.t, q: it.q}); return m; });
+
+/* cada caja de un sabor va de un cambio de caja al siguiente; la última sigue abierta */
+function rendimientoCajas() {
+  return memo("rendCajas", () => {
+    const c = confConos(), ev = eventosHelado(), bv = bolasVendidas(), out = {};
+    for (const s of uniq(ev.map(e => e.sabor))) {
+      const es = ev.filter(e => e.sabor === s), ls = bv[s] || [], cajas = [];
+      for (let i = 0; i < es.length; i++) {
+        const desde = es[i].t, fin = es[i + 1] || null, hasta = fin ? fin.t : null, bolas = sum(ls.filter(x => x.t >= desde && (hasta == null || x.t < hasta)), x => x.q);
+        const estado = fin && fin.motivo === "danada" ? "danada" : bolas > c.max ? "muchas" : !fin ? "abierta" : bolas < c.min ? "pocas" : "ok";
+        cajas.push({sabor: s, desde, hasta, bolas, estado, abierta: !fin, apertura: es[i], cierre: fin});
+      }
+      out[s] = cajas;
+    }
+    return out;
+  });
+}
+const cajasCerradasHelado = () => Object.values(rendimientoCajas()).flat().filter(k => !k.abierta).sort((a, b) => b.hasta - a.hasta);
+const ESTADO_CAJA = {ok: ["ok", "Dentro del rango"], pocas: ["bad", "Pocas bolas"], muchas: ["warn", "Muchas bolas"], danada: ["", "Dañada (pérdida)"], abierta: ["", "Abierta"]};
+const pillCaja = k => `<span class="pill ${ESTADO_CAJA[k.estado][0]}">${ESTADO_CAJA[k.estado][1]}</span>`;
+function alertasHelado() {
+  const c = confConos(), out = [], desde = Date.now() - 14 * 864e5, rango = `lo esperado es ${c.bolasCaja}; aceptable ${c.min} a ${c.max}`;
+  const nota = " También pasa si al vender se marca un sabor distinto al que se sirvió.";
+  for (const k of Object.values(rendimientoCajas()).flat()) {
+    const n = nombreSabor(k.sabor);
+    if (k.estado === "pocas" && k.hasta >= desde) out.push({sev: "bad", sabor: k.sabor, t: `La caja de ${n} dio ${k.bolas} bolas (${rango}).`, d: "Se están sirviendo bolas más grandes o se perdió producto: es plata que se pierde." + nota});
+    else if (k.estado === "muchas" && (k.abierta || k.hasta >= desde)) out.push({sev: "warn", sabor: k.sabor, t: k.abierta ? `La caja abierta de ${n} ya va en ${k.bolas} bolas (máximo aceptable ${c.max}).` : `La caja de ${n} dio ${k.bolas} bolas (${rango}).`, d: "Se están sirviendo bolas más pequeñas de lo que se le ofrece al cliente." + nota});
+  }
+  return out;
+}
+/* una caja abierta que se dañó es pérdida: lo que faltaba por servir, en fracción de caja */
+function perdidasHelado(a, b) {
+  return cajasCerradasHelado().filter(k => k.estado === "danada" && k.cierre.fecha >= a && k.cierre.fecha <= b).map(k => {
+    const frac = Math.max(0, Math.round((bolasCaja() - k.bolas) / bolasCaja() * 100) / 100), c = costoUnit(k.sabor, k.hasta);
+    return {producto: "Helado " + nombreSabor(k.sabor) + " (caja abierta)", fecha: k.cierre.fecha, cantidad: frac, unidad: "cajas", costo: c, total: c == null ? null : Math.round(c * frac), motivo: "Caja dañada o derretida", empleado: empNombre(k.cierre.uid), obs: k.cierre.obs || ""};
+  });
+}
+/* costo de una unidad de una línea vendida: un cono suma barquillo, cucurucho o vaso y sus bolas (costo de la caja ÷ bolas por caja) */
+function costoItem(it, t) {
+  if (!Array.isArray(it.sab)) return costoUnit(it.pid, t);
+  let s = 0; const q = it.q || 1;
+  for (const x of consumoLinea(it)) { const c = costoUnit(x.pid, t); if (c == null) return null; s += c * x.q / q; }
+  for (const sb of it.sab) { const c = costoUnit(sb, t); if (c == null) return null; s += c / bolasCaja(); }
+  return Math.round(s);
+}
+
+/* ---------- vender un cono: sabor(es) y cucurucho o vaso ---------- */
+S.cono = null;
+function abrirCono(p) {
+  if (!saboresHelado().length) { toast("Todavía no hay sabores de helado. " + (esAdmin() ? "Créalos en Productos." : "Pídele al administrador que los agregue."), true); return; }
+  S.cono = {pid: p.id, sab: [], pres: "cucurucho"}; abrir(conoSheet);
+}
+function conoSheet() {
+  const c = S.cono, p = c && prod(c.pid); if (!p || !p.cono) return head("Cono") + "";
+  const n = p.cono.bolas || 1, falta = n - c.sab.length;
+  return head(p.nombre + " · " + fmt(p.precio)) + `<p class="muted" style="margin-top:0">${n === 1 ? "Elige el sabor." : "Elige 2 sabores: pueden ser iguales o distintos."}</p>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px">${Array.from({length: n}, (_, i) => `<span class="pill ${c.sab[i] ? "ok" : ""}" style="font-size:15px">${n > 1 ? (i + 1) + ". " : ""}${c.sab[i] ? esc(nombreSabor(c.sab[i])) : "—"}</span>`).join("")}${c.sab.length ? '<button class="btn ghost sm" data-act="conoBorrar">Borrar</button>' : ""}</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px">${saboresHelado().map(s => `<button class="btn ${c.sab.includes(s.id) ? "pri" : "ghost"}" style="min-height:56px" data-act="conoSabor" data-id="${esc(s.id)}" ${falta <= 0 ? "disabled" : ""}>${esc(nombreSabor(s.id))}</button>`).join("")}</div>
+    <label class="f">¿Cómo lo lleva?</label><div class="seg">${Object.entries(PRES_TXT).map(([k, l]) => `<button data-act="conoPres" data-v="${k}" aria-pressed="${c.pres === k}">${cap1(l)}</button>`).join("")}</div>
+    <button class="btn pri xl wide" style="margin-top:14px" data-act="conoAgregar" ${falta > 0 ? "disabled" : ""}>${falta > 0 ? (n === 1 ? "ELIGE EL SABOR" : falta === 1 ? "ELIGE 1 SABOR MÁS" : "ELIGE 2 SABORES") : "AGREGAR AL PEDIDO"}</button>
+    <button class="btn ghost wide" style="margin-top:8px" data-act="cambioCaja">¿Se acabó una caja? Marcar cambio de caja</button>`;
+}
+ACT.conoSabor = (el, d) => { const c = S.cono, p = c && prod(c.pid); if (!p || c.sab.length >= (p.cono.bolas || 1)) return; c.sab.push(d.id); redrawSheet(true); };
+ACT.conoBorrar = () => { if (S.cono) { S.cono.sab = []; redrawSheet(true); } };
+ACT.conoPres = (el, d) => { if (S.cono && PRES_TXT[d.v]) { S.cono.pres = d.v; redrawSheet(true); } };
+ACT.conoAgregar = () => {
+  const c = S.cono, p = c && prod(c.pid); if (!p || c.sab.length !== (p.cono.bolas || 1)) return;
+  if (agregarCono(p, c.sab, c.pres)) { S.cono = null; saveCart(); cerrar(); draw(); }
+};
+function agregarCono(p, sab, pres) {
+  const ss = sab.slice().sort(), k = p.id + "|" + ss.join("+") + "|" + pres, det = ss.map(nombreSabor).join(" + ") + " · " + PRES_TXT[pres];
+  const prueba = S.cart.map(c => Object.assign({}, c)), ex0 = prueba.find(c => claveLinea(c) === k); if (ex0) ex0.q++; else prueba.push({k, pid: p.id, q: 1, sab: ss, pres});
+  const f = faltante(prueba); if (f) { toast("Solo hay " + f.st + " de " + f.p.nombre + ".", true); return false; }
+  const ex = S.cart.find(c => claveLinea(c) === k); if (ex) ex.q++; else S.cart.push({k, pid: p.id, n: p.nombre, q: 1, p: p.precio, sab: ss, pres, det}); return true;
+}
+
+/* ---------- cambio de caja (empleada o administrador) ---------- */
+S.cambio = null;
+ACT.cambioCaja = (el, d) => {
+  if (!saboresHelado().length) { toast("Todavía no hay sabores de helado.", true); return; }
+  const s = d && d.id && prod(d.id) && prod(d.id).sabor ? d.id : ""; S.cambio = {sabor: s, motivo: s ? motivoInicial(s) : "acabo"}; abrir(cambioSheet);
+};
+const motivoInicial = s => eventosHelado().some(e => e.sabor === s) ? "acabo" : "inicio";
+function cambioSheet() {
+  const c = S.cambio || {}, medido = c.sabor && eventosHelado().some(e => e.sabor === c.sabor);
+  const ops = !c.sabor ? [] : medido ? [["acabo", "Se acabó y puse una caja nueva"], ["danada", "Se dañó o se derritió y puse una caja nueva"]] : [["inicio", "Es la caja que ya estaba abierta: empezar a contar desde ahora"], ["acabo", "Abrí una caja nueva"]];
+  return head("Cambio de caja de helado") + `<p class="muted" style="margin-top:0">Márcalo cuando pongas una caja nueva. OLI descuenta una caja cerrada y cuenta cuántas bolas dio la anterior.</p>
+    <label class="f">¿De qué sabor?</label><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px">${saboresHelado().map(s => `<button class="btn ${c.sabor === s.id ? "pri" : "ghost"}" style="min-height:52px" data-act="cambioSabor" data-id="${esc(s.id)}">${esc(nombreSabor(s.id))}</button>`).join("")}</div>
+    ${ops.length ? `<label class="f">¿Qué pasó?</label><div style="display:flex;flex-direction:column;gap:8px">${ops.map(([k, l]) => `<button class="btn ${c.motivo === k ? "pri" : "ghost"}" style="justify-content:flex-start;text-align:left" data-act="cambioMotivo" data-v="${k}" aria-pressed="${c.motivo === k}">${l}</button>`).join("")}</div>` : ""}
+    ${c.motivo === "danada" ? `<label class="f" for="cc-obs">Cuéntanos qué pasó (opcional)</label><input class="in plain" id="cc-obs" placeholder="Ej: se derritió por un corte de luz">` : ""}
+    <button class="btn pri xl wide" style="margin-top:14px" data-act="doCambioCaja" ${c.sabor ? "" : "disabled"}>GUARDAR</button>`;
+}
+ACT.cambioSabor = (el, d) => { if (!S.cambio) return; S.cambio.sabor = d.id; S.cambio.motivo = motivoInicial(d.id); redrawSheet(true); };
+ACT.cambioMotivo = (el, d) => { if (S.cambio && ["acabo", "danada", "inicio"].includes(d.v)) { S.cambio.motivo = d.v; redrawSheet(true); } };
+ACT.doCambioCaja = async () => {
+  const c = S.cambio; if (!c || !c.sabor) { toast("Elige el sabor.", true); return; }
+  const obs = (($("#cc-obs") || {}).value || "").trim(), antes = (rendimientoCajas()[c.sabor] || []).find(k => k.abierta);
+  await guardar(async () => { await registrarCambioCaja(c.sabor, c.motivo, obs); S.cambio = null; cerrar(); },
+    c.motivo === "inicio" ? "Listo: desde ahora se cuentan las bolas de " + nombreSabor(c.sabor) : "Caja de " + nombreSabor(c.sabor) + " cambiada" + (esAdmin() && antes && c.motivo === "acabo" ? " · la anterior dio " + antes.bolas + " bolas" : ""));
+};
+async function registrarCambioCaja(sabor, motivo, obs) {
+  const p = prod(sabor); if (!p || !p.sabor) throw new Error("Elige el sabor.");
+  if (!["acabo", "danada", "inicio"].includes(motivo)) throw new Error("Elige qué pasó.");
+  const f = S.today, id = cajaId(f), cur = col("cajashelado")[id] || {fecha: f, dev: DEV.id, items: []};
+  await put("cajashelado", id, Object.assign({}, cur, {fecha: f, dev: DEV.id, items: (cur.items || []).concat([{id: newId(), t: Date.now(), sabor, motivo, obs: obs || "", uid: uidActual()}])}));
+  audit("CAMBIO_CAJA_HELADO", sabor, nombreSabor(sabor) + " · " + ({acabo: "se acabó", danada: "dañada o derretida", inicio: "empieza a contarse"}[motivo]) + (obs ? " · " + obs : ""));
+}
+
+/* ---------- tarjeta en Inventario y detalle para el administrador ---------- */
+function cardHelados() {
+  const ss = saboresHelado(); if (!ss.length) return "";
+  const adm = esAdmin(), r = rendimientoCajas(), c = confConos();
+  return `<div class="card"><div class="row" style="border:0;padding-top:0;align-items:center"><h3 style="margin:0">Cajas de helado</h3><button class="btn pri sm" data-act="cambioCaja">Cambié una caja</button></div>
+    ${ss.map(s => { const cs = r[s.id] || [], ab = cs.find(k => k.abierta), st = stockDe(s.id), ult = cs.filter(k => !k.abierta).slice(-1)[0];
+      return `<div class="row" style="padding:9px 0;align-items:flex-start"><div class="l" style="flex:1"><b>${esc(nombreSabor(s.id))}</b>
+        <div class="small muted">${st == null ? "Cajas cerradas: sin contar" : "Cajas cerradas: " + fmtN(Math.max(0, st), 0)} · ${ab ? "abierta desde " + diaCorto(ymd(new Date(ab.desde))) + " " + hora(ab.desde) + (adm ? " · lleva " + ab.bolas + (ab.bolas === 1 ? " bola" : " bolas") : "") : "aún no se cuenta"}</div>
+        ${adm && (ult || (ab && ab.estado === "muchas")) ? `<div class="small" style="margin-top:3px">${ab && ab.estado === "muchas" ? pillCaja(ab) + " la abierta ya pasó de " + c.max : pillCaja(ult) + " última caja: " + ult.bolas + " bolas"}</div>` : ""}</div></div>`; }).join("")}
+    ${adm ? `<p class="xs muted" style="margin:8px 0 0">Esperado ${c.bolasCaja} bolas por caja · aceptable ${c.min} a ${c.max} (se cambia en Ajustes).</p><button class="btn ghost sm" style="margin-top:8px" data-act="verRendimiento">Ver todas las cajas</button>` : ""}</div>`;
+}
+ACT.verRendimiento = () => abrir(() => {
+  const ks = cajasCerradasHelado().slice(0, 60), c = confConos();
+  return head("Rendimiento de cajas de helado") + `<p class="muted" style="margin-top:0">Esperado ${c.bolasCaja} bolas por caja; aceptable de ${c.min} a ${c.max}. Una caja dañada no cuenta para el rendimiento: va a pérdidas.</p>
+    ${ks.length ? `<div class="card flat">${ks.map(k => { pedirNombres([k.cierre.uid]); return `<div class="row" style="align-items:flex-start;padding:9px 0"><div class="l" style="flex:1"><b>${esc(nombreSabor(k.sabor))} · ${k.bolas} bolas</b><div class="small muted">${diaCorto(ymd(new Date(k.desde)))} ${hora(k.desde)} → ${diaCorto(ymd(new Date(k.hasta)))} ${hora(k.hasta)} · cambió ${esc(nombreDe(k.cierre.uid) || "—")}${k.cierre.obs ? " · " + esc(k.cierre.obs) : ""}</div></div>${pillCaja(k)}</div>`; }).join("")}</div>` : '<p class="muted">Todavía no se ha terminado ninguna caja. Cuando se marque el primer cambio, aparecerá aquí cuántas bolas dio.</p>'}
+    <button class="btn pri wide" style="margin-top:12px" data-act="cerrar">Entendido</button>`;
+});
