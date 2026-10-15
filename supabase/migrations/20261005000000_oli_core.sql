@@ -462,9 +462,9 @@ begin
     end if;
     select * into cur from oli_docs where org_id = mem.org_id and collection = c and doc_id = id for update;
     if del then
-      if cur is not null and ts >= cur.device_ts then perform oli.delete_doc(mem.org_id, c, op->>'id'); perform oli.project(mem.org_id, mem.store_id, c, id, null, true);
-      elsif cur is not null then status := 'stale'; end if;
-    elsif cur is null then
+      if cur.doc_id is not null and ts >= cur.device_ts then perform oli.delete_doc(mem.org_id, c, op->>'id'); perform oli.project(mem.org_id, mem.store_id, c, id, null, true);
+      elsif cur.doc_id is not null then status := 'stale'; end if;
+    elsif cur.doc_id is null then                                                            -- (cur.doc_id y no "cur is null": un registro con algún campo vacío no es "null" ni "not null")
       insert into oli_docs (org_id, store_id, collection, doc_id, data, device_id, device_ts) values (mem.org_id, mem.store_id, c, id, d, dev, ts);
       perform oli.project(mem.org_id, mem.store_id, c, id, d, false);
     elsif array_length(oli.merge_fields(c), 1) is not null then                              -- unión sin pérdida
