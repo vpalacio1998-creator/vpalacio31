@@ -142,8 +142,10 @@ ACT.doCambioCaja = async () => {
 ACT.anularCambio = async (el, d) => {
   const e = itemsHelado().find(x => x.id === d.id && x.sabor); if (!e) return;
   if (!puedeAnularCambio(e)) { toast("Pasaron más de " + MIN_ANULAR_CAJA + " minutos o no es de este equipo: pídeselo al administrador.", true); return; }
-  if (!(await confirmar({titulo: "¿Anular el cambio de " + nombreSabor(e.sabor) + " de las " + hora(e.t) + "?", texto: "Úsalo si se marcó por error o dos veces. La caja vuelve al inventario y las bolas se cuentan como si ese cambio no hubiera pasado.", si: "Sí, anular", no: "No"}))) return;
-  await guardar(() => anularCambioCaja(e), "Cambio anulado"); redrawSheet(true);
+  const volver = sheetFn, como = {live: sheetLive, wide: sheetWide};                                                                 // la confirmación reemplaza la hoja: después se vuelve a la misma (cambio de caja o rendimiento)
+  const si = await confirmar({titulo: "¿Anular el cambio de " + nombreSabor(e.sabor) + " de las " + hora(e.t) + "?", texto: "Úsalo si se marcó por error o dos veces. La caja vuelve al inventario y las bolas se cuentan como si ese cambio no hubiera pasado.", si: "Sí, anular", no: "No"});
+  if (si) await guardar(() => anularCambioCaja(e), "Cambio anulado");
+  if (volver) abrir(volver, como);
 };
 async function registrarCambioCaja(sabor, motivo, obs) {
   const p = prod(sabor); if (!p || !p.sabor) throw new Error("Elige el sabor.");
@@ -153,11 +155,13 @@ async function registrarCambioCaja(sabor, motivo, obs) {
 }
 async function anularCambioCaja(e) {
   if (!puedeAnularCambio(e)) throw Object.assign(new Error("denied"), {code: "denied"});
-  await agregarItemHelado({id: newId(), t: Date.now(), anula: e.id, uid: uidActual()});
+  await agregarItemHelado({id: newId(), t: Date.now(), anula: e.id, uid: uidActual()}, e.docId);   // en el mismo documento del cambio (p. ej. uno de antes de medianoche u otro equipo)
   audit("ANULA_CAMBIO_CAJA", e.sabor, nombreSabor(e.sabor) + " · cambio de las " + hora(e.t));
 }
-async function agregarItemHelado(item) {
-  const f = S.today, id = cajaId(f), cur = col("cajashelado")[id] || {fecha: f, dev: DEV.id, items: []};
+async function agregarItemHelado(item, docId) {
+  const docs = col("cajashelado");
+  if (docId && docs[docId]) { const cur = docs[docId]; await put("cajashelado", docId, Object.assign({}, cur, {items: (cur.items || []).concat([item])})); return; }   // conserva su fecha y su equipo
+  const f = S.today, id = cajaId(f), cur = docs[id] || {fecha: f, dev: DEV.id, items: []};
   await put("cajashelado", id, Object.assign({}, cur, {fecha: f, dev: DEV.id, items: (cur.items || []).concat([item])}));
 }
 

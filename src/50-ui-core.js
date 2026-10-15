@@ -25,7 +25,7 @@ function redrawSheet(force) {
 function head(t, volver) { return `<div class="head"><h2>${esc(t)}</h2><button class="btn ghost sm" data-act="cerrar">${ic("x", 18)} ${volver || "Cerrar"}</button></div>`; }
 function confirmar(o) {
   return new Promise(res => {
-    ACT._conf = v => { cerrar(); res(v); };
+    ACT._conf = (el, d) => { cerrar(); res(!!(d && d.v === "1")); };                       // solo "Sí" confirma (el botón llega como elemento: no sirve como respuesta)
     abrir(() => `<div class="head"><h2>${esc(o.titulo)}</h2></div><p style="margin:0 0 16px">${o.texto || ""}</p>
       <div class="split"><button class="btn ghost xl" data-act="_conf" data-v="0">${esc(o.no || "No")}</button><button class="btn ${o.peligro ? "" : "pri"} xl" style="${o.peligro ? "background:var(--danger);color:#fff" : ""}" data-act="_conf" data-v="1" autofocus>${esc(o.si || "Sí")}</button></div>`);
   });

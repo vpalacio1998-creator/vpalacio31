@@ -167,7 +167,7 @@ function recalcEstado() {
 }
 function kickSync(delay = 0) { clearTimeout(syncTimer); syncTimer = setTimeout(syncNow, delay); recalcEstado(); changed(); }
 async function syncNow() {
-  if (syncing || DS.mode !== "db" || DS.bloqueada) return;
+  if (syncing || DS.mode !== "db" || DS.bloqueada || DS.needsLogin) return;                   // en la pantalla de ingreso no se envía: se envía al ingresar
   if (!conRed()) { recalcEstado(); changed(); return; }
   // solo se envía lo que hizo la persona con sesión abierta (lo de otra persona espera a que ella vuelva a ingresar)
   const ops = enviables().sort((a, b) => a.t - b.t);
@@ -284,7 +284,7 @@ const listo = () => DS.mode !== "loading" && !DS.needsLogin && !DS.needsOrg && [
 /* ---------- dispositivos (para el administrador) ---------- */
 let lastHb = 0;
 function heartbeat(force) {
-  if (DS.mode !== "db" || !DEV.listo || !DEV.nombre || !conRed()) return;
+  if (DS.mode !== "db" || !DEV.listo || !DEV.nombre || !conRed() || DS.needsLogin) return;
   if (Date.now() - lastHb < (force ? 15000 : 40000)) return; lastHb = Date.now();
   put("dispositivos", DEV.id, {dev: DEV.id, nombre: DEV.nombre, uid: DS.uid || "", rol: DS.isAdmin ? "admin" : "empleado", vis: Date.now(), pend: pendientes().length, ventasPend: ventasPendientes(), v: 2}).catch(() => {});
 }

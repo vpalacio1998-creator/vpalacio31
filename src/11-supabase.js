@@ -3,7 +3,7 @@
    Tiempo real: Supabase Realtime (postgres_changes). La anon key es pública por diseño: la seguridad real está en RLS y en oli_apply.
    Nunca hay claves secretas en el frontend. Config en window.OLI_CONFIG (generada en el build desde variables de entorno). */
 const APP_VERSION = window.OLI_BUILD || "dev";
-const SB = {client: null, org: null, store: null, role: null, email: "", chan: null, rt: "", rtWasDown: false, authError: false, subs: false, sinVerificar: false, gen: 0, autoParado: false, salio: false};
+const SB = {client: null, org: null, store: null, role: null, email: "", chan: null, rt: "", rtWasDown: false, authError: false, subs: false, sinVerificar: false, gen: 0, autoParado: false, salio: false, salioUid: null, ingresando: null, cargasEnCamino: 0, recargar: false, envioEnCamino: null, revocadas: new Set()};
 /* ¿el error es de red (sin Internet, servidor caído o en pausa, WiFi sin salida)? No es lo mismo que una clave mala o una sesión revocada. */
 const errRed = e => !!e && ((window.supabase && typeof window.supabase.isAuthRetryableFetchError === "function" && window.supabase.isAuthRetryableFetchError(e)) ||
   e.name === "AuthRetryableFetchError" || e.code === "timeout" || e.status === 0 || /failed to fetch|networkerror|network request failed|load failed/i.test(String(e.message || "")));
@@ -14,18 +14,34 @@ const MSG_SERVIDOR = "El servidor de OLI no está respondiendo bien. Intenta de 
 const MSG_SIN_RED = "No hay conexión con el servidor de OLI. Revisa el Internet; si hay Internet, el servidor no está respondiendo: avísale al administrador.";
 /* ¿queda en este equipo una sesión de Supabase que se pueda renovar? Sin ella no hay cómo reconectarse solo */
 function haySesionGuardada() { try { for (let i = 0; i < localStorage.length; i++) if (/^sb-.*-auth-token$/.test(localStorage.key(i) || "")) return true; } catch (e) {} return false; }
+/* Sesiones que se cerraron en este equipo. Una renovación que ya venía en camino (la librería reintenta ~30 s y no se puede cancelar)
+   NO debe volver a guardarse ni a usarse: se reconoce por el identificador de sesión (session_id del token, igual en cada renovación;
+   un ingreso nuevo trae otro). La lista vive en localStorage para que todas las ventanas de OLI la respeten. */
+const SES_CERRADAS = "oli-sesiones-cerradas";
+function sesionIdDe(s) { try { const b = String(s.access_token).split(".")[1].replace(/-/g, "+").replace(/_/g, "/"); return JSON.parse(atob(b)).session_id || null; } catch (e) { return null; } }
+function sesionesCerradas() { try { const v = JSON.parse(localStorage.getItem(SES_CERRADAS) || "[]"); return Array.isArray(v) ? v.filter(x => x && x.sid && Date.now() - x.t < 7 * 864e5) : []; } catch (e) { return []; } }
+function marcarCerrada(s) { const sid = s && sesionIdDe(s); if (!sid) return; try { localStorage.setItem(SES_CERRADAS, JSON.stringify(sesionesCerradas().filter(x => x.sid !== sid).concat([{sid, t: Date.now()}]).slice(-20))); } catch (e) {} }
+const esCerrada = s => { const sid = s && sesionIdDe(s); return !!sid && sesionesCerradas().some(x => x.sid === sid); };
+function sesionGuardada() { try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i) || ""; if (/^sb-.*-auth-token$/.test(k)) return JSON.parse(localStorage.getItem(k)); } } catch (e) {} return null; }
+/* almacén de la sesión: igual a localStorage, pero no guarda una sesión que ya se cerró aquí */
+const ALMACEN_SESION = {getItem: k => localStorage.getItem(k), removeItem: k => localStorage.removeItem(k),
+  setItem: (k, v) => { try { if (/-auth-token$/.test(k) && esCerrada(JSON.parse(v))) return; } catch (e) {} localStorage.setItem(k, v); }};
+const lsOk = () => { try { localStorage.setItem("oli-ls", "1"); localStorage.removeItem("oli-ls"); return true; } catch (e) { return false; } };
+/* invalida en el servidor una sesión que ya se cerró aquí (solo esa: no saca a la persona de sus otros equipos) */
+function revocarSesion(s) { if (!s || !s.access_token || SB.revocadas.has(s.access_token)) return; SB.revocadas.add(s.access_token); try { withTimeout(SB.client.auth.admin.signOut(s.access_token, "local"), 8000).catch(() => {}); } catch (e) {} }
 /* la sesión se cerró o el servidor la rechazó: este equipo olvida la identidad y lo que solo ve el administrador (las ventas por enviar se conservan) */
 async function olvidarIdentidad() {
   await IDB.tx([["kv", "del", "ident"]]).catch(() => {});
   const soloAdmin = new Set(SB_ADMIN_COLS); for (const c of soloAdmin) delete DS.c[c];
   try { const all = await IDB.getAll("docs"), ops = []; for (const [p, x] of Object.entries(all || {})) if (x && soloAdmin.has(x.col)) ops.push(["docs", "del", p]); if (ops.length) await IDB.tx(ops); } catch (e) {}
-  DS.isAdmin = false; DS.uid = null;
+  DS.isAdmin = false; DS.uid = null; SB.role = null;
 }
 
 async function bootSupabase(ident) {
   const cfg = window.OLI_CONFIG;
   if (!window.supabase || !window.supabase.createClient) { DS.mode = "local"; DS.error = "No se pudo cargar la conexión con el servidor."; changed(); return; }
-  SB.client = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey, {auth: {persistSession: true, autoRefreshToken: true, detectSessionInUrl: false}, realtime: {params: {eventsPerSecond: 20}}});
+  const habiaSesion = haySesionGuardada();                                                 // antes de crear el cliente: al arrancar, la librería puede borrarla sin avisar por qué
+  SB.client = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey, {auth: Object.assign({persistSession: true, autoRefreshToken: true, detectSessionInUrl: false}, lsOk() ? {storage: ALMACEN_SESION} : {}), realtime: {params: {eventsPerSecond: 20}}});
   DS.mode = "db"; DS.backend = "supabase"; REMOTE.kind = "supabase"; REMOTE.desc = "Supabase"; REMOTE.apply = sbApply;
   SB.client.auth.onAuthStateChange(sbCambioSesion);
   let session = null, err = null; try { const r = await withTimeout(SB.client.auth.getSession(), 5000); session = r.data && r.data.session; err = r.error; } catch (e) { err = e; }
@@ -39,9 +55,11 @@ async function bootSupabase(ident) {
     return;
   }
   if (!session) {
+    if (ident && ident.sb) await olvidarIdentidad();                                                    // sin sesión no hay a quién renovar: lo del administrador no se queda en el equipo
     if (err && errServidor(err)) DS.loginMsg = MSG_SERVIDOR;                                            // el servidor falló al renovar: no es culpa de la clave
-    else if (err && !errRed(err)) { await olvidarIdentidad(); DS.loginMsg = "Tu sesión venció. Ingresa de nuevo: lo que quedó guardado en este equipo se envía al ingresar."; }
+    else if (err && !errRed(err)) { DS.loginMsg = "Tu sesión venció. Ingresa de nuevo: lo que quedó guardado en este equipo se envía al ingresar."; }
     else if (sinServidor && ident && ident.sb) DS.loginMsg = MSG_SIN_RED;                                // no queda sesión que renovar: para ingresar hace falta el servidor
+    else if (habiaSesion) DS.loginMsg = "Tienes que ingresar de nuevo. Lo que quedó guardado en este equipo se envía al ingresar.";   // venció, se cerró en otro lado o el servidor falló al renovarla
     DS.needsLogin = true; changed(); return;
   }
   await sbCompletarSesion(session);
@@ -50,18 +68,40 @@ async function bootSupabase(ident) {
 /* una sola comprobación a la vez (cada una puede tardar ~30 s si el servidor no responde) */
 function probarSesion() { if (SB.probando || !SB.sinVerificar) return; SB.probando = true; SB.client.auth.getSession().then(r => { const s = r && r.data && r.data.session; if (s) sbCambioSesion("TOKEN_REFRESHED", s); }).catch(() => {}).finally(() => { SB.probando = false; }); }
 function sbCambioSesion(ev, session) {
-  if (SB.salio) { if ((ev === "TOKEN_REFRESHED" || ev === "SIGNED_IN") && session) setTimeout(() => { withTimeout(SB.client.auth.signOut(), 6000).catch(() => {}).then(borrarSesionGuardada); }, 0); return; }   // se cerró sesión: una renovación que venía en camino no la revive
-  if (!SB.sinVerificar) return;
-  if ((ev === "TOKEN_REFRESHED" || ev === "SIGNED_IN") && session) {
-    SB.sinVerificar = false; setTimeout(async () => { if (SB.chan) { try { SB.client.removeChannel(SB.chan); } catch (e) {} SB.chan = null; } netFail = false; SYNC.error = ""; await sbCompletarSesion(session); }, 0);   // sbCompletarSesion -> sbIniciar recarga todo una vez y envía lo pendiente
-  } else if (ev === "SIGNED_OUT") {
-    SB.sinVerificar = false; SB.gen++; setTimeout(async () => { await olvidarIdentidad(); DS.needsLogin = true; DS.loginMsg = "Tu sesión venció. Ingresa de nuevo: lo que quedó guardado en este equipo se envía al ingresar."; changed(); }, 0);
+  if (DS.bloqueada) return;                                                                 // ventana en pausa: la activa es otra ventana de OLI
+  const conSesion = (ev === "TOKEN_REFRESHED" || ev === "SIGNED_IN") && !!(session && session.user);
+  // 0) una sesión que ya se cerró en este equipo (en esta u otra ventana) y que una renovación atrasada trae de vuelta: no se usa y se invalida en el servidor
+  if (conSesion && esCerrada(session)) {
+    revocarSesion(session);
+    try { const g = sesionGuardada(); SB.client.realtime.setAuth(g && !esCerrada(g) ? g.access_token : window.OLI_CONFIG.supabaseAnonKey); } catch (e) {}   // el tiempo real tampoco la usa
+    return;
   }
+  const uid = conSesion ? session.user.id : null, email = ((conSesion && session.user.email) || "").toLowerCase();
+  const reIngreso = SB.ingresando && email && email === SB.ingresando.email;                 // la misma persona está volviendo a ingresar aquí
+  // 1) se cerró sesión y aún no ingresa nadie: lo demás no toca este equipo. Si el servidor no da identificador de sesión, se compara la persona.
+  if (SB.salio) { if (conSesion && !sesionIdDe(session) && uid === SB.salioUid && !reIngreso) setTimeout(descartarSesion, 0); return; }
+  // 2) con alguien adentro, aparece la sesión de OTRA persona sin que nadie haya ingresado en este equipo: por seguridad, pedir ingresar
+  if (conSesion && DS.uid && !SB.ingresando && !SB.sinVerificar && uid !== DS.uid) { SB.gen++; setTimeout(() => sesionPerdida("Por seguridad, ingresa de nuevo.", session), 0); return; }
+  // 3) la sesión se cerró por fuera (revocada, vencida o se cerró en otra ventana): olvidar y pedir ingresar
+  if (ev === "SIGNED_OUT" && !SB.ingresando) { if (DS.needsLogin) return; SB.sinVerificar = false; SB.gen++; setTimeout(() => sesionPerdida("Tu sesión se cerró. Ingresa de nuevo: lo que quedó guardado en este equipo se envía al ingresar."), 0); return; }
+  if (!SB.sinVerificar) return;
+  if (conSesion) {
+    SB.sinVerificar = false; setTimeout(async () => { if (SB.chan) { try { SB.client.removeChannel(SB.chan); } catch (e) {} SB.chan = null; } netFail = false; SYNC.error = ""; await sbCompletarSesion(session); }, 0);   // sbCompletarSesion -> sbIniciar recarga todo una vez y envía lo pendiente
+  }
+}
+/* cierra la sesión guardada en este equipo (solo esta sesión: la persona sigue adentro en sus otros equipos) */
+function descartarSesion() { const s = sesionGuardada(); if (s) marcarCerrada(s); withTimeout(SB.client.auth.signOut({scope: "local"}), 6000).catch(() => {}).then(borrarSesionGuardada); }
+async function sesionPerdida(msg, ajena) {
+  DS.needsLogin = true;
+  if (ajena) { marcarCerrada(ajena); revocarSesion(ajena); }
+  if (SB.chan) { try { SB.client.removeChannel(SB.chan); } catch (e) {} SB.chan = null; }
+  descartarSesion(); await olvidarIdentidad(); DS.needsLogin = true; DS.needsOrg = false; DS.loginMsg = msg; changed();
 }
 async function sbCompletarSesion(session) {
   const gen = SB.gen;                                                                       // si alguien cierra sesión mientras esto espera, no se vuelve a entrar solo
   let me = null, fallo = false; try { const r = await withTimeout(SB.client.rpc("oli_me"), 9000); me = r.data; fallo = !!r.error; } catch (e) { fallo = true; }
   const ident = await IDB.get("kv", "ident"); if (gen !== SB.gen) return;
+  try { const cur = await withTimeout(SB.client.auth.getSession(), 3000), cs = cur && cur.data && cur.data.session; if (cs && cs.user && cs.user.id !== session.user.id) { SB.gen++; await sesionPerdida("Por seguridad, ingresa de nuevo."); return; } } catch (e) {}
   if (!me && fallo && ident && ident.sb && ident.uid === session.user.id) usarIdent(ident);                           // servidor sin respuesta: identidad guardada
   else if (!me && fallo) { DS.needsLogin = true; DS.loginMsg = "Ingresaste, pero el servidor de OLI no está respondiendo. Intenta de nuevo en unos minutos."; changed(); return; }
   else if (!me) { DS.needsLogin = false; DS.needsOrg = true; DS.uid = session.user.id; SB.email = session.user.email || ""; changed(); return; }
@@ -87,17 +127,34 @@ function sbIniciar() {
   }
 }
 const sbCols = () => SHARED_COLS.concat(DS.isAdmin ? SB_ADMIN_COLS : []);
-async function sbCargar(name) {
+async function sbCargar(name, gen) {
   const desde = addDays(S.today, -HIST_DIAS), m = {}; let from = 0;
   for (;;) {
     let q = SB.client.from("oli_docs").select("doc_id,data").eq("org_id", SB.org).eq("collection", name).range(from, from + 999);
     if (RANGED.has(name)) q = q.gte("data->>fecha", desde);
-    const r = await withTimeout(q, 15000); if (r.error) throw r.error;
+    const real = Promise.resolve(q); SB.cargasEnCamino++; real.catch(() => {}).finally(() => {   // si deja de esperarse, se recuerda que sigue en camino
+      if (--SB.cargasEnCamino === 0 && SB.recargar && !SB.cargando) setTimeout(() => sbCargarTodo(), 0); });   // (también si quien la pidió es quien ingresó después)   // y cuando por fin responde, se hace la recarga que quedó pedida
+    const r = await withTimeout(real, 15000); if (r.error) throw r.error;
     for (const x of r.data) m[x.doc_id] = x.data; if (r.data.length < 1000) break; from += 1000;
   }
+  if (gen !== SB.gen || !puede(name, "read")) return;                                       // se cerró sesión o cambió quién está: lo que llegó tarde no se usa
   aplicarSnapshot(name, m);
 }
-async function sbCargarTodo(cols) { if (SB.sinVerificar) return; for (const n of (cols || sbCols())) { try { await sbCargar(n); } catch (e) { DS.ready[n] = true; if (e && /JWT|401|auth/i.test(e.message || "")) SB.authError = true; } } if (!SB.rtWasDown) SB.authError = false; recalcEstado(); changed(); }
+/* Un solo pase a la vez. Si un pedido no responde, el pase se corta y no empieza otro mientras ese siga en camino:
+   con el servidor caído cada pedido espera en fila a que la sesión se renueve, y se acumularían cientos. */
+async function sbCargarTodo(cols) {
+  if (SB.sinVerificar || DS.needsLogin || !DS.uid) return;                                  // sin nadie adentro no se pide nada (sin sesión el servidor respondería vacío)
+  if (SB.cargando || SB.cargasEnCamino > 0) { SB.recargar = true; return; }
+  SB.cargando = true; SB.recargar = false; const gen = SB.gen, lista = cols || sbCols(); let cortado = false;
+  try {
+    for (const n of lista) {
+      if (cortado) { DS.ready[n] = true; continue; }
+      try { await sbCargar(n, gen); } catch (e) { DS.ready[n] = true; if (e && /JWT|401|auth/i.test(e.message || "")) SB.authError = true; if (errRed(e)) cortado = true; }
+    }
+  } finally { SB.cargando = false; }
+  if (!SB.rtWasDown) SB.authError = false; recalcEstado(); changed();
+  if (!cortado && SB.recargar) { SB.recargar = false; setTimeout(() => sbCargarTodo(), 0); }   // alguien pidió recargar mientras tanto
+}
 function sbRealtime() {
   if (SB.chan) return;
   SB.chan = SB.client.channel("oli-docs-" + SB.org).on("postgres_changes", {event: "*", schema: "public", table: "oli_docs", filter: "org_id=eq." + SB.org}, p => {
@@ -108,7 +165,10 @@ function sbRealtime() {
 async function sbApply(op) {
   if (SB.sinVerificar) throw {code: "unavailable", message: "esperando que el servidor responda"};   // cada llamada esperaría ~30 s renovando la sesión y se acumularían
   const payload = [{op_id: op.opId, col: op.col, id: op.id, data: op.del ? null : op.data, del: !!op.del, t: op.t, device_id: DEV.id}];
-  let r; try { r = await SB.client.rpc("oli_apply", {p_ops: payload, p_device_id: DEV.id, p_app_version: APP_VERSION}); } catch (e) { throw {code: "unavailable", message: String(e && e.message || e)}; }
+  if (SB.envioEnCamino) throw {code: "unavailable", message: "el envío anterior sigue esperando al servidor"};   // uno solo en camino (se reenvía igual: oli_apply es idempotente)
+  const real = Promise.resolve(SB.client.rpc("oli_apply", {p_ops: payload, p_device_id: DEV.id, p_app_version: APP_VERSION})); SB.envioEnCamino = real;
+  real.catch(() => {}).finally(() => { if (SB.envioEnCamino === real) SB.envioEnCamino = null; });
+  let r; try { r = await real; } catch (e) { throw {code: "unavailable", message: String(e && e.message || e)}; }
   if (r.error) {
     const m = String(r.error.message || ""), st = r.error.status || r.status || 0;
     if (r.error.code === "28000" || /not_authenticated|JWT|expired/i.test(m) || st === 401) { SB.authError = true; throw {code: "unavailable", message: "sesión vencida"}; }
@@ -124,18 +184,25 @@ async function sbApply(op) {
   return x;
 }
 async function sbLogin(email, pass) {
-  SB.salio = false; let r; try { r = await withTimeout(SB.client.auth.signInWithPassword({email: email.trim(), password: pass}), 20000); } catch (e) { r = {error: e, data: {}}; }
+  SB.ingresando = {email: email.trim().toLowerCase()};
+  try { await sbLoginInterno(email, pass); } finally { SB.ingresando = null; }
+}
+async function sbLoginInterno(email, pass) {
+  let r; try { r = await withTimeout(SB.client.auth.signInWithPassword({email: email.trim(), password: pass}), 20000); } catch (e) { r = {error: e, data: {}}; }
   if (r.error && errRed(r.error)) throw new Error(MSG_SIN_RED);
   const credMala = e => e && e.status === 400 && /invalid_credentials|invalid_grant|invalid login|email not confirmed/i.test((e.code || "") + " " + (e.message || ""));
   if (r.error && !credMala(r.error)) throw new Error(MSG_SERVIDOR);                                  // solo se culpa a la clave cuando el servidor dice que la clave está mal
   if (r.error || !r.data.session) { const e = new Error("No pudimos ingresar. Revisa tu correo y contraseña."); throw e; }
+  SB.salio = false; SB.salioUid = null;
   if (SB.autoParado) { SB.autoParado = false; try { SB.client.auth.startAutoRefresh(); } catch (e) {} }
   await sbCompletarSesion(r.data.session);
 }
 async function sbCrearNegocio(nombre) { const r = await SB.client.rpc("oli_bootstrap", {p_org_name: nombre, p_store_name: "OLI 001"}); if (r.error) throw new Error("No se pudo crear el negocio. " + (r.error.message || "")); const s = await SB.client.auth.getSession(); await sbCompletarSesion(s.data.session); }
 async function sbSalir() {
-  const sinServidor = SB.sinVerificar || !conRed(); SB.gen++; SB.sinVerificar = false; SB.salio = true;
-  if (!sinServidor) { try { await withTimeout(SB.client.auth.signOut(), 6000); } catch (e) {} }        // con servidor: también se invalida la sesión allá
+  const sinServidor = SB.sinVerificar || !conRed(); SB.gen++; SB.sinVerificar = false; SB.salio = true; SB.salioUid = DS.uid;
+  const ses = sesionGuardada(); if (ses) marcarCerrada(ses);                                         // una renovación atrasada de esta sesión ya no se guarda ni se usa
+  if (!sinServidor) { try { await withTimeout(SB.client.auth.signOut({scope: "local"}), 6000); } catch (e) {} }   // con servidor: también se invalida allá (solo en este equipo)
+  else if (ses) revocarSesion(ses);                                                                  // sin servidor: se intenta igual; si no llega, se invalida cuando la renovación atrasada aparezca
   try { SB.autoParado = true; await withTimeout(SB.client.auth.stopAutoRefresh(), 2000); } catch (e) {}  // nada debe renovar esta sesión por su cuenta
   borrarSesionGuardada();                                                                           // sin servidor, signOut no la borra: se borra aquí
   if (SB.chan) { try { SB.client.removeChannel(SB.chan); } catch (e) {} SB.chan = null; }

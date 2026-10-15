@@ -407,16 +407,24 @@ $$ select not exists (
             or not exists (select 1 from sales sa where sa.org_id = p_org and sa.id = it->>'ventaId' and sa.user_id = p_uid::text and sa.device_id = p_dev
                              and oli.ms((it->>'t')::bigint) between sa.sold_at and sa.sold_at + interval '11 minutes'))) $$;
 
--- cambios de caja de helado: un empleado solo anula cambios que están en el documento de su propio equipo
+-- cambios de caja de helado: un empleado solo anula cambios que están en el documento de su propio equipo.
+-- Solo se juzga lo nuevo de cada envío: lo que el documento ya tenía (p. ej. una anulación del administrador en esta tablet) no se vuelve a juzgar.
+-- Un id que ya existe en otro documento no vale: así nadie copia el cambio de otro equipo a su propio documento para anularlo.
 create or replace function oli.helado_ok(p_org uuid, p_doc text, d jsonb) returns boolean language sql stable security definer set search_path = public as
-$$ select not exists (
-     select 1 from jsonb_array_elements(coalesce(d->'items','[]'::jsonb)) it
-     where it ? 'anula'
-       and not exists (select 1 from oli_docs o0, jsonb_array_elements(coalesce(o0.data->'items','[]'::jsonb)) z     -- solo lo nuevo de este envío: lo que el documento ya tenía (p. ej. una anulación del administrador en esta tablet) no se vuelve a juzgar
-                       where o0.org_id = p_org and o0.collection = 'cajashelado' and o0.doc_id = p_doc and z->>'id' = it->>'id')
-       and not exists (select 1 from jsonb_array_elements(coalesce(d->'items','[]'::jsonb)) y where y->>'id' = it->>'anula' and not (y ? 'anula'))
-       and not exists (select 1 from oli_docs o, jsonb_array_elements(coalesce(o.data->'items','[]'::jsonb)) x
-                       where o.org_id = p_org and o.collection = 'cajashelado' and o.doc_id = p_doc and x->>'id' = it->>'anula')) $$;
+$$ with nuevos as (
+     select it from jsonb_array_elements(coalesce(d->'items','[]'::jsonb)) it
+     where not exists (select 1 from oli_docs o0, jsonb_array_elements(coalesce(o0.data->'items','[]'::jsonb)) z
+                       where o0.org_id = p_org and o0.collection = 'cajashelado' and o0.doc_id = p_doc and z->>'id' = it->>'id')),
+   ajenos as (
+     select x->>'id' as id from oli_docs o, jsonb_array_elements(coalesce(o.data->'items','[]'::jsonb)) x
+     where o.org_id = p_org and o.collection = 'cajashelado' and o.doc_id <> p_doc)
+   select not exists (select 1 from nuevos n join ajenos a on a.id = n.it->>'id')
+      and not exists (
+     select 1 from nuevos n where n.it ? 'anula'
+       and (exists (select 1 from ajenos a where a.id = n.it->>'anula')
+            or (not exists (select 1 from jsonb_array_elements(coalesce(d->'items','[]'::jsonb)) y where y->>'id' = n.it->>'anula' and not (y ? 'anula'))
+                and not exists (select 1 from oli_docs o, jsonb_array_elements(coalesce(o.data->'items','[]'::jsonb)) x
+                                where o.org_id = p_org and o.collection = 'cajashelado' and o.doc_id = p_doc and x->>'id' = n.it->>'anula' and not (x ? 'anula'))))) $$;
 
 create or replace function oli_apply(p_ops jsonb, p_device_id text default null, p_app_version text default null)
 returns jsonb language plpgsql security definer set search_path = public as

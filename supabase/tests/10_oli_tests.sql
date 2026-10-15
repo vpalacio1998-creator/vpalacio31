@@ -217,6 +217,31 @@ begin
   reset role; set role authenticated; perform t_as(e1);
   r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','cn11','col','cajashelado','id','2026-10-04_d1','t',50100,'data','{"fecha":"2026-10-04","dev":"d1","items":[{"id":"za","t":50000,"anula":"c9","uid":"a"},{"id":"c11","t":50100,"sabor":"h-choco","motivo":"acabo","uid":"x"}]}'::jsonb)), 'd1', '1.0');
   perform t_assert(r->0->>'status' = 'applied', 'después, la empleada marca su cambio de caja en esa misma tablet sin que se rechace');
+  -- T25: nadie copia el cambio de otro equipo a su documento para anularlo; la anulación va al documento del cambio (aunque sea de ayer)
+  reset role; v := (select qty from inventory_current where product_id = 'h-choco');
+  set role authenticated; perform t_as(e1);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','cf1','col','cajashelado','id','2026-10-05_d1','t',60000,'data','{"fecha":"2026-10-05","dev":"d1","items":[{"id":"c20","t":60000,"sabor":"h-choco","motivo":"acabo","uid":"x"}]}'::jsonb)), 'd1', '1.0');
+  perform t_assert(r->0->>'status' = 'applied' and (select qty from inventory_current where product_id = 'h-choco') = v - 1, 'la tablet 1 abre una caja');
+  reset role; set role authenticated; perform t_as(e2);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','cf2','col','cajashelado','id','2026-10-05_d2','t',60100,'data','{"fecha":"2026-10-05","dev":"d2","items":[{"id":"c20","t":60000,"sabor":"h-choco","motivo":"inicio","uid":"y"},{"id":"z20","t":60100,"anula":"c20","uid":"y"}]}'::jsonb)), 'd2', '1.0');
+  perform t_assert(r->0->>'status' = 'rejected' and (select qty from inventory_current where product_id = 'h-choco') = v - 1, 'otro empleado no anula ese cambio copiándolo en su documento');
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','cf3','col','cajashelado','id','2026-10-05_d2','t',60200,'data','{"fecha":"2026-10-05","dev":"d2","items":[{"id":"c20","t":60000,"sabor":"h-choco","motivo":"inicio","uid":"y"}]}'::jsonb)), 'd2', '1.0');
+  perform t_assert(r->0->>'status' = 'rejected', 'tampoco puede guardar una copia del cambio para anularla después');
+  reset role; set role authenticated; perform t_as(e1);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','cf4','col','cajashelado','id','2026-10-06_d1','t',60300,'data','{"fecha":"2026-10-06","dev":"d1","items":[{"id":"z21","t":60300,"anula":"c20","uid":"x"}]}'::jsonb)), 'd1', '1.0');
+  perform t_assert(r->0->>'status' = 'rejected', 'la anulación en el documento de otro día se rechaza (por eso va al documento del cambio)');
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','cf5','col','cajashelado','id','2026-10-05_d1','t',60400,'data','{"fecha":"2026-10-05","dev":"d1","items":[{"id":"c20","t":60000,"sabor":"h-choco","motivo":"acabo","uid":"x"},{"id":"z22","t":60400,"anula":"c20","uid":"x"}]}'::jsonb)), 'd1', '1.0');
+  perform t_assert(r->0->>'status' = 'applied' and (select qty from inventory_current where product_id = 'h-choco') = v, 'pasada la medianoche, la empleada anula su cambio de ayer en el documento de ayer');
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','cf6','col','cajashelado','id','2026-10-05_d1','t',60500,'data','{"fecha":"2026-10-05","dev":"d1","items":[{"id":"c20","t":60000,"sabor":"h-choco","motivo":"acabo","uid":"x"},{"id":"z22","t":60400,"anula":"c20","uid":"x"},{"id":"c23","t":60500,"sabor":"h-choco","motivo":"acabo","uid":"x"}]}'::jsonb)), 'd1', '1.0');
+  perform t_assert(r->0->>'status' = 'applied' and (select qty from inventory_current where product_id = 'h-choco') = v - 1, 'y sigue marcando cambios en ese documento');
+  reset role; set role authenticated; perform t_as(a);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','cf7','col','cajashelado','id','2026-10-05_d1','t',60600,'data','{"fecha":"2026-10-05","dev":"d1","items":[{"id":"z23","t":60600,"anula":"c23","uid":"a"}]}'::jsonb)), 'dA', '1.0');
+  perform t_assert(r->0->>'status' = 'applied' and (select qty from inventory_current where product_id = 'h-choco') = v
+                   and (select data->>'dev' from oli_docs where collection = 'cajashelado' and doc_id = '2026-10-05_d1') = 'd1'
+                   and (select jsonb_array_length(data->'items') from oli_docs where collection = 'cajashelado' and doc_id = '2026-10-05_d1') = 4, 'el administrador anula en el documento del otro equipo sin borrar nada de él');
+  reset role; set role authenticated; perform t_as(e1);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','cf8','col','cajashelado','id','2026-10-05_d1','t',60700,'data','{"fecha":"2026-10-05","dev":"d1","items":[{"id":"c20","t":60000,"sabor":"h-choco","motivo":"acabo","uid":"x"},{"id":"z22","t":60400,"anula":"c20","uid":"x"},{"id":"c23","t":60500,"sabor":"h-choco","motivo":"acabo","uid":"x"},{"id":"z23","t":60600,"anula":"c23","uid":"a"},{"id":"c24","t":60700,"sabor":"h-choco","motivo":"acabo","uid":"x"}]}'::jsonb)), 'd1', '1.0');
+  perform t_assert(r->0->>'status' = 'applied' and (select qty from inventory_current where product_id = 'h-choco') = v - 1, 'la tablet reenvía su documento con la anulación del administrador y su cambio nuevo entra');
   -- T16: coherencia de totales
   reset role;
   perform t_assert((select sum(total) from sales) = (select sum(amount) from payments), 'total de ventas = total de pagos');

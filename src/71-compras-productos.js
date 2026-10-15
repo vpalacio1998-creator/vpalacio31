@@ -128,7 +128,7 @@ ACT.editProd = (el, d) => {
     <label class="f" for="pr-n">Nombre</label><input class="in plain" id="pr-n" value="${p ? esc(p.nombre) : ""}" placeholder="Ej: Paleta Mango" autofocus>
     <div class="split"><div><label class="f" for="pr-p">Precio de venta</label><input class="in money" id="pr-p" inputmode="numeric" value="${p ? fmt(p.precio) : ""}" placeholder="$0"></div>
     <div><label class="f" for="pr-i">${p ? "Inventario actual" : "Inventario inicial"}</label><input class="in plain" id="pr-i" inputmode="decimal" value="${p && stockDe(p.id) != null ? stockDe(p.id) : ""}" data-orig="${p && stockDe(p.id) != null ? stockDe(p.id) : ""}" placeholder="0"></div></div>
-    <label class="f">Categoría</label>${sel("pr-cat", CATS, p ? p.cat : "Paletas")}
+    <label class="f">Categoría</label>${sel("pr-cat", p && p.cat && !CATS.includes(p.cat) ? CATS.concat([p.cat]) : CATS, p ? p.cat : "Paletas")}
     <div id="pr-calc" class="small muted" style="margin-top:8px"></div>
     <details style="margin:14px 0"><summary style="font-weight:700;min-height:44px;display:flex;align-items:center;cursor:pointer">Más opciones</summary>
       <div class="split"><div><label class="f" for="pr-c">Lo que te cuesta ${ayuda("Lo que pagas por cada unidad. Con esto OLI calcula tu utilidad y margen.")}</label><input class="in money" id="pr-c" inputmode="numeric" value="${c != null ? fmt(c) : ""}" placeholder="$0"></div>
@@ -168,7 +168,7 @@ document.addEventListener("change", e => { const t = e.target; if (t.dataset && 
 ACT.doGuardarProd = async (el, d) => {
   const n = $("#pr-n").value.trim(), pr = num($("#pr-p").value); if (!n) { toast("Escribe el nombre.", true); return; } if (!(pr > 0) && selVal("pr-tipo") !== "Insumo") { toast("Escribe el precio de venta.", true); return; }
   const impT = (IMP_TIPOS.find(x => x[1] === selVal("pr-imp")) || IMP_TIPOS[0])[0], tar = numDec($("#pr-tar").value) / 100, ant = d.id ? prod(d.id) : null;
-  const dat = {nombre: n, cat: selVal("pr-cat") || "Otros", tipo: selVal("pr-tipo") === "Insumo" ? "insumo" : "terminado", precio: pr, unidad: $("#pr-u").value.trim() || "und", min: $("#pr-m").value.trim() === "" ? 3 : num($("#pr-m").value), seg: num($("#pr-s").value), pack: num($("#pr-pack").value) || 1, max: num($("#pr-max").value) || null,
+  const dat = {nombre: n, cat: selVal("pr-cat") || (ant && ant.cat) || "Otros", tipo: selVal("pr-tipo") === "Insumo" ? "insumo" : "terminado", precio: pr, unidad: $("#pr-u").value.trim() || "und", min: $("#pr-m").value.trim() === "" ? 3 : num($("#pr-m").value), seg: num($("#pr-s").value), pack: num($("#pr-pack").value) || 1, max: num($("#pr-max").value) || null,
     controla: $("#pr-ctl").checked, activo: $("#pr-act").checked, imp: {t: impT, r: tar || 0, cuenta: $("#pr-cta").value.trim()}};
   if ($("#pr-cono") && $("#pr-cono").checked) {
     const cn = {bolas: Number($("#pr-cbolas").value) === 2 ? 2 : 1, barquillo: $("#pr-cbarq").value, cucurucho: $("#pr-ccucu").value, vaso: $("#pr-cvaso").value};
