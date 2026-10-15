@@ -185,6 +185,31 @@ begin
   perform t_assert((select count(*) from oli_docs where collection='cajashelado') = 1, 'otro empleado del negocio ve los cambios de caja');
   reset role; set role authenticated; perform t_as(x);
   perform t_assert((select count(*) from oli_docs where collection='cajashelado') = 0, 'alguien de otro negocio no los ve');
+  -- T23: conos — el servidor descuenta lo que gastó cada línea; abrir caja resta una caja cerrada; un cambio anulado se quita
+  reset role; set role authenticated; perform t_as(a);
+  r := oli_apply(jsonb_build_array(
+    jsonb_build_object('op_id','cn1','col','productos','id','i-barq','t',40000,'data','{"nombre":"Barquillo","tipo":"insumo","precio":0,"orden":700.5}'::jsonb),
+    jsonb_build_object('op_id','cn2','col','stock','id','i-barq','t',40000,'data','{"base":100,"t":40000}'::jsonb),
+    jsonb_build_object('op_id','cn3','col','stock','id','h-choco','t',40000,'data','{"base":5,"t":40000}'::jsonb),
+    jsonb_build_object('op_id','cn4','col','productos','id','p-cono2','t',40000,'data','{"nombre":"Cono doble","precio":9000,"cono":{"bolas":2,"barquillo":"i-barq"}}'::jsonb)), 'dA', '1.0');
+  perform t_assert((select count(*) from jsonb_array_elements(r) el where el->>'status' = 'applied') = 4 and (select sort from products where id = 'i-barq') = 701, 'un orden con decimales no tumba el lote (se redondea)');
+  reset role; set role authenticated; perform t_as(e1);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','cn5','col','ventas','id','2026-10-03_d1','t',41000,'data', jsonb_build_object('fecha','2026-10-03','dev','d1','ventas', jsonb_build_array(
+         jsonb_build_object('id','d1-cono-1','n',20,'num','Caja 1 #20','t',41000,'fecha','2026-10-03','uid',e1::text,'dev','d1','m','Efectivo','total',18000,'sub',18000,'desc',0,'estado','confirmada',
+           'items','[{"pid":"p-cono2","n":"Cono doble","q":2,"p":9000,"d":0,"sab":["h-choco","h-choco"],"pres":"vaso","det":"Chocolate + Chocolate · vaso","gasta":[{"pid":"i-barq","q":2}]}]'::jsonb))))), 'd1', '1.0');
+  perform t_assert((select qty from inventory_current where product_id = 'i-barq') = 98, 'el servidor descuenta los barquillos que gastó el cono');
+  perform t_assert((select options->>'pres' from sale_items where sale_id = 'd1-cono-1') = 'vaso', 'la línea guarda sabores y presentación');
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','cn6','col','cajashelado','id','2026-10-03_d1','t',42000,'data','{"fecha":"2026-10-03","dev":"d1","items":[{"id":"c9","t":42000,"sabor":"h-choco","motivo":"acabo","uid":"x"}]}'::jsonb)), 'd1', '1.0');
+  perform t_assert((select qty from inventory_current where product_id = 'h-choco') = 4, 'abrir una caja nueva resta una caja cerrada en el servidor');
+  reset role; set role authenticated; perform t_as(e2);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','cn7','col','cajashelado','id','2026-10-03_d2','t',42100,'data','{"fecha":"2026-10-03","dev":"d2","items":[{"id":"z1","t":42100,"anula":"c9","uid":"y"}]}'::jsonb)), 'd2', '1.0');
+  perform t_assert(r->0->>'status' = 'rejected', 'un empleado no puede anular el cambio de caja de otro equipo');
+  reset role; set role authenticated; perform t_as(a);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','cn8','col','cajashelado','id','2026-10-03_dA','t',42200,'data','{"fecha":"2026-10-03","dev":"dA","items":[{"id":"z2","t":42200,"anula":"c9","uid":"a"}]}'::jsonb)), 'dA', '1.0');
+  perform t_assert(r->0->>'status' = 'applied' and (select qty from inventory_current where product_id = 'h-choco') = 5, 'el administrador anula el cambio y la caja vuelve al inventario');
+  reset role; set role authenticated; perform t_as(e1);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','cn9','col','cajashelado','id','2026-10-03_d1','t',42300,'data','{"fecha":"2026-10-03","dev":"d1","items":[{"id":"c10","t":42300,"sabor":"h-choco","motivo":"acabo","uid":"x"},{"id":"z3","t":42400,"anula":"c10","uid":"x"}]}'::jsonb)), 'd1', '1.0');
+  perform t_assert(r->0->>'status' = 'applied' and (select qty from inventory_current where product_id = 'h-choco') = 5, 'reenviar el documento no revive el cambio anulado; el empleado anula el suyo');
   -- T16: coherencia de totales
   reset role;
   perform t_assert((select sum(total) from sales) = (select sum(amount) from payments), 'total de ventas = total de pagos');

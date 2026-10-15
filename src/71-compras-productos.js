@@ -138,6 +138,12 @@ ACT.editProd = (el, d) => {
       <label class="f">Tipo</label>${sel("pr-tipo", ["Producto que vendo", "Insumo"], p && p.tipo === "insumo" ? "Insumo" : "Producto que vendo")}
       <label class="check" style="margin-top:10px"><input type="checkbox" id="pr-ctl" ${!p || p.controla !== false ? "checked" : ""}> Llevar inventario de este producto</label>
       <label class="check" style="margin-top:6px"><input type="checkbox" id="pr-sabor" ${p && p.sabor ? "checked" : ""}> Es un sabor de helado para conos (insumo que se cuenta por cajas) ${ayuda("Aparece al vender un cono sencillo o doble. La empleada marca cuándo cambia la caja y OLI mide cuántas bolas dio cada caja.")}</label>
+      ${(() => { const cn = (p && p.cono) || null, ins = insumos().filter(x => x.activo !== false && !x.sabor), opt = (sel0) => `<option value="">— Elegir —</option>` + ins.map(x => `<option value="${esc(x.id)}" ${sel0 === x.id ? "selected" : ""}>${esc(x.nombre)}</option>`).join("");
+        return `<details style="margin-top:8px" ${cn ? "open" : ""}><summary class="small" style="cursor:pointer;font-weight:700">Cono de helado (pide sabores al vender)</summary>
+        <label class="check" style="margin-top:6px"><input type="checkbox" id="pr-cono" ${cn ? "checked" : ""}> Este producto es un cono: al venderlo se eligen los sabores y si va en cucurucho o vaso</label>
+        <div class="split" style="margin-top:6px"><div><label class="f" for="pr-cbolas">Bolas</label><select class="in" id="pr-cbolas"><option value="1" ${!cn || cn.bolas !== 2 ? "selected" : ""}>1 (sencillo)</option><option value="2" ${cn && cn.bolas === 2 ? "selected" : ""}>2 (doble)</option></select></div>
+        <div><label class="f" for="pr-cbarq">Barquillo</label><select class="in" id="pr-cbarq">${opt(cn && cn.barquillo)}</select></div></div>
+        <div class="split"><div><label class="f" for="pr-ccucu">Cucurucho</label><select class="in" id="pr-ccucu">${opt(cn && cn.cucurucho)}</select></div><div><label class="f" for="pr-cvaso">Vaso</label><select class="in" id="pr-cvaso">${opt(cn && cn.vaso)}</select></div></div></details>`; })()}
       <label class="check"><input type="checkbox" id="pr-act" ${!p || p.activo !== false ? "checked" : ""}> Disponible para vender</label>
       <label class="f" for="pr-foto">Foto (opcional)</label><input class="in plain" id="pr-foto" type="file" accept="image/*" data-act-change="fotoProd"><div id="pr-prev" class="small muted">${S.prodImg ? "Foto cargada" : "Sin foto: OLI dibuja el producto con su color."}</div>
       <div class="split"><div><label class="f" for="pr-pack">Viene en cajas de</label><input class="in plain" id="pr-pack" inputmode="numeric" value="${p && p.pack ? p.pack : ""}" placeholder="1"></div><div><label class="f" for="pr-max">Cantidad ideal (insumos)</label><input class="in plain" id="pr-max" inputmode="numeric" value="${p && p.max ? p.max : ""}"></div></div>
@@ -164,6 +170,12 @@ ACT.doGuardarProd = async (el, d) => {
   const impT = (IMP_TIPOS.find(x => x[1] === selVal("pr-imp")) || IMP_TIPOS[0])[0], tar = numDec($("#pr-tar").value) / 100, ant = d.id ? prod(d.id) : null;
   const dat = {nombre: n, cat: selVal("pr-cat") || "Otros", tipo: selVal("pr-tipo") === "Insumo" ? "insumo" : "terminado", precio: pr, unidad: $("#pr-u").value.trim() || "und", min: $("#pr-m").value.trim() === "" ? 3 : num($("#pr-m").value), seg: num($("#pr-s").value), pack: num($("#pr-pack").value) || 1, max: num($("#pr-max").value) || null,
     controla: $("#pr-ctl").checked, activo: $("#pr-act").checked, imp: {t: impT, r: tar || 0, cuenta: $("#pr-cta").value.trim()}};
+  if ($("#pr-cono") && $("#pr-cono").checked) {
+    const cn = {bolas: Number($("#pr-cbolas").value) === 2 ? 2 : 1, barquillo: $("#pr-cbarq").value, cucurucho: $("#pr-ccucu").value, vaso: $("#pr-cvaso").value};
+    if (dat.tipo === "insumo") { toast("Un cono es un producto que se vende, no un insumo.", true); return; }
+    if (!cn.barquillo || !cn.cucurucho || !cn.vaso) { toast("Elige el barquillo, el cucurucho y el vaso del cono (son insumos).", true); return; }
+    dat.cono = cn; dat.controla = false;
+  } else if ($("#pr-cono")) dat.cono = null;
   if ($("#pr-sabor") && $("#pr-sabor").checked) { if (dat.tipo !== "insumo") { toast("Un sabor de helado debe ser de tipo “Insumo”.", true); return; } dat.sabor = true; dat.controla = true; } else dat.sabor = false;
   if (S.prodImg) dat.foto = S.prodImg; else delete dat.foto; if (ant && ant.combo) dat.combo = ant.combo;
   await guardar(async () => {

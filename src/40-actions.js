@@ -49,7 +49,7 @@ async function registrarVenta(opts) {
   const falta = faltante(S.cart); if (falta) throw new Error("No alcanza el inventario de " + falta.p.nombre + " (hay " + falta.st + ").");
   const sub = totalCarrito(), desc = clamp(Math.round(opts.desc || 0), 0, sub), total = sub - desc, seq = await nextSeq();
   let resto = desc;   // el descuento se reparte por línea y la suma cuadra exacto con el total
-  const items = S.cart.map((c, k) => { const p = prod(c.pid), bruto = c.p * c.q, d = k === S.cart.length - 1 ? resto : Math.round(sub ? desc * bruto / sub : 0); resto -= d; const i = impLinea(p, bruto - d); return Object.assign({pid: c.pid, n: c.n, q: c.q, p: c.p, d, imp: {t: i.t, r: i.r, base: i.base, v: i.imp}}, c.sab ? {sab: c.sab.slice(), pres: c.pres, det: c.det, gasta: consumoLinea(c)} : {}); });
+  const items = S.cart.map((c, k) => { const p = prod(c.pid), bruto = c.p * c.q, d = k === S.cart.length - 1 ? resto : Math.round(sub ? desc * bruto / sub : 0); resto -= d; const i = impLinea(p, bruto - d); return Object.assign({pid: c.pid, n: c.n, q: c.q, p: c.p, d, imp: {t: i.t, r: i.r, base: i.base, v: i.imp}}, c.sab ? {sab: c.sab.slice(), pres: c.pres, det: c.det, gasta: consumoLinea(c), bc: bolasCaja()} : {}); });
   const t = Date.now(), fecha = ymd(new Date(t));
   const venta = {id: DEV.id + "-" + t.toString(36) + "-" + seq, n: seq, num: (DEV.nombre || DEV.id) + " #" + seq, t, fecha, uid: uidActual(), dev: DEV.id, m: opts.m, total, sub, desc, recibido: opts.m === "Efectivo" ? (opts.recibido || total) : total, cambio: opts.m === "Efectivo" ? Math.max(0, (opts.recibido || total) - total) : 0, ref: opts.ref || "", cliente: opts.cliente || null, estado: "confirmada"};
   venta.items = items;

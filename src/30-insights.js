@@ -190,14 +190,15 @@ function difRecetas() { if (!esAdmin()) return []; const out = []; for (const p 
 function analisisMermas() {
   const t = S.today, a = firstOfMonth(t), ms = mermasAll().filter(m => m.fecha >= a && m.fecha <= t);
   let costo = 0; for (const m of ms) { const c = costoUnit(m.pid, m.t); if (c != null) costo += c * m.q; }
+  const ph = perdidasHelado(a, t); costo += sum(ph, x => x.total || 0);                        // cajas de helado abiertas que se dañaron
   const compras = sum(Object.values(col("compras")).filter(c => c.estado === "recibido" && c.fecha >= a), c => sum(c.lineas || [], l => (l.costo || 0) * (l.q || 0)));
   const finMes = finanzas(a, t), baseCmp = compras || finMes.cogs, anormal = [], by = {};
   for (const m of ms) by[m.pid] = (by[m.pid] || 0) + m.q;
   const prev30 = mermasAll().filter(m => m.fecha >= addDays(t, -59) && m.fecha < addDays(t, -29)), pv = {}; prev30.forEach(m => pv[m.pid] = (pv[m.pid] || 0) + m.q);
   const vend = {}; rentabilidad(a, t).forEach(r => vend[r.pid] = r.uds);
   for (const [pid, q] of Object.entries(by)) { const v = vend[pid] || 0, p = prod(pid); if (!p) continue; if (q >= 3 && q / (q + v) >= 0.1) anormal.push({p, q, v, motivo: "Más del 10% de lo que sale se pierde (" + q + " de " + (q + v) + ")."}); else if (q >= 5 && q >= 2 * (pv[pid] || 0.5)) anormal.push({p, q, v, motivo: "Subió a " + q + " este mes (antes " + (pv[pid] || 0) + ")."}); }
-  const porMotivo = {}; ms.forEach(m => porMotivo[m.motivo] = (porMotivo[m.motivo] || 0) + m.q);
-  return {ms, unidades: sum(ms, m => m.q), costo, pctCompras: baseCmp ? costo / baseCmp : NaN, base: compras ? "compras" : "costo de lo vendido", anormal, porMotivo};
+  const porMotivo = {}; ms.forEach(m => porMotivo[m.motivo] = (porMotivo[m.motivo] || 0) + m.q); if (ph.length) porMotivo["Caja de helado dañada"] = ph.length;
+  return {ms, cajasHelado: ph, unidades: sum(ms, m => m.q), costo, pctCompras: baseCmp ? costo / baseCmp : NaN, base: compras ? "compras" : "costo de lo vendido", anormal, porMotivo};
 }
 
 /* ---- productos lentos y estrellas ---- */

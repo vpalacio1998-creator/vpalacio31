@@ -143,6 +143,7 @@ create index if not exists sales_date on sales (org_id, local_date);
 create table if not exists sale_items (
   org_id uuid not null, sale_id text not null, line_no int not null, product_id text, name text, qty numeric not null,
   unit_price numeric not null, discount numeric default 0, tax_type text, tax_rate numeric, tax_base numeric, tax_value numeric,
+  consumption jsonb, options jsonb,                       -- lo que gastó la línea (p. ej. un cono: barquillo + cucurucho o vaso) y sus opciones (sabores, presentación)
   primary key (org_id, sale_id, line_no));
 create table if not exists payments (
   org_id uuid not null, sale_id text not null, method text not null, amount numeric not null, confirmed boolean not null default true, confirmed_at timestamptz,
@@ -249,7 +250,7 @@ begin
     if del then delete from products where org_id = p_org and products.id = project_a.id; return; end if;
     insert into products (org_id, id, name, category, type, price, unit, min_stock, safety_stock, pack, controls_stock, active, tax, image_path, combo, sort, updated_at)
     values (p_org, id, d->>'nombre', d->>'cat', coalesce(d->>'tipo','terminado'), coalesce((d->>'precio')::numeric,0), d->>'unidad', (d->>'min')::numeric, (d->>'seg')::numeric, (d->>'pack')::int,
-            coalesce((d->>'controla')::boolean, true), coalesce((d->>'activo')::boolean, true), d->'imp', d->>'fotoPath', d->'combo', (d->>'orden')::int, now())
+            coalesce((d->>'controla')::boolean, true), coalesce((d->>'activo')::boolean, true), d->'imp', d->>'fotoPath', d->'combo', round((d->>'orden')::numeric)::int, now())
     on conflict (org_id, id) do update set name = excluded.name, category = excluded.category, type = excluded.type, price = excluded.price, unit = excluded.unit, min_stock = excluded.min_stock,
       safety_stock = excluded.safety_stock, pack = excluded.pack, controls_stock = excluded.controls_stock, active = excluded.active, tax = excluded.tax, image_path = excluded.image_path, combo = excluded.combo, sort = excluded.sort, updated_at = now();
   elsif c = 'costos' then
@@ -269,8 +270,9 @@ begin
       n := 0;
       for it in select * from jsonb_array_elements(coalesce(s->'items','[]'::jsonb)) loop
         n := n + 1;
-        insert into sale_items (org_id, sale_id, line_no, product_id, name, qty, unit_price, discount, tax_type, tax_rate, tax_base, tax_value)
-        values (p_org, s->>'id', n, it->>'pid', it->>'n', (it->>'q')::numeric, (it->>'p')::numeric, coalesce((it->>'d')::numeric,0), it#>>'{imp,t}', (it#>>'{imp,r}')::numeric, (it#>>'{imp,base}')::numeric, (it#>>'{imp,v}')::numeric)
+        insert into sale_items (org_id, sale_id, line_no, product_id, name, qty, unit_price, discount, tax_type, tax_rate, tax_base, tax_value, consumption, options)
+        values (p_org, s->>'id', n, it->>'pid', it->>'n', (it->>'q')::numeric, (it->>'p')::numeric, coalesce((it->>'d')::numeric,0), it#>>'{imp,t}', (it#>>'{imp,r}')::numeric, (it#>>'{imp,base}')::numeric, (it#>>'{imp,v}')::numeric,
+                case when jsonb_typeof(it->'gasta') = 'array' then it->'gasta' end, case when it ? 'sab' then jsonb_build_object('sab', it->'sab', 'pres', it->'pres', 'det', it->'det') end)
         on conflict (org_id, sale_id, line_no) do nothing;
       end loop;
       insert into payments (org_id, sale_id, method, amount, confirmed, confirmed_at)
@@ -356,11 +358,32 @@ begin
   end if;
 end $$;
 
+-- cambios de caja de helado: abrir una caja nueva resta una caja cerrada (kardex); un cambio anulado se quita (venga de donde venga la anulación)
+create or replace function oli.project_c(p_org uuid, p_store uuid, c text, id text, d jsonb, del boolean) returns void language plpgsql as
+$$
+#variable_conflict use_column
+declare it jsonb;
+begin
+  if c <> 'cajashelado' or del then return; end if;
+  for it in select * from jsonb_array_elements(coalesce(d->'items','[]'::jsonb)) loop
+    if it ? 'anula' then
+      delete from inventory_movements m where m.org_id = p_org and m.id = 'caja_' || (it->>'anula');
+    elsif coalesce(it->>'motivo','') <> 'inicio' and not exists (select 1 from oli_docs o, jsonb_array_elements(coalesce(o.data->'items','[]'::jsonb)) x
+                                                                    where o.org_id = p_org and o.collection = 'cajashelado' and x->>'anula' = it->>'id') then
+      insert into inventory_movements (org_id, id, product_id, type, qty, delta, reason, ref, at, user_id, device_id, local_date)
+      values (p_org, 'caja_' || (it->>'id'), it->>'sabor', 'apertura_caja', -1, true, case when it->>'motivo' = 'danada' then 'la caja anterior se dañó' else 'caja nueva' end,
+              it->>'obs', oli.ms((it->>'t')::bigint), it->>'uid', d->>'dev', (d->>'fecha')::date)
+      on conflict (org_id, id) do nothing;
+    end if;
+  end loop;
+end $$;
+
 create or replace function oli.project(p_org uuid, p_store uuid, c text, id text, d jsonb, del boolean) returns void language plpgsql as
 $$
 begin
   -- dividida en dos mitades para que cada función sea pequeña
   if c in ('productos','costos','stock','ventas','anulaciones','confirmaciones','cajas') then perform oli.project_a(p_org, p_store, c, id, d, del);
+  elsif c = 'cajashelado' then perform oli.project_c(p_org, p_store, c, id, d, del);
   else perform oli.project_b(p_org, p_store, c, id, d, del); end if;
 end $$;
 
@@ -383,6 +406,15 @@ $$ select not exists (
        and (coalesce(it->>'uid','') <> p_uid::text
             or not exists (select 1 from sales sa where sa.org_id = p_org and sa.id = it->>'ventaId' and sa.user_id = p_uid::text and sa.device_id = p_dev
                              and oli.ms((it->>'t')::bigint) between sa.sold_at and sa.sold_at + interval '11 minutes'))) $$;
+
+-- cambios de caja de helado: un empleado solo anula cambios que están en el documento de su propio equipo
+create or replace function oli.helado_ok(p_org uuid, p_doc text, d jsonb) returns boolean language sql stable security definer set search_path = public as
+$$ select not exists (
+     select 1 from jsonb_array_elements(coalesce(d->'items','[]'::jsonb)) it
+     where it ? 'anula'
+       and not exists (select 1 from jsonb_array_elements(coalesce(d->'items','[]'::jsonb)) y where y->>'id' = it->>'anula' and not (y ? 'anula'))
+       and not exists (select 1 from oli_docs o, jsonb_array_elements(coalesce(o.data->'items','[]'::jsonb)) x
+                       where o.org_id = p_org and o.collection = 'cajashelado' and o.doc_id = p_doc and x->>'id' = it->>'anula')) $$;
 
 create or replace function oli_apply(p_ops jsonb, p_device_id text default null, p_app_version text default null)
 returns jsonb language plpgsql security definer set search_path = public as
@@ -411,6 +443,7 @@ begin
     elsif oli.single_writer(c) and lvl < 3 and (d is null or del or coalesce(d->>'dev','') <> coalesce(dev,'') or right(id, length(coalesce(dev,'')) + 1) <> '_' || coalesce(dev,'')) then status := 'rejected'; detail := 'solo el dispositivo dueño puede escribir este documento';
     elsif c = 'dispositivos' and lvl < 3 and id <> coalesce(dev,'') then status := 'rejected'; detail := 'dispositivo ajeno';
     elsif c = 'anulaciones' and lvl < 3 and not oli.void_ok(mem.org_id, uid, dev, id, d) then status := 'rejected'; detail := 'el empleado solo anula su propia venta en los 10 minutos siguientes';
+    elsif c = 'cajashelado' and lvl < 3 and not oli.helado_ok(mem.org_id, id, d) then status := 'rejected'; detail := 'el empleado solo anula cambios de caja de su propio equipo';
     end if;
     if status = 'rejected' then
       insert into sync_ops (op_id, org_id, store_id, device_id, user_id, collection, doc_id, kind, device_ts, status, detail) values (opid, mem.org_id, mem.store_id, dev, uid, c, id, case when del then 'del' else 'set' end, ts, 'rejected', detail);
@@ -452,14 +485,17 @@ end $$;
 -- ---------------------------------------------------------------------------
 create or replace view inventory_current with (security_invoker = true) as
 with lines as (
-  select si.org_id, si.sale_id, si.product_id, si.qty, s.sold_at from sale_items si
+  select si.org_id, si.sale_id, si.product_id, si.qty, si.consumption, s.sold_at from sale_items si
   join sales s on s.org_id = si.org_id and s.id = si.sale_id
   where not exists (select 1 from sale_voids v where v.org_id = s.org_id and v.sale_id = s.id)
 ), exp as (
-  select l.org_id, l.sold_at, l.qty * (c.value->>'q')::numeric as qty, c.value->>'pid' as product_id
-  from lines l join products p on p.org_id = l.org_id and p.id = l.product_id and p.combo is not null, lateral jsonb_array_elements(p.combo) c(value)
+  select l.org_id, l.sold_at, (g.value->>'q')::numeric as qty, g.value->>'pid' as product_id          -- lo que la línea dijo que gastó (conos: barquillo + cucurucho o vaso)
+  from lines l, lateral jsonb_array_elements(l.consumption) g(value) where jsonb_typeof(l.consumption) = 'array'
   union all
-  select l.org_id, l.sold_at, l.qty, l.product_id from lines l left join products p on p.org_id = l.org_id and p.id = l.product_id where p.combo is null
+  select l.org_id, l.sold_at, l.qty * (c.value->>'q')::numeric as qty, c.value->>'pid' as product_id
+  from lines l join products p on p.org_id = l.org_id and p.id = l.product_id and p.combo is not null, lateral jsonb_array_elements(p.combo) c(value) where l.consumption is null
+  union all
+  select l.org_id, l.sold_at, l.qty, l.product_id from lines l left join products p on p.org_id = l.org_id and p.id = l.product_id where p.combo is null and l.consumption is null
 )
 select c.org_id, c.product_id, c.base - coalesce((select sum(e.qty) from exp e where e.org_id = c.org_id and e.product_id = c.product_id and e.sold_at > c.counted_at), 0)
        - coalesce((select sum(w.qty) from waste w where w.org_id = c.org_id and w.product_id = c.product_id and w.at > c.counted_at), 0)

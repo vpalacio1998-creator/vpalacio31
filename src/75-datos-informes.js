@@ -9,7 +9,7 @@ function filasVentas(a, b, F) {
   const out = [];
   for (const v of ventasAll()) if (v.fecha >= a && v.fecha <= b && pasaF(v, null, F)) for (const it of (v.items || [])) {
     if (!pasaF(v, it, F)) continue; const neto = lineaNeta(it), iv = (it.imp && it.imp.v) || 0, p = prod(it.pid);
-    out.push({id: v.id, num: v.num || "", fecha: v.fecha, hora: hora(v.t), t: v.t, caja: devNombre(v.dev), empleado: empNombre(v.uid), producto: it.n + (it.det ? " (" + it.det + ")" : ""), pid: it.pid, categoria: (p && p.cat) || "", cantidad: it.q, precio: it.p, descuento: it.d || 0,
+    out.push({id: v.id, num: v.num || "", fecha: v.fecha, hora: hora(v.t), t: v.t, caja: devNombre(v.dev), empleado: empNombre(v.uid), producto: it.n, detalle: it.det || "", pid: it.pid, categoria: (p && p.cat) || "", cantidad: it.q, precio: it.p, descuento: it.d || 0,
       subtotal: neto - iv, impuesto: iv, impTipo: (it.imp && it.imp.t) || "validar", impTarifa: (it.imp && it.imp.r) || 0, total: neto, metodo: v.m, costoU: costoItem(it, v.t), cliente: v.cliente ? "Pidió factura" : "", estado: v.anulada ? "Anulada" : "Confirmada", sync: ventaSyncTxt(ventaSync(v))});
   }
   return out.sort((x, y) => x.t - y.t);
@@ -26,9 +26,10 @@ function filasInventario(a, b) {
   for (const p of prods().filter(x => x.controla !== false && !x.combo)) {
     const movs = porPid[p.id] || [], fin = stockFinalEn(p.id, b, movs), en = movs.filter(m => m.fecha >= a && m.fecha <= b);
     const ent = sum(en.filter(m => ENTRA[m.tipo]), m => m.q), ven = -sum(en.filter(m => m.tipo === "venta"), m => m.q), mer = -sum(en.filter(m => m.tipo === "perdida"), m => m.q), con = -sum(en.filter(m => m.tipo === "consumo"), m => m.q), ajs = sum(en.filter(m => m.tipo === "conteo"), m => m.q);
-    const ini = fin == null ? null : Math.round((fin - ent + ven + mer + con - ajs) * 1000) / 1000, e = estadoProd(p), c = costoActual(p.id), cov = cobertura(p.id), ag = agotaEn(p.id);
+    const abr = -sum(en.filter(m => m.tipo === "aperturaCaja"), m => m.q);                        // cajas de helado abiertas: salen del inventario de cajas cerradas
+    const ini = fin == null ? null : Math.round((fin - ent + ven + mer + con + abr - ajs) * 1000) / 1000, e = estadoProd(p), c = costoActual(p.id), cov = cobertura(p.id), ag = agotaEn(p.id);
     const estado = e.k === "agotado" ? "AGOTADO" : e.k === "bajo" ? "BAJO" : ag && ag.dias <= 3 ? "RIESGO" : e.k === "sin" ? "SIN CONTAR" : "NORMAL";
-    out.push({producto: p.nombre, sku: p.id, categoria: p.cat || "", tipo: p.tipo === "insumo" ? "Insumo" : "Producto terminado", unidad: p.unidad || "und", inicial: ini, entradas: ent, salidas: ven + mer + con, ventas: ven, mermas: mer, consumo: con, ajustes: ajs, final: fin, costo: c, minimo: p.min || 0, seguridad: p.seg || 0, cobertura: cov == null || cov === Infinity ? null : Math.round(cov * 10) / 10, estado});
+    out.push({producto: p.nombre, sku: p.id, categoria: p.cat || "", tipo: p.tipo === "insumo" ? "Insumo" : "Producto terminado", unidad: p.unidad || "und", inicial: ini, entradas: ent, salidas: ven + mer + con + abr, ventas: ven, mermas: mer, consumo: con, abiertas: abr, ajustes: ajs, final: fin, costo: c, minimo: p.min || 0, seguridad: p.seg || 0, cobertura: cov == null || cov === Infinity ? null : Math.round(cov * 10) / 10, estado});
   }
   return out;
 }
@@ -50,10 +51,10 @@ function filasCajas(a, b) {
 }
 function filasMovCaja(a, b) { const out = []; for (const c of cajasAll()) if (c.fecha >= a && c.fecha <= b) for (const m of (c.movs || [])) out.push({fecha: c.fecha, hora: hora(m.t), caja: devNombre(c.dev), tipo: m.tipo === "retiro" ? "Salida de dinero" : m.tipo === "ingreso" ? "Entrada de dinero" : "Pago desde caja", valor: m.monto, motivo: m.motivo, usuario: empNombre(m.uid), soporte: ""}); return out; }
 function filasGastos(a, b) { return gastosEn(a, b).map(g => ({fecha: g.fecha, proveedor: g.proveedor || "", categoria: g.cat || "", descripcion: g.desc || "", base: g.base || (g.iva ? g.valor - g.iva : g.valor), iva: g.iva || 0, retencion: g.retencion || 0, total: g.valor, metodo: g.m || "", cuenta: g.origen === "caja" || g.m === "Efectivo" ? "Caja" : "Banco", usuario: empNombre(g.uid), soporte: (g.soporte && g.soporte.ref) || "", estado: g.origen === "caja" ? "Desde caja" : (g.estado || "Registrado")})).sort((x, y) => x.fecha.localeCompare(y.fecha)); }
-function filasMermas(a, b) { return mermasAll().filter(m => m.fecha >= a && m.fecha <= b).map(m => { const p = prod(m.pid), c = costoUnit(m.pid, m.t); return {producto: (p && p.nombre) || m.pid, fecha: m.fecha, cantidad: m.q, unidad: (p && p.unidad) || "und", costo: c, total: c == null ? null : c * m.q, motivo: m.motivo, empleado: empNombre(m.uid), obs: m.obs || ""}; }).concat(perdidasHelado(a, b)); }
+function filasMermas(a, b) { return mermasAll().filter(m => m.fecha >= a && m.fecha <= b).map(m => { const p = prod(m.pid), c = costoUnit(m.pid, m.t); return {pid: m.pid, producto: (p && p.nombre) || m.pid, fecha: m.fecha, cantidad: m.q, unidad: (p && p.unidad) || "und", costo: c, total: c == null ? null : c * m.q, motivo: m.motivo, empleado: empNombre(m.uid), obs: m.obs || ""}; }).concat(perdidasHelado(a, b)); }
 function filasRentabilidad(a, b) {
   const desc = {}, mer = {}; for (const r of filasVentas(a, b, {})) if (r.estado === "Confirmada") desc[r.pid] = (desc[r.pid] || 0) + r.descuento;
-  for (const m of filasMermas(a, b)) { const p = prods().find(x => x.nombre === m.producto); if (p) mer[p.id] = (mer[p.id] || 0) + (m.total || 0); }
+  for (const m of filasMermas(a, b)) if (m.pid) mer[m.pid] = (mer[m.pid] || 0) + (m.total || 0);
   return rentabilidad(a, b).map(r => ({producto: r.n, pid: r.pid, unidades: r.uds, ventas: r.ing - (desc[r.pid] || 0), costo: r.sinCosto ? null : r.costo, descuentos: desc[r.pid] || 0, merma: mer[r.pid] || 0}));
 }
 function filasClientes(a, b) {

@@ -65,7 +65,7 @@ ACT.guardarAjustes = async () => { await guardar(async () => { const mov = $("#a
 ACT.guardarConos = async () => {
   const b = num($("#aj-bc").value), mn = num($("#aj-bmin").value), mx = num($("#aj-bmax").value);
   if (!(b >= 1 && mn >= 0 && mx >= mn && b >= mn && b <= mx)) { toast("Revisa los números: el mínimo debe ser menor o igual a las bolas por caja, y estas menores o iguales al máximo.", true); return; }
-  await guardar(() => guardarConfig({conos: {bolasCaja: b, min: mn, max: mx}}), "Guardado");
+  await guardar(async () => { exigirAdmin(); await put("meta", "conos", {bolasCaja: b, min: mn, max: mx}); audit("CONFIG", "conos", b + " bolas por caja · aceptable " + mn + " a " + mx); }, "Guardado");   // en meta: la tablet de la empleada también lo necesita (no tiene costos)
 };
 ACT.guardarColchon = async () => { const v = num($("#aj-col").value); if (!(v >= 0 && v <= 100)) { toast("Escribe un porcentaje entre 0 y 100.", true); return; } await guardar(() => guardarConfig({colchonFestivo: v / 100}), "Guardado"); };
 ACT.verFestivos = () => {

@@ -42,7 +42,7 @@ function lineasExp(v) {
   const out = [];
   for (const it of (v.items || [])) {
     for (const x of consumoLinea(it)) out.push({pid: x.pid, q: x.q, t: v.t});
-    if (Array.isArray(it.sab)) for (const s of it.sab) out.push({pid: s, q: it.q / bolasCaja(), t: v.t, porCaja: true});   // bolas en fracción de caja: para costo y consumo, no para el inventario (ese baja al abrir cada caja)
+    if (Array.isArray(it.sab)) for (const s of it.sab) out.push({pid: s, q: it.q / (it.bc || bolasCaja()), t: v.t, porCaja: true});   // bolas en fracción de caja: para costo y consumo, no para el inventario (ese baja al abrir cada caja)
   }
   return out;
 }
@@ -104,14 +104,14 @@ function gastosEn(a, b) {
   return out.sort((x, y) => (y.fecha > x.fecha ? 1 : -1));
 }
 function finanzas(a, b) {
-  const vs = ventasEn(a, b); let ventas = 0, cogs = 0, sinCosto = 0, uds = 0;
+  const vs = ventasEn(a, b); let ventas = 0, cogs = 0, sinCosto = 0, sinCostoHelado = false, uds = 0;
   for (const v of vs) {
     ventas += v.total; for (const it of (v.items || [])) uds += it.q;
-    for (const l of lineasExp(v)) { const c = costoUnit(l.pid, v.t); if (c == null) sinCosto += l.q; else cogs += c * l.q; }
+    for (const l of lineasExp(v)) { const c = costoUnit(l.pid, v.t); if (c == null) { if (l.porCaja) sinCostoHelado = true; else sinCosto += l.q; } else cogs += c * l.q; }
   }
   const gs = gastosEn(a, b), gastosOp = sum(gs.filter(g => g.cat !== BASE_COSTO), g => g.valor), gastosMP = sum(gs.filter(g => g.cat === BASE_COSTO), g => g.valor);
   const bruta = ventas - cogs, utilidad = bruta - gastosOp;
-  return {ventas, cogs, bruta, gastos: gastosOp, gastosMP, utilidad, margen: ventas ? utilidad / ventas : NaN, margenBruto: ventas ? bruta / ventas : NaN, n: vs.length, uds, ticket: vs.length ? ventas / vs.length : 0, sinCosto};
+  return {ventas, cogs, bruta, gastos: gastosOp, gastosMP, utilidad, margen: ventas ? utilidad / ventas : NaN, margenBruto: ventas ? bruta / ventas : NaN, n: vs.length, uds, ticket: vs.length ? ventas / vs.length : 0, sinCosto, sinCostoHelado};
 }
 function rentabilidad(a, b) {
   const rows = {};

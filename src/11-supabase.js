@@ -8,6 +8,19 @@ const SB = {client: null, org: null, store: null, role: null, email: "", chan: n
 const errRed = e => !!e && ((window.supabase && typeof window.supabase.isAuthRetryableFetchError === "function" && window.supabase.isAuthRetryableFetchError(e)) ||
   e.name === "AuthRetryableFetchError" || e.code === "timeout" || e.status === 0 || /failed to fetch|networkerror|network request failed|load failed/i.test(String(e.message || "")));
 const SB_ADMIN_COLS = ADMIN_COLS.concat(["audit"]);
+/* error del servidor (no de la clave): 5xx, demasiados intentos, respuesta que no es JSON */
+const errServidor = e => !!e && !errRed(e) && ((e.status >= 500) || e.status === 429 || e.name === "AuthUnknownError");
+const MSG_SERVIDOR = "El servidor de OLI no está respondiendo bien. Intenta de nuevo en unos minutos.";
+const MSG_SIN_RED = "No hay conexión con el servidor de OLI. Revisa el Internet; si hay Internet, el servidor no está respondiendo: avísale al administrador.";
+/* ¿queda en este equipo una sesión de Supabase que se pueda renovar? Sin ella no hay cómo reconectarse solo */
+function haySesionGuardada() { try { for (let i = 0; i < localStorage.length; i++) if (/^sb-.*-auth-token$/.test(localStorage.key(i) || "")) return true; } catch (e) {} return false; }
+/* la sesión se cerró o el servidor la rechazó: este equipo olvida la identidad y lo que solo ve el administrador (las ventas por enviar se conservan) */
+async function olvidarIdentidad() {
+  await IDB.tx([["kv", "del", "ident"]]).catch(() => {});
+  const soloAdmin = new Set(SB_ADMIN_COLS); for (const c of soloAdmin) delete DS.c[c];
+  try { const all = await IDB.getAll("docs"), ops = []; for (const [p, x] of Object.entries(all || {})) if (x && soloAdmin.has(x.col)) ops.push(["docs", "del", p]); if (ops.length) await IDB.tx(ops); } catch (e) {}
+  DS.isAdmin = false; DS.uid = null;
+}
 
 async function bootSupabase(ident) {
   const cfg = window.OLI_CONFIG;
@@ -20,22 +33,29 @@ async function bootSupabase(ident) {
      el equipo que ya había ingresado abre con lo guardado y se reconecta solo cuando el servidor vuelva.
      Una sesión cerrada o revocada (error que no es de red) sí pide ingresar de nuevo. */
   const sinServidor = (typeof navigator !== "undefined" && navigator.onLine === false) || errRed(err);
-  if (!session && ident && ident.sb && sinServidor) {
+  if (!session && ident && ident.sb && sinServidor && haySesionGuardada()) {
     usarIdent(ident); SB.sinVerificar = true; sbIniciar();
-    SB.client.auth.getSession().then(r => { const s = r && r.data && r.data.session; if (s) sbCambioSesion("TOKEN_REFRESHED", s); }).catch(() => {});   // por si la sesión se renovó justo después de los 5 segundos
+    probarSesion();                                                                                    // por si la sesión se renovó justo después de los 5 segundos
     return;
   }
-  if (!session) { DS.needsLogin = true; changed(); return; }
+  if (!session) {
+    if (err && errServidor(err)) DS.loginMsg = MSG_SERVIDOR;                                            // el servidor falló al renovar: no es culpa de la clave
+    else if (err && !errRed(err)) { await olvidarIdentidad(); DS.loginMsg = "Tu sesión venció. Ingresa de nuevo: lo que quedó guardado en este equipo se envía al ingresar."; }
+    else if (sinServidor && ident && ident.sb) DS.loginMsg = MSG_SIN_RED;                                // no queda sesión que renovar: para ingresar hace falta el servidor
+    DS.needsLogin = true; changed(); return;
+  }
   await sbCompletarSesion(session);
 }
 /* cuando el servidor vuelve y la sesión se renueva, el equipo que abrió sin verificar se conecta y recarga; si la sesión fue revocada, pide ingresar */
+/* una sola comprobación a la vez (cada una puede tardar ~30 s si el servidor no responde) */
+function probarSesion() { if (SB.probando || !SB.sinVerificar) return; SB.probando = true; SB.client.auth.getSession().then(r => { const s = r && r.data && r.data.session; if (s) sbCambioSesion("TOKEN_REFRESHED", s); }).catch(() => {}).finally(() => { SB.probando = false; }); }
 function sbCambioSesion(ev, session) {
   if (SB.salio) { if ((ev === "TOKEN_REFRESHED" || ev === "SIGNED_IN") && session) setTimeout(() => { withTimeout(SB.client.auth.signOut(), 6000).catch(() => {}).then(borrarSesionGuardada); }, 0); return; }   // se cerró sesión: una renovación que venía en camino no la revive
   if (!SB.sinVerificar) return;
   if ((ev === "TOKEN_REFRESHED" || ev === "SIGNED_IN") && session) {
     SB.sinVerificar = false; setTimeout(async () => { if (SB.chan) { try { SB.client.removeChannel(SB.chan); } catch (e) {} SB.chan = null; } netFail = false; SYNC.error = ""; await sbCompletarSesion(session); }, 0);   // sbCompletarSesion -> sbIniciar recarga todo una vez y envía lo pendiente
   } else if (ev === "SIGNED_OUT") {
-    SB.sinVerificar = false; setTimeout(() => { DS.needsLogin = true; DS.loginMsg = "Tu sesión venció. Ingresa de nuevo: lo que quedó guardado en este equipo se envía al ingresar."; changed(); }, 0);
+    SB.sinVerificar = false; SB.gen++; setTimeout(async () => { await olvidarIdentidad(); DS.needsLogin = true; DS.loginMsg = "Tu sesión venció. Ingresa de nuevo: lo que quedó guardado en este equipo se envía al ingresar."; changed(); }, 0);
   }
 }
 async function sbCompletarSesion(session) {
@@ -43,6 +63,7 @@ async function sbCompletarSesion(session) {
   let me = null, fallo = false; try { const r = await withTimeout(SB.client.rpc("oli_me"), 9000); me = r.data; fallo = !!r.error; } catch (e) { fallo = true; }
   const ident = await IDB.get("kv", "ident"); if (gen !== SB.gen) return;
   if (!me && fallo && ident && ident.sb && ident.uid === session.user.id) usarIdent(ident);                           // servidor sin respuesta: identidad guardada
+  else if (!me && fallo) { DS.needsLogin = true; DS.loginMsg = "Ingresaste, pero el servidor de OLI no está respondiendo. Intenta de nuevo en unos minutos."; changed(); return; }
   else if (!me) { DS.needsLogin = false; DS.needsOrg = true; DS.uid = session.user.id; SB.email = session.user.email || ""; changed(); return; }
   else { SB.org = me.org_id; SB.store = me.store_id; SB.role = me.role; DS.uid = session.user.id; DS.isAdmin = !!me.is_admin; DS.nombre = me.name || (session.user.email || "").split("@")[0]; SB.email = session.user.email || "";
     if (gen !== SB.gen) return; await IDB.kvSet("ident", {uid: DS.uid, isAdmin: DS.isAdmin, org: SB.org, store: SB.store, role: SB.role, nombre: DS.nombre, sb: true}); }
@@ -62,7 +83,7 @@ function sbIniciar() {
     setInterval(() => { if (pendientes().length) { netFail = false; kickSync(); } }, 20000);
     setInterval(() => heartbeat(), 45000);
     setInterval(() => { if (SB.rtWasDown && conRed()) sbCargarTodo(); }, 20000);                                  // respaldo SOLO si el tiempo real está caído
-    window.addEventListener("online", () => { sbCargarTodo(); });
+    window.addEventListener("online", () => { if (SB.sinVerificar) probarSesion(); else sbCargarTodo(); });
   }
 }
 const sbCols = () => SHARED_COLS.concat(DS.isAdmin ? SB_ADMIN_COLS : []);
@@ -104,7 +125,9 @@ async function sbApply(op) {
 }
 async function sbLogin(email, pass) {
   SB.salio = false; let r; try { r = await withTimeout(SB.client.auth.signInWithPassword({email: email.trim(), password: pass}), 20000); } catch (e) { r = {error: e, data: {}}; }
-  if (r.error && errRed(r.error)) throw new Error("No hay conexión con el servidor de OLI. Revisa el Internet; si hay Internet, el servidor no está respondiendo: avísale al administrador.");
+  if (r.error && errRed(r.error)) throw new Error(MSG_SIN_RED);
+  const credMala = e => e && e.status === 400 && /invalid_credentials|invalid_grant|invalid login|email not confirmed/i.test((e.code || "") + " " + (e.message || ""));
+  if (r.error && !credMala(r.error)) throw new Error(MSG_SERVIDOR);                                  // solo se culpa a la clave cuando el servidor dice que la clave está mal
   if (r.error || !r.data.session) { const e = new Error("No pudimos ingresar. Revisa tu correo y contraseña."); throw e; }
   if (SB.autoParado) { SB.autoParado = false; try { SB.client.auth.startAutoRefresh(); } catch (e) {} }
   await sbCompletarSesion(r.data.session);
@@ -116,10 +139,7 @@ async function sbSalir() {
   try { SB.autoParado = true; await withTimeout(SB.client.auth.stopAutoRefresh(), 2000); } catch (e) {}  // nada debe renovar esta sesión por su cuenta
   borrarSesionGuardada();                                                                           // sin servidor, signOut no la borra: se borra aquí
   if (SB.chan) { try { SB.client.removeChannel(SB.chan); } catch (e) {} SB.chan = null; }
-  await IDB.tx([["kv", "del", "ident"]]).catch(() => {});
-  // lo que solo ve el administrador (costos, gastos, configuración, auditoría) no se queda en el equipo al cerrar sesión; lo compartido sí, para poder vender sin Internet
-  const soloAdmin = new Set(SB_ADMIN_COLS); for (const c of soloAdmin) delete DS.c[c];
-  try { const all = await IDB.getAll("docs"), ops = []; for (const [p, x] of Object.entries(all || {})) if (x && soloAdmin.has(x.col)) ops.push(["docs", "del", p]); if (ops.length) await IDB.tx(ops); } catch (e) {}
+  await olvidarIdentidad();
   DS.needsLogin = true; DS.loginMsg = ""; DS.isAdmin = false; DS.uid = null; changed();
 }
 function borrarSesionGuardada() { try { for (let i = localStorage.length - 1; i >= 0; i--) { const k = localStorage.key(i); if (k && /^sb-.*-auth-token/.test(k)) localStorage.removeItem(k); } } catch (e) {} }

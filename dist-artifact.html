@@ -292,7 +292,7 @@ details.help span{display:block;font-weight:500;font-size:13px;line-height:1.35;
 <div class="sheet hidden" id="sheet"><div class="bg"></div><div class="panel" role="dialog" aria-modal="true" id="panel"></div></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script>window.OLI_BUILD="2c6e841a";</script>
+<script>window.OLI_BUILD="2ca02277";</script>
 <script>
 (function(){
 "use strict";
@@ -766,6 +766,19 @@ const SB = {client: null, org: null, store: null, role: null, email: "", chan: n
 const errRed = e => !!e && ((window.supabase && typeof window.supabase.isAuthRetryableFetchError === "function" && window.supabase.isAuthRetryableFetchError(e)) ||
   e.name === "AuthRetryableFetchError" || e.code === "timeout" || e.status === 0 || /failed to fetch|networkerror|network request failed|load failed/i.test(String(e.message || "")));
 const SB_ADMIN_COLS = ADMIN_COLS.concat(["audit"]);
+/* error del servidor (no de la clave): 5xx, demasiados intentos, respuesta que no es JSON */
+const errServidor = e => !!e && !errRed(e) && ((e.status >= 500) || e.status === 429 || e.name === "AuthUnknownError");
+const MSG_SERVIDOR = "El servidor de OLI no está respondiendo bien. Intenta de nuevo en unos minutos.";
+const MSG_SIN_RED = "No hay conexión con el servidor de OLI. Revisa el Internet; si hay Internet, el servidor no está respondiendo: avísale al administrador.";
+/* ¿queda en este equipo una sesión de Supabase que se pueda renovar? Sin ella no hay cómo reconectarse solo */
+function haySesionGuardada() { try { for (let i = 0; i < localStorage.length; i++) if (/^sb-.*-auth-token$/.test(localStorage.key(i) || "")) return true; } catch (e) {} return false; }
+/* la sesión se cerró o el servidor la rechazó: este equipo olvida la identidad y lo que solo ve el administrador (las ventas por enviar se conservan) */
+async function olvidarIdentidad() {
+  await IDB.tx([["kv", "del", "ident"]]).catch(() => {});
+  const soloAdmin = new Set(SB_ADMIN_COLS); for (const c of soloAdmin) delete DS.c[c];
+  try { const all = await IDB.getAll("docs"), ops = []; for (const [p, x] of Object.entries(all || {})) if (x && soloAdmin.has(x.col)) ops.push(["docs", "del", p]); if (ops.length) await IDB.tx(ops); } catch (e) {}
+  DS.isAdmin = false; DS.uid = null;
+}
 
 async function bootSupabase(ident) {
   const cfg = window.OLI_CONFIG;
@@ -778,22 +791,29 @@ async function bootSupabase(ident) {
      el equipo que ya había ingresado abre con lo guardado y se reconecta solo cuando el servidor vuelva.
      Una sesión cerrada o revocada (error que no es de red) sí pide ingresar de nuevo. */
   const sinServidor = (typeof navigator !== "undefined" && navigator.onLine === false) || errRed(err);
-  if (!session && ident && ident.sb && sinServidor) {
+  if (!session && ident && ident.sb && sinServidor && haySesionGuardada()) {
     usarIdent(ident); SB.sinVerificar = true; sbIniciar();
-    SB.client.auth.getSession().then(r => { const s = r && r.data && r.data.session; if (s) sbCambioSesion("TOKEN_REFRESHED", s); }).catch(() => {});   // por si la sesión se renovó justo después de los 5 segundos
+    probarSesion();                                                                                    // por si la sesión se renovó justo después de los 5 segundos
     return;
   }
-  if (!session) { DS.needsLogin = true; changed(); return; }
+  if (!session) {
+    if (err && errServidor(err)) DS.loginMsg = MSG_SERVIDOR;                                            // el servidor falló al renovar: no es culpa de la clave
+    else if (err && !errRed(err)) { await olvidarIdentidad(); DS.loginMsg = "Tu sesión venció. Ingresa de nuevo: lo que quedó guardado en este equipo se envía al ingresar."; }
+    else if (sinServidor && ident && ident.sb) DS.loginMsg = MSG_SIN_RED;                                // no queda sesión que renovar: para ingresar hace falta el servidor
+    DS.needsLogin = true; changed(); return;
+  }
   await sbCompletarSesion(session);
 }
 /* cuando el servidor vuelve y la sesión se renueva, el equipo que abrió sin verificar se conecta y recarga; si la sesión fue revocada, pide ingresar */
+/* una sola comprobación a la vez (cada una puede tardar ~30 s si el servidor no responde) */
+function probarSesion() { if (SB.probando || !SB.sinVerificar) return; SB.probando = true; SB.client.auth.getSession().then(r => { const s = r && r.data && r.data.session; if (s) sbCambioSesion("TOKEN_REFRESHED", s); }).catch(() => {}).finally(() => { SB.probando = false; }); }
 function sbCambioSesion(ev, session) {
   if (SB.salio) { if ((ev === "TOKEN_REFRESHED" || ev === "SIGNED_IN") && session) setTimeout(() => { withTimeout(SB.client.auth.signOut(), 6000).catch(() => {}).then(borrarSesionGuardada); }, 0); return; }   // se cerró sesión: una renovación que venía en camino no la revive
   if (!SB.sinVerificar) return;
   if ((ev === "TOKEN_REFRESHED" || ev === "SIGNED_IN") && session) {
     SB.sinVerificar = false; setTimeout(async () => { if (SB.chan) { try { SB.client.removeChannel(SB.chan); } catch (e) {} SB.chan = null; } netFail = false; SYNC.error = ""; await sbCompletarSesion(session); }, 0);   // sbCompletarSesion -> sbIniciar recarga todo una vez y envía lo pendiente
   } else if (ev === "SIGNED_OUT") {
-    SB.sinVerificar = false; setTimeout(() => { DS.needsLogin = true; DS.loginMsg = "Tu sesión venció. Ingresa de nuevo: lo que quedó guardado en este equipo se envía al ingresar."; changed(); }, 0);
+    SB.sinVerificar = false; SB.gen++; setTimeout(async () => { await olvidarIdentidad(); DS.needsLogin = true; DS.loginMsg = "Tu sesión venció. Ingresa de nuevo: lo que quedó guardado en este equipo se envía al ingresar."; changed(); }, 0);
   }
 }
 async function sbCompletarSesion(session) {
@@ -801,6 +821,7 @@ async function sbCompletarSesion(session) {
   let me = null, fallo = false; try { const r = await withTimeout(SB.client.rpc("oli_me"), 9000); me = r.data; fallo = !!r.error; } catch (e) { fallo = true; }
   const ident = await IDB.get("kv", "ident"); if (gen !== SB.gen) return;
   if (!me && fallo && ident && ident.sb && ident.uid === session.user.id) usarIdent(ident);                           // servidor sin respuesta: identidad guardada
+  else if (!me && fallo) { DS.needsLogin = true; DS.loginMsg = "Ingresaste, pero el servidor de OLI no está respondiendo. Intenta de nuevo en unos minutos."; changed(); return; }
   else if (!me) { DS.needsLogin = false; DS.needsOrg = true; DS.uid = session.user.id; SB.email = session.user.email || ""; changed(); return; }
   else { SB.org = me.org_id; SB.store = me.store_id; SB.role = me.role; DS.uid = session.user.id; DS.isAdmin = !!me.is_admin; DS.nombre = me.name || (session.user.email || "").split("@")[0]; SB.email = session.user.email || "";
     if (gen !== SB.gen) return; await IDB.kvSet("ident", {uid: DS.uid, isAdmin: DS.isAdmin, org: SB.org, store: SB.store, role: SB.role, nombre: DS.nombre, sb: true}); }
@@ -820,7 +841,7 @@ function sbIniciar() {
     setInterval(() => { if (pendientes().length) { netFail = false; kickSync(); } }, 20000);
     setInterval(() => heartbeat(), 45000);
     setInterval(() => { if (SB.rtWasDown && conRed()) sbCargarTodo(); }, 20000);                                  // respaldo SOLO si el tiempo real está caído
-    window.addEventListener("online", () => { sbCargarTodo(); });
+    window.addEventListener("online", () => { if (SB.sinVerificar) probarSesion(); else sbCargarTodo(); });
   }
 }
 const sbCols = () => SHARED_COLS.concat(DS.isAdmin ? SB_ADMIN_COLS : []);
@@ -862,7 +883,9 @@ async function sbApply(op) {
 }
 async function sbLogin(email, pass) {
   SB.salio = false; let r; try { r = await withTimeout(SB.client.auth.signInWithPassword({email: email.trim(), password: pass}), 20000); } catch (e) { r = {error: e, data: {}}; }
-  if (r.error && errRed(r.error)) throw new Error("No hay conexión con el servidor de OLI. Revisa el Internet; si hay Internet, el servidor no está respondiendo: avísale al administrador.");
+  if (r.error && errRed(r.error)) throw new Error(MSG_SIN_RED);
+  const credMala = e => e && e.status === 400 && /invalid_credentials|invalid_grant|invalid login|email not confirmed/i.test((e.code || "") + " " + (e.message || ""));
+  if (r.error && !credMala(r.error)) throw new Error(MSG_SERVIDOR);                                  // solo se culpa a la clave cuando el servidor dice que la clave está mal
   if (r.error || !r.data.session) { const e = new Error("No pudimos ingresar. Revisa tu correo y contraseña."); throw e; }
   if (SB.autoParado) { SB.autoParado = false; try { SB.client.auth.startAutoRefresh(); } catch (e) {} }
   await sbCompletarSesion(r.data.session);
@@ -874,10 +897,7 @@ async function sbSalir() {
   try { SB.autoParado = true; await withTimeout(SB.client.auth.stopAutoRefresh(), 2000); } catch (e) {}  // nada debe renovar esta sesión por su cuenta
   borrarSesionGuardada();                                                                           // sin servidor, signOut no la borra: se borra aquí
   if (SB.chan) { try { SB.client.removeChannel(SB.chan); } catch (e) {} SB.chan = null; }
-  await IDB.tx([["kv", "del", "ident"]]).catch(() => {});
-  // lo que solo ve el administrador (costos, gastos, configuración, auditoría) no se queda en el equipo al cerrar sesión; lo compartido sí, para poder vender sin Internet
-  const soloAdmin = new Set(SB_ADMIN_COLS); for (const c of soloAdmin) delete DS.c[c];
-  try { const all = await IDB.getAll("docs"), ops = []; for (const [p, x] of Object.entries(all || {})) if (x && soloAdmin.has(x.col)) ops.push(["docs", "del", p]); if (ops.length) await IDB.tx(ops); } catch (e) {}
+  await olvidarIdentidad();
   DS.needsLogin = true; DS.loginMsg = ""; DS.isAdmin = false; DS.uid = null; changed();
 }
 function borrarSesionGuardada() { try { for (let i = localStorage.length - 1; i >= 0; i--) { const k = localStorage.key(i); if (k && /^sb-.*-auth-token/.test(k)) localStorage.removeItem(k); } } catch (e) {} }
@@ -982,7 +1002,7 @@ function lineasExp(v) {
   const out = [];
   for (const it of (v.items || [])) {
     for (const x of consumoLinea(it)) out.push({pid: x.pid, q: x.q, t: v.t});
-    if (Array.isArray(it.sab)) for (const s of it.sab) out.push({pid: s, q: it.q / bolasCaja(), t: v.t, porCaja: true});   // bolas en fracción de caja: para costo y consumo, no para el inventario (ese baja al abrir cada caja)
+    if (Array.isArray(it.sab)) for (const s of it.sab) out.push({pid: s, q: it.q / (it.bc || bolasCaja()), t: v.t, porCaja: true});   // bolas en fracción de caja: para costo y consumo, no para el inventario (ese baja al abrir cada caja)
   }
   return out;
 }
@@ -1044,14 +1064,14 @@ function gastosEn(a, b) {
   return out.sort((x, y) => (y.fecha > x.fecha ? 1 : -1));
 }
 function finanzas(a, b) {
-  const vs = ventasEn(a, b); let ventas = 0, cogs = 0, sinCosto = 0, uds = 0;
+  const vs = ventasEn(a, b); let ventas = 0, cogs = 0, sinCosto = 0, sinCostoHelado = false, uds = 0;
   for (const v of vs) {
     ventas += v.total; for (const it of (v.items || [])) uds += it.q;
-    for (const l of lineasExp(v)) { const c = costoUnit(l.pid, v.t); if (c == null) sinCosto += l.q; else cogs += c * l.q; }
+    for (const l of lineasExp(v)) { const c = costoUnit(l.pid, v.t); if (c == null) { if (l.porCaja) sinCostoHelado = true; else sinCosto += l.q; } else cogs += c * l.q; }
   }
   const gs = gastosEn(a, b), gastosOp = sum(gs.filter(g => g.cat !== BASE_COSTO), g => g.valor), gastosMP = sum(gs.filter(g => g.cat === BASE_COSTO), g => g.valor);
   const bruta = ventas - cogs, utilidad = bruta - gastosOp;
-  return {ventas, cogs, bruta, gastos: gastosOp, gastosMP, utilidad, margen: ventas ? utilidad / ventas : NaN, margenBruto: ventas ? bruta / ventas : NaN, n: vs.length, uds, ticket: vs.length ? ventas / vs.length : 0, sinCosto};
+  return {ventas, cogs, bruta, gastos: gastosOp, gastosMP, utilidad, margen: ventas ? utilidad / ventas : NaN, margenBruto: ventas ? bruta / ventas : NaN, n: vs.length, uds, ticket: vs.length ? ventas / vs.length : 0, sinCosto, sinCostoHelado};
 }
 function rentabilidad(a, b) {
   const rows = {};
@@ -1335,14 +1355,15 @@ function difRecetas() { if (!esAdmin()) return []; const out = []; for (const p 
 function analisisMermas() {
   const t = S.today, a = firstOfMonth(t), ms = mermasAll().filter(m => m.fecha >= a && m.fecha <= t);
   let costo = 0; for (const m of ms) { const c = costoUnit(m.pid, m.t); if (c != null) costo += c * m.q; }
+  const ph = perdidasHelado(a, t); costo += sum(ph, x => x.total || 0);                        // cajas de helado abiertas que se dañaron
   const compras = sum(Object.values(col("compras")).filter(c => c.estado === "recibido" && c.fecha >= a), c => sum(c.lineas || [], l => (l.costo || 0) * (l.q || 0)));
   const finMes = finanzas(a, t), baseCmp = compras || finMes.cogs, anormal = [], by = {};
   for (const m of ms) by[m.pid] = (by[m.pid] || 0) + m.q;
   const prev30 = mermasAll().filter(m => m.fecha >= addDays(t, -59) && m.fecha < addDays(t, -29)), pv = {}; prev30.forEach(m => pv[m.pid] = (pv[m.pid] || 0) + m.q);
   const vend = {}; rentabilidad(a, t).forEach(r => vend[r.pid] = r.uds);
   for (const [pid, q] of Object.entries(by)) { const v = vend[pid] || 0, p = prod(pid); if (!p) continue; if (q >= 3 && q / (q + v) >= 0.1) anormal.push({p, q, v, motivo: "Más del 10% de lo que sale se pierde (" + q + " de " + (q + v) + ")."}); else if (q >= 5 && q >= 2 * (pv[pid] || 0.5)) anormal.push({p, q, v, motivo: "Subió a " + q + " este mes (antes " + (pv[pid] || 0) + ")."}); }
-  const porMotivo = {}; ms.forEach(m => porMotivo[m.motivo] = (porMotivo[m.motivo] || 0) + m.q);
-  return {ms, unidades: sum(ms, m => m.q), costo, pctCompras: baseCmp ? costo / baseCmp : NaN, base: compras ? "compras" : "costo de lo vendido", anormal, porMotivo};
+  const porMotivo = {}; ms.forEach(m => porMotivo[m.motivo] = (porMotivo[m.motivo] || 0) + m.q); if (ph.length) porMotivo["Caja de helado dañada"] = ph.length;
+  return {ms, cajasHelado: ph, unidades: sum(ms, m => m.q), costo, pctCompras: baseCmp ? costo / baseCmp : NaN, base: compras ? "compras" : "costo de lo vendido", anormal, porMotivo};
 }
 
 /* ---- productos lentos y estrellas ---- */
@@ -1655,7 +1676,7 @@ async function registrarVenta(opts) {
   const falta = faltante(S.cart); if (falta) throw new Error("No alcanza el inventario de " + falta.p.nombre + " (hay " + falta.st + ").");
   const sub = totalCarrito(), desc = clamp(Math.round(opts.desc || 0), 0, sub), total = sub - desc, seq = await nextSeq();
   let resto = desc;   // el descuento se reparte por línea y la suma cuadra exacto con el total
-  const items = S.cart.map((c, k) => { const p = prod(c.pid), bruto = c.p * c.q, d = k === S.cart.length - 1 ? resto : Math.round(sub ? desc * bruto / sub : 0); resto -= d; const i = impLinea(p, bruto - d); return Object.assign({pid: c.pid, n: c.n, q: c.q, p: c.p, d, imp: {t: i.t, r: i.r, base: i.base, v: i.imp}}, c.sab ? {sab: c.sab.slice(), pres: c.pres, det: c.det, gasta: consumoLinea(c)} : {}); });
+  const items = S.cart.map((c, k) => { const p = prod(c.pid), bruto = c.p * c.q, d = k === S.cart.length - 1 ? resto : Math.round(sub ? desc * bruto / sub : 0); resto -= d; const i = impLinea(p, bruto - d); return Object.assign({pid: c.pid, n: c.n, q: c.q, p: c.p, d, imp: {t: i.t, r: i.r, base: i.base, v: i.imp}}, c.sab ? {sab: c.sab.slice(), pres: c.pres, det: c.det, gasta: consumoLinea(c), bc: bolasCaja()} : {}); });
   const t = Date.now(), fecha = ymd(new Date(t));
   const venta = {id: DEV.id + "-" + t.toString(36) + "-" + seq, n: seq, num: (DEV.nombre || DEV.id) + " #" + seq, t, fecha, uid: uidActual(), dev: DEV.id, m: opts.m, total, sub, desc, recibido: opts.m === "Efectivo" ? (opts.recibido || total) : total, cambio: opts.m === "Efectivo" ? Math.max(0, (opts.recibido || total) - total) : 0, ref: opts.ref || "", cliente: opts.cliente || null, estado: "confirmada"};
   venta.items = items;
@@ -1892,7 +1913,7 @@ ACT.verEnvio = () => abrir(() => {
   return head("Estado de envío") + `<div class="notice ${c.cls === "ok" ? "ok" : c.cls === "bad" ? "bad" : ""}"><b>${esc(c.txt)}</b><br>${DS.mode === "local" ? "Los datos se guardan solo en este equipo." : c.k === "offline" ? "Trabajando sin conexión. Las ventas se guardan en este equipo y se enviarán solas cuando vuelva Internet." : pend ? "Hay " + pend + " cambios por enviar. Se envían solos." : "Todo está al día con el servidor."}</div>
     ${SYNC.ultima ? `<p class="small muted">Último envío: ${haceTxt(SYNC.ultima)}</p>` : ""}
     <h3>Mis últimas ventas</h3>${mias.length ? mias.map(v => `<div class="row"><div class="l"><b>${esc(v.num || "Venta")}</b> · ${hora(v.t)}<div class="small muted">${fmt(v.total)} · ${esc(v.m)}</div></div><div class="r"><span class="pill ${ventaSync(v) === "sincronizada" || ventaSync(v) === "local" ? "ok" : ventaSync(v) === "error" ? "bad" : "warn"}">${esc(ventaSyncTxt(ventaSync(v)))}</span></div></div>`).join("") : '<p class="muted">Todavía no hay ventas en este equipo.</p>'}
-    ${c.k === "offline" && DS.backend === "supabase" && esAdmin() && conRedNavegador() ? `<div class="notice" style="margin-top:12px"><b>Este equipo tiene Internet, pero el servidor de OLI no responde.</b> Si dura más de unos minutos, entra a <b>supabase.com</b> → proyecto <b>OLI</b>: si dice que está en pausa, toca <b>Restore</b> (reactivar). Mientras tanto se puede seguir vendiendo.</div>` : ""}
+    ${c.k === "offline" && DS.backend === "supabase" && esAdmin() && conRedNavegador() ? `<div class="notice" style="margin-top:12px"><b>El servidor de OLI no responde.</b> Abre cualquier página (por ejemplo google.com): si no abre, el problema es el Internet del local. Si abre y esto dura más de unos minutos, entra a <b>supabase.com</b> → proyecto <b>OLI</b>: si dice que está en pausa, toca <b>Restore</b> (reactivar). Mientras tanto se puede seguir vendiendo.</div>` : ""}
     ${rechazadas().length ? `<div class="notice bad" style="margin-top:12px">${rechazadas().length} cambio(s) no se pudieron enviar porque el servidor no los aceptó. Siguen guardados aquí. Avísale al administrador.</div>` : ""}
     <div class="small muted" style="margin-top:12px">Este equipo: <b>${esc(DEV.nombre || DEV.id)}</b></div>`;
 }, {live: true});
@@ -2292,12 +2313,18 @@ ACT.doMerma = async () => { if (!S.mermaPid) { toast("Elige el producto.", true)
    proveedor (30 por defecto) y fuera del rango aceptable (27 a 33 por defecto, se cambia en Ajustes) OLI avisa. No se asume fraude: también
    puede ser el tamaño de la bola o un sabor mal marcado al vender. */
 const CONO_DEF = {bolasCaja: 30, min: 27, max: 33};
-const confConos = () => Object.assign({}, CONO_DEF, configNeg().conos || {});
+const confConos = () => { const x = Object.assign({}, CONO_DEF, configNeg().conos || {}, col("meta").conos || {}); return {bolasCaja: x.bolasCaja, min: x.min, max: x.max}; };   // en "meta" (lo lee la tablet de la empleada: no tiene costos)
 const bolasCaja = () => confConos().bolasCaja || CONO_DEF.bolasCaja;
 const saboresHelado = () => prods().filter(p => p.sabor && p.activo !== false).sort((a, b) => (a.orden || 0) - (b.orden || 0) || a.nombre.localeCompare(b.nombre, "es"));
 const nombreSabor = pid => ((prod(pid) || {}).nombre || pid).replace(/^Helado\s+/i, "");
 const PRES_TXT = {cucurucho: "cucurucho", vaso: "vaso"};
-const eventosHelado = () => memo("evHel", () => { const out = []; for (const [docId, d] of Object.entries(col("cajashelado"))) for (const x of (d.items || [])) if (x && x.sabor) out.push(Object.assign({fecha: d.fecha, dev: d.dev, docId}, x)); return out.sort((a, b) => a.t - b.t); });
+const itemsHelado = () => memo("itHel", () => { const out = []; for (const [docId, d] of Object.entries(col("cajashelado"))) for (const x of (d.items || [])) if (x && x.id) out.push(Object.assign({fecha: d.fecha, dev: d.dev, docId}, x)); return out.sort((a, b) => a.t - b.t); });
+/* cambios de caja vigentes: sin los anulados; y un "empezar a contar" solo vale si es el primero de su sabor (no parte una caja en dos) */
+const eventosHelado = () => memo("evHel", () => {
+  const anulados = new Set(itemsHelado().filter(x => x.anula).map(x => x.anula)), vistos = new Set(), out = [];
+  for (const x of itemsHelado()) { if (!x.sabor || x.anula || anulados.has(x.id)) continue; if (x.motivo === "inicio" && vistos.has(x.sabor)) continue; vistos.add(x.sabor); out.push(x); }
+  return out;
+});
 const bolasVendidas = () => memo("bolasV", () => { const m = {}; for (const v of ventasOk()) for (const it of (v.items || [])) if (Array.isArray(it.sab)) for (const s of it.sab) (m[s] = m[s] || []).push({t: v.t, q: it.q}); return m; });
 
 /* cada caja de un sabor va de un cambio de caja al siguiente; la última sigue abierta */
@@ -2308,8 +2335,9 @@ function rendimientoCajas() {
       const es = ev.filter(e => e.sabor === s), ls = bv[s] || [], cajas = [];
       for (let i = 0; i < es.length; i++) {
         const desde = es[i].t, fin = es[i + 1] || null, hasta = fin ? fin.t : null, bolas = sum(ls.filter(x => x.t >= desde && (hasta == null || x.t < hasta)), x => x.q);
-        const estado = fin && fin.motivo === "danada" ? "danada" : bolas > c.max ? "muchas" : !fin ? "abierta" : bolas < c.min ? "pocas" : "ok";
-        cajas.push({sabor: s, desde, hasta, bolas, estado, abierta: !fin, apertura: es[i], cierre: fin});
+        const parcial = es[i].motivo === "inicio";                                   // se empezó a contar con la caja ya empezada: no se sabe cuánto traía
+        const estado = fin && fin.motivo === "danada" ? "danada" : bolas > c.max ? "muchas" : !fin ? "abierta" : parcial ? "parcial" : bolas < c.min ? "pocas" : "ok";
+        cajas.push({sabor: s, desde, hasta, bolas, estado, parcial, abierta: !fin, apertura: es[i], cierre: fin, bc: es[i].bc || c.bolasCaja});
       }
       out[s] = cajas;
     }
@@ -2317,11 +2345,14 @@ function rendimientoCajas() {
   });
 }
 const cajasCerradasHelado = () => Object.values(rendimientoCajas()).flat().filter(k => !k.abierta).sort((a, b) => b.hasta - a.hasta);
-const ESTADO_CAJA = {ok: ["ok", "Dentro del rango"], pocas: ["bad", "Pocas bolas"], muchas: ["warn", "Muchas bolas"], danada: ["", "Dañada (pérdida)"], abierta: ["", "Abierta"]};
+const ESTADO_CAJA = {ok: ["ok", "Dentro del rango"], pocas: ["bad", "Pocas bolas"], muchas: ["warn", "Muchas bolas"], danada: ["", "Dañada (pérdida)"], abierta: ["", "Abierta"], parcial: ["", "Se empezó a contar a mitad"]};
 const pillCaja = k => `<span class="pill ${ESTADO_CAJA[k.estado][0]}">${ESTADO_CAJA[k.estado][1]}</span>`;
+/* conos mal configurados: sin barquillo, cucurucho o vaso válidos no se descuenta lo que gastan */
+function conosIncompletos() { return prods().filter(p => p.cono && p.activo !== false).map(p => ({p, falta: ["barquillo", "cucurucho", "vaso"].filter(k => !p.cono[k] || !prod(p.cono[k]))})).filter(x => x.falta.length); }
 function alertasHelado() {
   const c = confConos(), out = [], desde = Date.now() - 14 * 864e5, rango = `lo esperado es ${c.bolasCaja}; aceptable ${c.min} a ${c.max}`;
   const nota = " También pasa si al vender se marca un sabor distinto al que se sirvió.";
+  for (const x of conosIncompletos()) out.push({sev: "warn", t: `Al producto ${x.p.nombre} le falta definir: ${x.falta.join(", ")}.`, d: "Sin eso no se descuenta del inventario lo que gasta cada cono. Edítalo en Productos."});
   for (const k of Object.values(rendimientoCajas()).flat()) {
     const n = nombreSabor(k.sabor);
     if (k.estado === "pocas" && k.hasta >= desde) out.push({sev: "bad", sabor: k.sabor, t: `La caja de ${n} dio ${k.bolas} bolas (${rango}).`, d: "Se están sirviendo bolas más grandes o se perdió producto: es plata que se pierde." + nota});
@@ -2332,8 +2363,9 @@ function alertasHelado() {
 /* una caja abierta que se dañó es pérdida: lo que faltaba por servir, en fracción de caja */
 function perdidasHelado(a, b) {
   return cajasCerradasHelado().filter(k => k.estado === "danada" && k.cierre.fecha >= a && k.cierre.fecha <= b).map(k => {
-    const frac = Math.max(0, Math.round((bolasCaja() - k.bolas) / bolasCaja() * 100) / 100), c = costoUnit(k.sabor, k.hasta);
-    return {producto: "Helado " + nombreSabor(k.sabor) + " (caja abierta)", fecha: k.cierre.fecha, cantidad: frac, unidad: "cajas", costo: c, total: c == null ? null : Math.round(c * frac), motivo: "Caja dañada o derretida", empleado: empNombre(k.cierre.uid), obs: k.cierre.obs || ""};
+    const frac = k.parcial ? null : Math.max(0, Math.round((k.bc - k.bolas) / k.bc * 100) / 100), c = costoUnit(k.sabor, k.hasta);
+    return {pid: k.sabor, producto: "Helado " + nombreSabor(k.sabor) + " (caja abierta)", fecha: k.cierre.fecha, cantidad: frac, unidad: "cajas", costo: c, total: c == null || frac == null ? null : Math.round(c * frac), motivo: "Caja dañada o derretida", empleado: empNombre(k.cierre.uid),
+      obs: (k.cierre.obs || "") + (k.parcial ? (k.cierre.obs ? " · " : "") + "la caja se empezó a contar a mitad: no se sabe cuánto quedaba" : "")};
   });
 }
 /* costo de una unidad de una línea vendida: un cono suma barquillo, cucurucho o vaso y sus bolas (costo de la caja ÷ bolas por caja) */
@@ -2341,7 +2373,7 @@ function costoItem(it, t) {
   if (!Array.isArray(it.sab)) return costoUnit(it.pid, t);
   let s = 0; const q = it.q || 1;
   for (const x of consumoLinea(it)) { const c = costoUnit(x.pid, t); if (c == null) return null; s += c * x.q / q; }
-  for (const sb of it.sab) { const c = costoUnit(sb, t); if (c == null) return null; s += c / bolasCaja(); }
+  for (const sb of it.sab) { const c = costoUnit(sb, t); if (c == null) return null; s += c / (it.bc || bolasCaja()); }
   return Math.round(s);
 }
 
@@ -2359,7 +2391,7 @@ function conoSheet() {
     <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px">${saboresHelado().map(s => `<button class="btn ${c.sab.includes(s.id) ? "pri" : "ghost"}" style="min-height:56px" data-act="conoSabor" data-id="${esc(s.id)}" ${falta <= 0 ? "disabled" : ""}>${esc(nombreSabor(s.id))}</button>`).join("")}</div>
     <label class="f">¿Cómo lo lleva?</label><div class="seg">${Object.entries(PRES_TXT).map(([k, l]) => `<button data-act="conoPres" data-v="${k}" aria-pressed="${c.pres === k}">${cap1(l)}</button>`).join("")}</div>
     <button class="btn pri xl wide" style="margin-top:14px" data-act="conoAgregar" ${falta > 0 ? "disabled" : ""}>${falta > 0 ? (n === 1 ? "ELIGE EL SABOR" : falta === 1 ? "ELIGE 1 SABOR MÁS" : "ELIGE 2 SABORES") : "AGREGAR AL PEDIDO"}</button>
-    <button class="btn ghost wide" style="margin-top:8px" data-act="cambioCaja">¿Se acabó una caja? Marcar cambio de caja</button>`;
+    <button class="btn ghost wide" style="margin-top:8px" data-act="cambioCaja" data-desde="cono">¿Se acabó una caja? Marcar cambio de caja</button>`;
 }
 ACT.conoSabor = (el, d) => { const c = S.cono, p = c && prod(c.pid); if (!p || c.sab.length >= (p.cono.bolas || 1)) return; c.sab.push(d.id); redrawSheet(true); };
 ACT.conoBorrar = () => { if (S.cono) { S.cono.sab = []; redrawSheet(true); } };
@@ -2377,34 +2409,63 @@ function agregarCono(p, sab, pres) {
 
 /* ---------- cambio de caja (empleada o administrador) ---------- */
 S.cambio = null;
+const MIN_REPETIDO = 15, MIN_ANULAR_CAJA = 10;
 ACT.cambioCaja = (el, d) => {
   if (!saboresHelado().length) { toast("Todavía no hay sabores de helado.", true); return; }
-  const s = d && d.id && prod(d.id) && prod(d.id).sabor ? d.id : ""; S.cambio = {sabor: s, motivo: s ? motivoInicial(s) : "acabo"}; abrir(cambioSheet);
+  const desdeCono = !!(d && d.desde === "cono" && S.cono), elegidos = desdeCono ? uniq(S.cono.sab) : [], pre = d && d.id ? d.id : elegidos.length === 1 ? elegidos[0] : "";
+  const s = pre && prod(pre) && prod(pre).sabor ? pre : "";
+  S.cambio = {sabor: s, motivo: s ? motivoInicial(s) : "", desdeCono, ofrecer: elegidos}; abrir(cambioSheet);
 };
-const motivoInicial = s => eventosHelado().some(e => e.sabor === s) ? "acabo" : "inicio";
+const motivoInicial = s => eventosHelado().some(e => e.sabor === s) ? "acabo" : "";                         // la primera vez se elige a propósito: no se asume
+const recienteDe = s => eventosHelado().filter(e => e.sabor === s && Date.now() - e.t < MIN_REPETIDO * 60000).slice(-1)[0];
+const puedeAnularCambio = e => esAdmin() || (e.dev === DEV.id && Date.now() - e.t < MIN_ANULAR_CAJA * 60000);
+const nombreEquipo = dev => (col("dispositivos")[dev] || {}).nombre || (dev === DEV.id ? DEV.nombre : "") || "otro equipo";
 function cambioSheet() {
-  const c = S.cambio || {}, medido = c.sabor && eventosHelado().some(e => e.sabor === c.sabor);
-  const ops = !c.sabor ? [] : medido ? [["acabo", "Se acabó y puse una caja nueva"], ["danada", "Se dañó o se derritió y puse una caja nueva"]] : [["inicio", "Es la caja que ya estaba abierta: empezar a contar desde ahora"], ["acabo", "Abrí una caja nueva"]];
+  const c = S.cambio || {}, medido = c.sabor && eventosHelado().some(e => e.sabor === c.sabor), rec = c.sabor && recienteDe(c.sabor);
+  const ops = !c.sabor ? [] : medido ? [["acabo", "Se acabó y puse una caja nueva"], ["danada", "Se dañó o se derritió y puse una caja nueva"]]
+    : [["acabo", "Se acabó y abrí una caja nueva"], ["inicio", "Todavía no se acaba: empezar a contar la que ya está abierta (no descuenta cajas)"]];
+  if (rec) pedirNombres([rec.uid]);
+  const lista = eventosHelado().filter(puedeAnularCambio).filter(e => Date.now() - e.t < 24 * 3600000).slice(-6).reverse();
   return head("Cambio de caja de helado") + `<p class="muted" style="margin-top:0">Márcalo cuando pongas una caja nueva. OLI descuenta una caja cerrada y cuenta cuántas bolas dio la anterior.</p>
-    <label class="f">¿De qué sabor?</label><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px">${saboresHelado().map(s => `<button class="btn ${c.sabor === s.id ? "pri" : "ghost"}" style="min-height:52px" data-act="cambioSabor" data-id="${esc(s.id)}">${esc(nombreSabor(s.id))}</button>`).join("")}</div>
+    <label class="f">¿De qué sabor?</label><div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px">${saboresHelado().map(s => `<button class="btn ${c.sabor === s.id ? "pri" : "ghost"}" style="min-height:52px${c.ofrecer && c.ofrecer.includes(s.id) && c.sabor !== s.id ? ";border-color:var(--marca)" : ""}" data-act="cambioSabor" data-id="${esc(s.id)}">${esc(nombreSabor(s.id))}</button>`).join("")}</div>
     ${ops.length ? `<label class="f">¿Qué pasó?</label><div style="display:flex;flex-direction:column;gap:8px">${ops.map(([k, l]) => `<button class="btn ${c.motivo === k ? "pri" : "ghost"}" style="justify-content:flex-start;text-align:left" data-act="cambioMotivo" data-v="${k}" aria-pressed="${c.motivo === k}">${l}</button>`).join("")}</div>` : ""}
     ${c.motivo === "danada" ? `<label class="f" for="cc-obs">Cuéntanos qué pasó (opcional)</label><input class="in plain" id="cc-obs" placeholder="Ej: se derritió por un corte de luz">` : ""}
-    <button class="btn pri xl wide" style="margin-top:14px" data-act="doCambioCaja" ${c.sabor ? "" : "disabled"}>GUARDAR</button>`;
+    ${rec ? `<div class="notice warn" style="margin-top:12px">Ya se marcó un cambio de caja de <b>${esc(nombreSabor(c.sabor))}</b> a las ${hora(rec.t)} (${esc(nombreDe(rec.uid) || "alguien")} en ${esc(nombreEquipo(rec.dev))}). Guarda solo si de verdad se abrió <b>otra</b> caja.</div>` : ""}
+    <button class="btn pri xl wide" style="margin-top:14px" data-act="doCambioCaja" ${c.sabor && c.motivo && !c.guardando ? "" : "disabled"}>${c.guardando ? "GUARDANDO…" : rec ? "SÍ, ES OTRA CAJA: GUARDAR" : "GUARDAR"}</button>
+    ${lista.length ? `<h3 style="font-size:15px;margin:16px 0 4px">${esAdmin() ? "Cambios de las últimas 24 horas" : "Tus cambios recientes"}</h3>${lista.map(e => `<div class="row" style="padding:8px 0"><div class="l" style="flex:1"><b>${esc(nombreSabor(e.sabor))}</b> · ${hora(e.t)}<div class="xs muted">${esc({acabo: "caja nueva", danada: "la anterior se dañó", inicio: "empezó a contarse"}[e.motivo] || "")} · ${esc(nombreEquipo(e.dev))}</div></div><button class="btn ghost sm" data-act="anularCambio" data-id="${esc(e.id)}">Anular</button></div>`).join("")}<p class="xs muted">${esAdmin() ? "Anula un cambio marcado por error o repetido: la caja vuelve al inventario." : "Puedes anular un cambio tuyo en los " + MIN_ANULAR_CAJA + " minutos siguientes; después, pídeselo al administrador."}</p>` : ""}`;
 }
 ACT.cambioSabor = (el, d) => { if (!S.cambio) return; S.cambio.sabor = d.id; S.cambio.motivo = motivoInicial(d.id); redrawSheet(true); };
 ACT.cambioMotivo = (el, d) => { if (S.cambio && ["acabo", "danada", "inicio"].includes(d.v)) { S.cambio.motivo = d.v; redrawSheet(true); } };
 ACT.doCambioCaja = async () => {
-  const c = S.cambio; if (!c || !c.sabor) { toast("Elige el sabor.", true); return; }
+  const c = S.cambio; if (!c || !c.sabor || c.guardando) return; if (!c.motivo) { toast("Elige qué pasó.", true); return; }
   const obs = (($("#cc-obs") || {}).value || "").trim(), antes = (rendimientoCajas()[c.sabor] || []).find(k => k.abierta);
-  await guardar(async () => { await registrarCambioCaja(c.sabor, c.motivo, obs); S.cambio = null; cerrar(); },
-    c.motivo === "inicio" ? "Listo: desde ahora se cuentan las bolas de " + nombreSabor(c.sabor) : "Caja de " + nombreSabor(c.sabor) + " cambiada" + (esAdmin() && antes && c.motivo === "acabo" ? " · la anterior dio " + antes.bolas + " bolas" : ""));
+  c.guardando = true; redrawSheet(true);
+  const ok = await guardar(async () => { await registrarCambioCaja(c.sabor, c.motivo, obs); return true; },
+    c.motivo === "inicio" ? "Listo: desde ahora se cuentan las bolas de " + nombreSabor(c.sabor) : "Caja de " + nombreSabor(c.sabor) + " cambiada" + (esAdmin() && antes && !antes.parcial && c.motivo === "acabo" ? " · la anterior dio " + antes.bolas + " bolas" : ""));
+  c.guardando = false;
+  if (ok !== true) { redrawSheet(true); return; }
+  S.cambio = null; if (c.desdeCono && S.cono) abrir(conoSheet); else cerrar();            // si venía de vender un cono, vuelve al cono sin perder lo elegido
+};
+ACT.anularCambio = async (el, d) => {
+  const e = itemsHelado().find(x => x.id === d.id && x.sabor); if (!e) return;
+  if (!puedeAnularCambio(e)) { toast("Pasaron más de " + MIN_ANULAR_CAJA + " minutos o no es de este equipo: pídeselo al administrador.", true); return; }
+  if (!(await confirmar({titulo: "¿Anular el cambio de " + nombreSabor(e.sabor) + " de las " + hora(e.t) + "?", texto: "Úsalo si se marcó por error o dos veces. La caja vuelve al inventario y las bolas se cuentan como si ese cambio no hubiera pasado.", si: "Sí, anular", no: "No"}))) return;
+  await guardar(() => anularCambioCaja(e), "Cambio anulado"); if (S.cambio) redrawSheet(true);
 };
 async function registrarCambioCaja(sabor, motivo, obs) {
   const p = prod(sabor); if (!p || !p.sabor) throw new Error("Elige el sabor.");
   if (!["acabo", "danada", "inicio"].includes(motivo)) throw new Error("Elige qué pasó.");
+  await agregarItemHelado({id: newId(), t: Date.now(), sabor, motivo, obs: obs || "", uid: uidActual(), bc: bolasCaja()});
+  audit("CAMBIO_CAJA_HELADO", sabor, nombreSabor(sabor) + " · " + ({acabo: "caja nueva", danada: "la anterior se dañó o derritió", inicio: "empieza a contarse"}[motivo]) + (obs ? " · " + obs : ""));
+}
+async function anularCambioCaja(e) {
+  if (!puedeAnularCambio(e)) throw Object.assign(new Error("denied"), {code: "denied"});
+  await agregarItemHelado({id: newId(), t: Date.now(), anula: e.id, uid: uidActual()});
+  audit("ANULA_CAMBIO_CAJA", e.sabor, nombreSabor(e.sabor) + " · cambio de las " + hora(e.t));
+}
+async function agregarItemHelado(item) {
   const f = S.today, id = cajaId(f), cur = col("cajashelado")[id] || {fecha: f, dev: DEV.id, items: []};
-  await put("cajashelado", id, Object.assign({}, cur, {fecha: f, dev: DEV.id, items: (cur.items || []).concat([{id: newId(), t: Date.now(), sabor, motivo, obs: obs || "", uid: uidActual()}])}));
-  audit("CAMBIO_CAJA_HELADO", sabor, nombreSabor(sabor) + " · " + ({acabo: "se acabó", danada: "dañada o derretida", inicio: "empieza a contarse"}[motivo]) + (obs ? " · " + obs : ""));
+  await put("cajashelado", id, Object.assign({}, cur, {fecha: f, dev: DEV.id, items: (cur.items || []).concat([item])}));
 }
 
 /* ---------- tarjeta en Inventario y detalle para el administrador ---------- */
@@ -2412,7 +2473,7 @@ function cardHelados() {
   const ss = saboresHelado(); if (!ss.length) return "";
   const adm = esAdmin(), r = rendimientoCajas(), c = confConos();
   return `<div class="card"><div class="row" style="border:0;padding-top:0;align-items:center"><h3 style="margin:0">Cajas de helado</h3><button class="btn pri sm" data-act="cambioCaja">Cambié una caja</button></div>
-    ${ss.map(s => { const cs = r[s.id] || [], ab = cs.find(k => k.abierta), st = stockDe(s.id), ult = cs.filter(k => !k.abierta).slice(-1)[0];
+    ${ss.map(s => { const cs = r[s.id] || [], ab = cs.find(k => k.abierta), st = stockDe(s.id), ult = cs.filter(k => !k.abierta && !k.parcial).slice(-1)[0];
       return `<div class="row" style="padding:9px 0;align-items:flex-start"><div class="l" style="flex:1"><b>${esc(nombreSabor(s.id))}</b>
         <div class="small muted">${st == null ? "Cajas cerradas: sin contar" : "Cajas cerradas: " + fmtN(Math.max(0, st), 0)} · ${ab ? "abierta desde " + diaCorto(ymd(new Date(ab.desde))) + " " + hora(ab.desde) + (adm ? " · lleva " + ab.bolas + (ab.bolas === 1 ? " bola" : " bolas") : "") : "aún no se cuenta"}</div>
         ${adm && (ult || (ab && ab.estado === "muchas")) ? `<div class="small" style="margin-top:3px">${ab && ab.estado === "muchas" ? pillCaja(ab) + " la abierta ya pasó de " + c.max : pillCaja(ult) + " última caja: " + ult.bolas + " bolas"}</div>` : ""}</div></div>`; }).join("")}
@@ -2485,7 +2546,7 @@ function bDinero() {
       ${cmp.delta != null ? `<div style="margin-top:4px;font-weight:700;color:${up ? "var(--marca-d)" : "var(--danger)"}">${ic(up ? "sube" : "baja", 18)} ${up ? "↑" : "↓"} ${Math.abs(Math.round(cmp.delta * 100))}% <span class="muted" style="font-weight:500">vs ${esc(cmp.et)}</span></div><div class="small muted">Referencia: ${fmt(cmp.base)}</div>` : `<div class="small muted" style="margin-top:4px">Aún no hay suficiente historia para comparar.</div>`}
       <div class="seg" style="margin-top:10px">${MODOS_COMP.map(([k, l]) => `<button data-act="comp" data-v="${k}" aria-pressed="${S.comp === k}">${l}</button>`).join("")}</div></div>
     <div><div class="muted small" style="font-weight:700;letter-spacing:.05em">UTILIDAD ESTIMADA ${ayuda("Ventas menos el costo de lo vendido y los gastos de hoy. No incluye gastos fijos del mes (arriendo, nómina).")}</div><div class="big" style="font-size:36px;color:${f.utilidad < 0 ? "var(--danger)" : "var(--marca-d)"}">${fmt(f.utilidad)}</div>
-      <div class="small muted">Margen ${pct(f.margen, 1)}${f.sinCosto ? " · " + f.sinCosto + " unidades sin costo" : ""}</div>
+      <div class="small muted">Margen ${pct(f.margen, 1)}${f.sinCosto ? " · " + fmtN(f.sinCosto, 0) + " unidades sin costo" : ""}${f.sinCostoHelado ? " · falta el costo de algún sabor de helado" : ""}</div>
       <div class="row" style="padding:6px 0;margin-top:8px"><span class="small">Venta</span><b class="small">${fmt(f.ventas)}</b></div><div class="row" style="padding:6px 0"><span class="small">− Costo de lo vendido</span><b class="small">${fmt(f.cogs)}</b></div><div class="row" style="padding:6px 0"><span class="small">= Utilidad bruta</span><b class="small">${fmt(f.bruta)}</b></div>${totalFijos() ? (() => { const gv = gastosVariables(S.today, S.today), q = f.bruta - gv - fijoDia(); return `<div class="row" style="padding:6px 0"><span class="small">− Otros gastos de hoy ${ayuda("Gastos del día que no son arriendo, nómina ni servicios: esos ya están en los gastos fijos.")}</span><b class="small">${fmt(gv)}</b></div><div class="row" style="padding:6px 0"><span class="small">− Gastos fijos del día ${ayuda("Arriendo, trabajadoras, servicios, impuestos: el total mensual dividido entre los días del mes.")}</span><b class="small">${fmt(fijoDia())}</b></div><div class="row" style="padding:6px 0"><b class="small">= Lo que queda hoy</b><b class="small" style="color:${q < 0 ? "var(--danger)" : "var(--marca-d)"}">${fmt(q)}</b></div>`; })() : `<div class="row" style="padding:6px 0"><span class="small">− Gastos de hoy</span><b class="small">${fmt(f.gastos)}</b></div>`}</div></div>
     <hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
     <div class="two" style="gap:20px"><div>${bEquilibrio()}</div>
@@ -2762,6 +2823,12 @@ ACT.editProd = (el, d) => {
       <label class="f">Tipo</label>${sel("pr-tipo", ["Producto que vendo", "Insumo"], p && p.tipo === "insumo" ? "Insumo" : "Producto que vendo")}
       <label class="check" style="margin-top:10px"><input type="checkbox" id="pr-ctl" ${!p || p.controla !== false ? "checked" : ""}> Llevar inventario de este producto</label>
       <label class="check" style="margin-top:6px"><input type="checkbox" id="pr-sabor" ${p && p.sabor ? "checked" : ""}> Es un sabor de helado para conos (insumo que se cuenta por cajas) ${ayuda("Aparece al vender un cono sencillo o doble. La empleada marca cuándo cambia la caja y OLI mide cuántas bolas dio cada caja.")}</label>
+      ${(() => { const cn = (p && p.cono) || null, ins = insumos().filter(x => x.activo !== false && !x.sabor), opt = (sel0) => `<option value="">— Elegir —</option>` + ins.map(x => `<option value="${esc(x.id)}" ${sel0 === x.id ? "selected" : ""}>${esc(x.nombre)}</option>`).join("");
+        return `<details style="margin-top:8px" ${cn ? "open" : ""}><summary class="small" style="cursor:pointer;font-weight:700">Cono de helado (pide sabores al vender)</summary>
+        <label class="check" style="margin-top:6px"><input type="checkbox" id="pr-cono" ${cn ? "checked" : ""}> Este producto es un cono: al venderlo se eligen los sabores y si va en cucurucho o vaso</label>
+        <div class="split" style="margin-top:6px"><div><label class="f" for="pr-cbolas">Bolas</label><select class="in" id="pr-cbolas"><option value="1" ${!cn || cn.bolas !== 2 ? "selected" : ""}>1 (sencillo)</option><option value="2" ${cn && cn.bolas === 2 ? "selected" : ""}>2 (doble)</option></select></div>
+        <div><label class="f" for="pr-cbarq">Barquillo</label><select class="in" id="pr-cbarq">${opt(cn && cn.barquillo)}</select></div></div>
+        <div class="split"><div><label class="f" for="pr-ccucu">Cucurucho</label><select class="in" id="pr-ccucu">${opt(cn && cn.cucurucho)}</select></div><div><label class="f" for="pr-cvaso">Vaso</label><select class="in" id="pr-cvaso">${opt(cn && cn.vaso)}</select></div></div></details>`; })()}
       <label class="check"><input type="checkbox" id="pr-act" ${!p || p.activo !== false ? "checked" : ""}> Disponible para vender</label>
       <label class="f" for="pr-foto">Foto (opcional)</label><input class="in plain" id="pr-foto" type="file" accept="image/*" data-act-change="fotoProd"><div id="pr-prev" class="small muted">${S.prodImg ? "Foto cargada" : "Sin foto: OLI dibuja el producto con su color."}</div>
       <div class="split"><div><label class="f" for="pr-pack">Viene en cajas de</label><input class="in plain" id="pr-pack" inputmode="numeric" value="${p && p.pack ? p.pack : ""}" placeholder="1"></div><div><label class="f" for="pr-max">Cantidad ideal (insumos)</label><input class="in plain" id="pr-max" inputmode="numeric" value="${p && p.max ? p.max : ""}"></div></div>
@@ -2788,6 +2855,12 @@ ACT.doGuardarProd = async (el, d) => {
   const impT = (IMP_TIPOS.find(x => x[1] === selVal("pr-imp")) || IMP_TIPOS[0])[0], tar = numDec($("#pr-tar").value) / 100, ant = d.id ? prod(d.id) : null;
   const dat = {nombre: n, cat: selVal("pr-cat") || "Otros", tipo: selVal("pr-tipo") === "Insumo" ? "insumo" : "terminado", precio: pr, unidad: $("#pr-u").value.trim() || "und", min: $("#pr-m").value.trim() === "" ? 3 : num($("#pr-m").value), seg: num($("#pr-s").value), pack: num($("#pr-pack").value) || 1, max: num($("#pr-max").value) || null,
     controla: $("#pr-ctl").checked, activo: $("#pr-act").checked, imp: {t: impT, r: tar || 0, cuenta: $("#pr-cta").value.trim()}};
+  if ($("#pr-cono") && $("#pr-cono").checked) {
+    const cn = {bolas: Number($("#pr-cbolas").value) === 2 ? 2 : 1, barquillo: $("#pr-cbarq").value, cucurucho: $("#pr-ccucu").value, vaso: $("#pr-cvaso").value};
+    if (dat.tipo === "insumo") { toast("Un cono es un producto que se vende, no un insumo.", true); return; }
+    if (!cn.barquillo || !cn.cucurucho || !cn.vaso) { toast("Elige el barquillo, el cucurucho y el vaso del cono (son insumos).", true); return; }
+    dat.cono = cn; dat.controla = false;
+  } else if ($("#pr-cono")) dat.cono = null;
   if ($("#pr-sabor") && $("#pr-sabor").checked) { if (dat.tipo !== "insumo") { toast("Un sabor de helado debe ser de tipo “Insumo”.", true); return; } dat.sabor = true; dat.controla = true; } else dat.sabor = false;
   if (S.prodImg) dat.foto = S.prodImg; else delete dat.foto; if (ant && ant.combo) dat.combo = ant.combo;
   await guardar(async () => {
@@ -2815,7 +2888,7 @@ VIEWS.finanzas = () => {
   return cabecera("Dinero", periodoTxt(a, b), `<button class="btn pri xl" data-act="nuevoGasto">${ic("plus", 20)} REGISTRAR GASTO</button>`) + `<div style="margin-bottom:14px">${rangoControles()}</div>
   <div class="card"><h3>Cómo te fue</h3>
     <div class="row"><div class="l"><b>Ventas</b><div class="small muted">Lo que entró por vender · ${f.n} ventas</div></div><div class="r big" style="font-size:24px">${fmt(f.ventas)}</div></div>
-    <div class="row"><div class="l">− Costo de lo vendido<div class="small muted">Lo que te costó lo que vendiste${f.sinCosto ? " · " + f.sinCosto + " uds sin costo" : ""}</div></div><div class="r">${fmt(f.cogs)}</div></div>
+    <div class="row"><div class="l">− Costo de lo vendido<div class="small muted">Lo que te costó lo que vendiste${f.sinCosto ? " · " + fmtN(f.sinCosto, 0) + " uds sin costo" : ""}${f.sinCostoHelado ? " · falta el costo de algún sabor de helado" : ""}</div></div><div class="r">${fmt(f.cogs)}</div></div>
     <div class="row"><div class="l"><b>= Utilidad bruta</b></div><div class="r">${fmt(f.bruta)}</div></div>
     <div class="row"><div class="l">− Gastos<div class="small muted">Arriendo, servicios, nómina…${f.gastosMP ? " (materia prima no se resta: ya está en el costo)" : ""}</div></div><div class="r">${fmt(f.gastos)}</div></div>
     <div class="row"><div class="l"><b>= Utilidad estimada</b><div class="small muted">Margen ${pct(f.margen, 1)}</div></div><div class="r big" style="font-size:28px;color:${f.utilidad < 0 ? "var(--danger)" : "var(--marca-d)"}">${fmt(f.utilidad)}</div></div></div>
@@ -2960,7 +3033,7 @@ ACT.guardarAjustes = async () => { await guardar(async () => { const mov = $("#a
 ACT.guardarConos = async () => {
   const b = num($("#aj-bc").value), mn = num($("#aj-bmin").value), mx = num($("#aj-bmax").value);
   if (!(b >= 1 && mn >= 0 && mx >= mn && b >= mn && b <= mx)) { toast("Revisa los números: el mínimo debe ser menor o igual a las bolas por caja, y estas menores o iguales al máximo.", true); return; }
-  await guardar(() => guardarConfig({conos: {bolasCaja: b, min: mn, max: mx}}), "Guardado");
+  await guardar(async () => { exigirAdmin(); await put("meta", "conos", {bolasCaja: b, min: mn, max: mx}); audit("CONFIG", "conos", b + " bolas por caja · aceptable " + mn + " a " + mx); }, "Guardado");   // en meta: la tablet de la empleada también lo necesita (no tiene costos)
 };
 ACT.guardarColchon = async () => { const v = num($("#aj-col").value); if (!(v >= 0 && v <= 100)) { toast("Escribe un porcentaje entre 0 y 100.", true); return; } await guardar(() => guardarConfig({colchonFestivo: v / 100}), "Guardado"); };
 ACT.verFestivos = () => {
@@ -2992,7 +3065,7 @@ function filasVentas(a, b, F) {
   const out = [];
   for (const v of ventasAll()) if (v.fecha >= a && v.fecha <= b && pasaF(v, null, F)) for (const it of (v.items || [])) {
     if (!pasaF(v, it, F)) continue; const neto = lineaNeta(it), iv = (it.imp && it.imp.v) || 0, p = prod(it.pid);
-    out.push({id: v.id, num: v.num || "", fecha: v.fecha, hora: hora(v.t), t: v.t, caja: devNombre(v.dev), empleado: empNombre(v.uid), producto: it.n + (it.det ? " (" + it.det + ")" : ""), pid: it.pid, categoria: (p && p.cat) || "", cantidad: it.q, precio: it.p, descuento: it.d || 0,
+    out.push({id: v.id, num: v.num || "", fecha: v.fecha, hora: hora(v.t), t: v.t, caja: devNombre(v.dev), empleado: empNombre(v.uid), producto: it.n, detalle: it.det || "", pid: it.pid, categoria: (p && p.cat) || "", cantidad: it.q, precio: it.p, descuento: it.d || 0,
       subtotal: neto - iv, impuesto: iv, impTipo: (it.imp && it.imp.t) || "validar", impTarifa: (it.imp && it.imp.r) || 0, total: neto, metodo: v.m, costoU: costoItem(it, v.t), cliente: v.cliente ? "Pidió factura" : "", estado: v.anulada ? "Anulada" : "Confirmada", sync: ventaSyncTxt(ventaSync(v))});
   }
   return out.sort((x, y) => x.t - y.t);
@@ -3009,9 +3082,10 @@ function filasInventario(a, b) {
   for (const p of prods().filter(x => x.controla !== false && !x.combo)) {
     const movs = porPid[p.id] || [], fin = stockFinalEn(p.id, b, movs), en = movs.filter(m => m.fecha >= a && m.fecha <= b);
     const ent = sum(en.filter(m => ENTRA[m.tipo]), m => m.q), ven = -sum(en.filter(m => m.tipo === "venta"), m => m.q), mer = -sum(en.filter(m => m.tipo === "perdida"), m => m.q), con = -sum(en.filter(m => m.tipo === "consumo"), m => m.q), ajs = sum(en.filter(m => m.tipo === "conteo"), m => m.q);
-    const ini = fin == null ? null : Math.round((fin - ent + ven + mer + con - ajs) * 1000) / 1000, e = estadoProd(p), c = costoActual(p.id), cov = cobertura(p.id), ag = agotaEn(p.id);
+    const abr = -sum(en.filter(m => m.tipo === "aperturaCaja"), m => m.q);                        // cajas de helado abiertas: salen del inventario de cajas cerradas
+    const ini = fin == null ? null : Math.round((fin - ent + ven + mer + con + abr - ajs) * 1000) / 1000, e = estadoProd(p), c = costoActual(p.id), cov = cobertura(p.id), ag = agotaEn(p.id);
     const estado = e.k === "agotado" ? "AGOTADO" : e.k === "bajo" ? "BAJO" : ag && ag.dias <= 3 ? "RIESGO" : e.k === "sin" ? "SIN CONTAR" : "NORMAL";
-    out.push({producto: p.nombre, sku: p.id, categoria: p.cat || "", tipo: p.tipo === "insumo" ? "Insumo" : "Producto terminado", unidad: p.unidad || "und", inicial: ini, entradas: ent, salidas: ven + mer + con, ventas: ven, mermas: mer, consumo: con, ajustes: ajs, final: fin, costo: c, minimo: p.min || 0, seguridad: p.seg || 0, cobertura: cov == null || cov === Infinity ? null : Math.round(cov * 10) / 10, estado});
+    out.push({producto: p.nombre, sku: p.id, categoria: p.cat || "", tipo: p.tipo === "insumo" ? "Insumo" : "Producto terminado", unidad: p.unidad || "und", inicial: ini, entradas: ent, salidas: ven + mer + con + abr, ventas: ven, mermas: mer, consumo: con, abiertas: abr, ajustes: ajs, final: fin, costo: c, minimo: p.min || 0, seguridad: p.seg || 0, cobertura: cov == null || cov === Infinity ? null : Math.round(cov * 10) / 10, estado});
   }
   return out;
 }
@@ -3033,10 +3107,10 @@ function filasCajas(a, b) {
 }
 function filasMovCaja(a, b) { const out = []; for (const c of cajasAll()) if (c.fecha >= a && c.fecha <= b) for (const m of (c.movs || [])) out.push({fecha: c.fecha, hora: hora(m.t), caja: devNombre(c.dev), tipo: m.tipo === "retiro" ? "Salida de dinero" : m.tipo === "ingreso" ? "Entrada de dinero" : "Pago desde caja", valor: m.monto, motivo: m.motivo, usuario: empNombre(m.uid), soporte: ""}); return out; }
 function filasGastos(a, b) { return gastosEn(a, b).map(g => ({fecha: g.fecha, proveedor: g.proveedor || "", categoria: g.cat || "", descripcion: g.desc || "", base: g.base || (g.iva ? g.valor - g.iva : g.valor), iva: g.iva || 0, retencion: g.retencion || 0, total: g.valor, metodo: g.m || "", cuenta: g.origen === "caja" || g.m === "Efectivo" ? "Caja" : "Banco", usuario: empNombre(g.uid), soporte: (g.soporte && g.soporte.ref) || "", estado: g.origen === "caja" ? "Desde caja" : (g.estado || "Registrado")})).sort((x, y) => x.fecha.localeCompare(y.fecha)); }
-function filasMermas(a, b) { return mermasAll().filter(m => m.fecha >= a && m.fecha <= b).map(m => { const p = prod(m.pid), c = costoUnit(m.pid, m.t); return {producto: (p && p.nombre) || m.pid, fecha: m.fecha, cantidad: m.q, unidad: (p && p.unidad) || "und", costo: c, total: c == null ? null : c * m.q, motivo: m.motivo, empleado: empNombre(m.uid), obs: m.obs || ""}; }).concat(perdidasHelado(a, b)); }
+function filasMermas(a, b) { return mermasAll().filter(m => m.fecha >= a && m.fecha <= b).map(m => { const p = prod(m.pid), c = costoUnit(m.pid, m.t); return {pid: m.pid, producto: (p && p.nombre) || m.pid, fecha: m.fecha, cantidad: m.q, unidad: (p && p.unidad) || "und", costo: c, total: c == null ? null : c * m.q, motivo: m.motivo, empleado: empNombre(m.uid), obs: m.obs || ""}; }).concat(perdidasHelado(a, b)); }
 function filasRentabilidad(a, b) {
   const desc = {}, mer = {}; for (const r of filasVentas(a, b, {})) if (r.estado === "Confirmada") desc[r.pid] = (desc[r.pid] || 0) + r.descuento;
-  for (const m of filasMermas(a, b)) { const p = prods().find(x => x.nombre === m.producto); if (p) mer[p.id] = (mer[p.id] || 0) + (m.total || 0); }
+  for (const m of filasMermas(a, b)) if (m.pid) mer[m.pid] = (mer[m.pid] || 0) + (m.total || 0);
   return rentabilidad(a, b).map(r => ({producto: r.n, pid: r.pid, unidades: r.uds, ventas: r.ing - (desc[r.pid] || 0), costo: r.sinCosto ? null : r.costo, descuentos: desc[r.pid] || 0, merma: mer[r.pid] || 0}));
 }
 function filasClientes(a, b) {
@@ -3458,9 +3532,9 @@ function datosInforme(a, b, F) {
   const ok = ventas.filter(r => r.estado === "Confirmada"), ids = uniq(ok.map(r => r.id)), tot = sum(ok, r => r.total), desc = sum(ok, r => r.descuento), costo = sum(ok, r => r.costo || 0), bruto = tot + desc;
   const anuladas = uniq(ventas.filter(r => r.estado === "Anulada").map(r => r.id)), anuladoTot = sum(ventas.filter(r => r.estado === "Anulada"), r => r.total);
   const gastos = filasGastos(a, b), gastosOp = hayFiltro(F) ? null : sum(gastos.filter(g => g.categoria !== BASE_COSTO), g => g.total), bruta = tot - costo, util = gastosOp == null ? null : bruta - gastosOp;
-  const mermas = filasMermas(a, b).filter(m => { const p = prods().find(x => x.nombre === m.producto); return (!F.pid || (p && p.id === F.pid)) && (!F.cat || (p && p.cat === F.cat)); });
+  const mermas = filasMermas(a, b).filter(m => { const p = prod(m.pid); return (!F.pid || (p && p.id === F.pid)) && (!F.cat || (p && p.cat === F.cat)); });
   const rmap = {}; for (const r of ok) { const o = rmap[r.pid] = rmap[r.pid] || {pid: r.pid, producto: r.producto, categoria: r.categoria, unidades: 0, ventas: 0, costo: 0, sinCosto: 0, descuentos: 0, merma: 0}; o.unidades += r.cantidad; o.ventas += r.total; o.descuentos += r.descuento; if (r.costo == null) o.sinCosto += r.cantidad; else o.costo += r.costo; }
-  for (const m of mermas) { const p = prods().find(x => x.nombre === m.producto); if (p && rmap[p.id]) rmap[p.id].merma += m.total || 0; }
+  for (const m of mermas) if (m.pid && rmap[m.pid]) rmap[m.pid].merma += m.total || 0;
   const rent = Object.values(rmap).map(o => Object.assign(o, {bruta: o.ventas - o.costo, margen: o.ventas ? (o.ventas - o.costo) / o.ventas : null, neta: o.ventas - o.costo - o.merma, costoOk: o.sinCosto === 0})).sort((x, y) => y.bruta - x.bruta);
   const dmap = {}; for (let d = a, i = 0; d <= b && i < 400; d = addDays(d, 1), i++) dmap[d] = {fecha: d, ventas: 0, costo: 0, n: new Set()};
   for (const r of ok) { const o = dmap[r.fecha]; if (!o) continue; o.ventas += r.total; o.costo += r.costo || 0; o.n.add(r.id); }
@@ -3583,8 +3657,8 @@ const xlsxBlob = async wb => new Blob([await wb.xlsx.writeBuffer()], {type: "app
 
 /* columnas de cada tabla (las mismas en el informe gerencial, los Excel por módulo y el paquete del contador) */
 const COLS = {
-  ventas: [{h: "ID venta", k: "id"}, {h: "N.º", k: "num"}, {h: "Fecha", k: "fecha", t: "fecha"}, {h: "Hora", k: "hora"}, {h: "Caja", k: "caja"}, {h: "Empleado", k: "empleado"}, {h: "Producto", k: "producto"}, {h: "Categoría", k: "categoria"}, {h: "Cantidad", k: "cantidad", t: "num", tot: 1}, {h: "Precio unitario", k: "precio", t: "money"}, {h: "Descuento", k: "descuento", t: "money", tot: 1}, {h: "Subtotal (base)", k: "subtotal", t: "money", tot: 1}, {h: "Impuesto", k: "impuesto", t: "money", tot: 1}, {h: "Total", k: "total", t: "money", tot: 1}, {h: "Tratamiento tributario", f: r => TIPO_IMP[r.impTipo] || r.impTipo}, {h: "Método de pago", k: "metodo"}, {h: "Cliente", k: "cliente"}, {h: "Estado", k: "estado", estado: 1}, {h: "Estado sincronización", k: "sync"}],
-  inventario: [{h: "Producto", k: "producto"}, {h: "SKU / código", k: "sku"}, {h: "Categoría", k: "categoria"}, {h: "Tipo", k: "tipo"}, {h: "Unidad", k: "unidad"}, {h: "Inventario inicial", k: "inicial", t: "num"}, {h: "Entradas", k: "entradas", t: "num", tot: 1}, {h: "Salidas", k: "salidas", t: "num", tot: 1}, {h: "Ventas", k: "ventas", t: "num", tot: 1}, {h: "Mermas", k: "mermas", t: "num", tot: 1}, {h: "Consumo en producción", k: "consumo", t: "num", tot: 1}, {h: "Ajustes (conteos)", k: "ajustes", t: "num", tot: 1, neg: 1}, {h: "Inventario final", k: "final", t: "num", neg: 1}, {h: "Costo unitario", k: "costo", t: "money"}, {h: "Valor inventario", id: "valor", f: r => r.final != null && r.costo != null ? Math.max(0, r.final) * r.costo : null, t: "money", tot: 1}, {h: "Inventario mínimo", k: "minimo", t: "num"}, {h: "Stock de seguridad", k: "seguridad", t: "num"}, {h: "Días de cobertura", k: "cobertura", t: "num"}, {h: "Estado", k: "estado", estado: 1}],
+  ventas: [{h: "ID venta", k: "id"}, {h: "N.º", k: "num"}, {h: "Fecha", k: "fecha", t: "fecha"}, {h: "Hora", k: "hora"}, {h: "Caja", k: "caja"}, {h: "Empleado", k: "empleado"}, {h: "Producto", k: "producto"}, {h: "Detalle", k: "detalle"}, {h: "Categoría", k: "categoria"}, {h: "Cantidad", k: "cantidad", t: "num", tot: 1}, {h: "Precio unitario", k: "precio", t: "money"}, {h: "Descuento", k: "descuento", t: "money", tot: 1}, {h: "Subtotal (base)", k: "subtotal", t: "money", tot: 1}, {h: "Impuesto", k: "impuesto", t: "money", tot: 1}, {h: "Total", k: "total", t: "money", tot: 1}, {h: "Tratamiento tributario", f: r => TIPO_IMP[r.impTipo] || r.impTipo}, {h: "Método de pago", k: "metodo"}, {h: "Cliente", k: "cliente"}, {h: "Estado", k: "estado", estado: 1}, {h: "Estado sincronización", k: "sync"}],
+  inventario: [{h: "Producto", k: "producto"}, {h: "SKU / código", k: "sku"}, {h: "Categoría", k: "categoria"}, {h: "Tipo", k: "tipo"}, {h: "Unidad", k: "unidad"}, {h: "Inventario inicial", k: "inicial", t: "num"}, {h: "Entradas", k: "entradas", t: "num", tot: 1}, {h: "Salidas", k: "salidas", t: "num", tot: 1}, {h: "Ventas", k: "ventas", t: "num", tot: 1}, {h: "Mermas", k: "mermas", t: "num", tot: 1}, {h: "Consumo en producción", k: "consumo", t: "num", tot: 1}, {h: "Cajas abiertas (helado)", k: "abiertas", t: "num", tot: 1}, {h: "Ajustes (conteos)", k: "ajustes", t: "num", tot: 1, neg: 1}, {h: "Inventario final", k: "final", t: "num", neg: 1}, {h: "Costo unitario", k: "costo", t: "money"}, {h: "Valor inventario", id: "valor", f: r => r.final != null && r.costo != null ? Math.max(0, r.final) * r.costo : null, t: "money", tot: 1}, {h: "Inventario mínimo", k: "minimo", t: "num"}, {h: "Stock de seguridad", k: "seguridad", t: "num"}, {h: "Días de cobertura", k: "cobertura", t: "num"}, {h: "Estado", k: "estado", estado: 1}],
   compras: [{h: "Proveedor", k: "proveedor"}, {h: "NIT", k: "nit"}, {h: "Fecha", k: "fecha", t: "fecha"}, {h: "Factura", k: "factura"}, {h: "Producto", k: "producto"}, {h: "Cantidad", k: "cantidad", t: "num", tot: 1}, {h: "Unidad", k: "unidad"}, {h: "Costo unitario", k: "costo", t: "money"}, {h: "IVA", k: "iva", t: "money", tot: 1}, {h: "Total", k: "total", t: "money", tot: 1}, {h: "Estado", k: "estado"}, {h: "Recibido", k: "recibido", t: "num", tot: 1}, {h: "Pendiente", k: "pendiente", t: "num", tot: 1}, {h: "Tipo de soporte", k: "tipoSoporte"}, {h: "Soporte (referencia)", k: "soporte"}],
   recomendacion: [{h: "Producto", k: "producto"}, {h: "Inventario", k: "inventario", t: "num"}, {h: "Consumo promedio / día", k: "consumo", t: "num"}, {h: "Demanda estimada (7 días)", k: "demanda", t: "num"}, {h: "Stock de seguridad", k: "seguridad", t: "num"}, {h: "Cantidad recomendada", k: "cantidad", t: "num", tot: 1}, {h: "Proveedor sugerido", k: "proveedor"}, {h: "Costo estimado", k: "costoTotal", t: "money", tot: 1}, {h: "Fecha recomendada de compra", k: "fecha", t: "fecha"}, {h: "Motivo", k: "motivo"}],
   cajas: [{h: "Fecha", k: "fecha", t: "fecha"}, {h: "Caja", k: "caja"}, {h: "Empleado", k: "empleado"}, {h: "Apertura", k: "apertura", t: "money", tot: 1}, {h: "Ventas efectivo", k: "efectivo", t: "money", tot: 1}, {h: "Ventas digitales y tarjeta", k: "digitales", t: "money", tot: 1}, {h: "Entradas de dinero", k: "ingresos", t: "money", tot: 1}, {h: "Retiros", k: "retiros", t: "money", tot: 1}, {h: "Gastos pagados en caja", k: "gastos", t: "money", tot: 1}, {h: "Efectivo esperado", k: "esperado", t: "money", tot: 1}, {h: "Efectivo contado", k: "contado", t: "money", tot: 1}, {h: "Diferencia", k: "diferencia", t: "money", tot: 1, neg: 1}, {h: "Hora apertura", k: "hAp"}, {h: "Hora cierre", k: "hCi"}, {h: "Estado", k: "estado"}, {h: "Observación", k: "obs"}],

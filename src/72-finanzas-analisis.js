@@ -11,7 +11,7 @@ VIEWS.finanzas = () => {
   return cabecera("Dinero", periodoTxt(a, b), `<button class="btn pri xl" data-act="nuevoGasto">${ic("plus", 20)} REGISTRAR GASTO</button>`) + `<div style="margin-bottom:14px">${rangoControles()}</div>
   <div class="card"><h3>Cómo te fue</h3>
     <div class="row"><div class="l"><b>Ventas</b><div class="small muted">Lo que entró por vender · ${f.n} ventas</div></div><div class="r big" style="font-size:24px">${fmt(f.ventas)}</div></div>
-    <div class="row"><div class="l">− Costo de lo vendido<div class="small muted">Lo que te costó lo que vendiste${f.sinCosto ? " · " + f.sinCosto + " uds sin costo" : ""}</div></div><div class="r">${fmt(f.cogs)}</div></div>
+    <div class="row"><div class="l">− Costo de lo vendido<div class="small muted">Lo que te costó lo que vendiste${f.sinCosto ? " · " + fmtN(f.sinCosto, 0) + " uds sin costo" : ""}${f.sinCostoHelado ? " · falta el costo de algún sabor de helado" : ""}</div></div><div class="r">${fmt(f.cogs)}</div></div>
     <div class="row"><div class="l"><b>= Utilidad bruta</b></div><div class="r">${fmt(f.bruta)}</div></div>
     <div class="row"><div class="l">− Gastos<div class="small muted">Arriendo, servicios, nómina…${f.gastosMP ? " (materia prima no se resta: ya está en el costo)" : ""}</div></div><div class="r">${fmt(f.gastos)}</div></div>
     <div class="row"><div class="l"><b>= Utilidad estimada</b><div class="small muted">Margen ${pct(f.margen, 1)}</div></div><div class="r big" style="font-size:28px;color:${f.utilidad < 0 ? "var(--danger)" : "var(--marca-d)"}">${fmt(f.utilidad)}</div></div></div>
