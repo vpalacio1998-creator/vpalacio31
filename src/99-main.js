@@ -38,7 +38,7 @@ function loginHTML() {
   return `<div class="gate"><div class="box"><div class="logo">OLI</div><h2>Bienvenido</h2><p>Ingresa para empezar.</p>
     <label class="f" for="lg-mail" style="text-align:left">Correo</label><input class="in plain" id="lg-mail" type="email" autocomplete="username" inputmode="email" placeholder="tucorreo@ejemplo.com">
     <label class="f" for="lg-pass" style="text-align:left">Contraseña</label><input class="in plain" id="lg-pass" type="password" autocomplete="current-password">
-    <div id="lg-err" role="alert" style="color:var(--danger);min-height:22px;margin:8px 0;font-size:14px"></div>
+    <div id="lg-err" role="alert" style="color:var(--danger);min-height:22px;margin:8px 0;font-size:14px">${esc(DS.loginMsg || "")}</div>
     <button class="btn pri xl wide" data-act="login">INGRESAR</button>
     ${btnInstalar("btn ghost wide")}
     <p class="small muted" style="margin-top:14px">¿Olvidaste tu contraseña? Pídele al administrador que te ayude a cambiarla.</p><p class="credit">Desarrollado por <b>VP Visual Project</b></p></div></div>`;

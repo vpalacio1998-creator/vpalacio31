@@ -89,12 +89,13 @@ ACT.rango = (el, d) => { S.rango = d.v; draw(); };
 function connInfo() {
   const e = SYNC.estado, pv = ventasPendientes();
   if (DS.mode === "local") return {k: "local", txt: "Solo en este equipo", cls: "off", ic: "info"};
-  if (e === "offline") return {k: "offline", txt: "Sin conexión" + (pv ? " · " + pv + " por enviar" : ""), cls: "warn", ic: "alerta"};
+  if (e === "offline" || (DS.backend === "supabase" && SB.sinVerificar)) return {k: "offline", txt: "Sin conexión" + (pv ? " · " + pv + " por enviar" : ""), cls: "warn", ic: "alerta"};   // abrió con lo guardado: el servidor aún no responde
   if (e === "sincronizando") return {k: "sync", txt: "Enviando " + Math.min(SYNC.hecho + 1, SYNC.total) + "/" + SYNC.total, cls: "ok", ic: "rayo"};
   if (e === "error") return {k: "error", txt: "Hay datos que revisar", cls: "bad", ic: "alerta"};
   if (e === "pendiente") return {k: "pend", txt: pv ? pv + (pv === 1 ? " venta por enviar" : " ventas por enviar") : "Enviando cambios", cls: "warn", ic: "rayo"};
   return {k: "ok", txt: "Conectado", cls: "ok", ic: "ok"};
 }
+const conRedNavegador = () => typeof navigator === "undefined" || navigator.onLine !== false;
 function connPill() { const c = connInfo(); return `<button class="pill ${c.cls}" data-act="verEnvio" style="min-height:36px;border:0" aria-label="Estado de conexión: ${esc(c.txt)}"><span class="dot ${c.cls === "ok" ? "" : c.cls === "bad" ? "bad" : "off"}" style="${c.cls === "warn" ? "background:var(--warn)" : ""}"></span>${esc(c.txt)}</button>`; }
 const ventaSyncTxt = e => ({pendiente: "Pendiente de enviar", sincronizando: "Enviando…", sincronizada: "Enviada ✓", error: "Necesita revisión", local: "Guardada"}[e] || e);
 ACT.verEnvio = () => abrir(() => {
@@ -102,6 +103,7 @@ ACT.verEnvio = () => abrir(() => {
   return head("Estado de envío") + `<div class="notice ${c.cls === "ok" ? "ok" : c.cls === "bad" ? "bad" : ""}"><b>${esc(c.txt)}</b><br>${DS.mode === "local" ? "Los datos se guardan solo en este equipo." : c.k === "offline" ? "Trabajando sin conexión. Las ventas se guardan en este equipo y se enviarán solas cuando vuelva Internet." : pend ? "Hay " + pend + " cambios por enviar. Se envían solos." : "Todo está al día con el servidor."}</div>
     ${SYNC.ultima ? `<p class="small muted">Último envío: ${haceTxt(SYNC.ultima)}</p>` : ""}
     <h3>Mis últimas ventas</h3>${mias.length ? mias.map(v => `<div class="row"><div class="l"><b>${esc(v.num || "Venta")}</b> · ${hora(v.t)}<div class="small muted">${fmt(v.total)} · ${esc(v.m)}</div></div><div class="r"><span class="pill ${ventaSync(v) === "sincronizada" || ventaSync(v) === "local" ? "ok" : ventaSync(v) === "error" ? "bad" : "warn"}">${esc(ventaSyncTxt(ventaSync(v)))}</span></div></div>`).join("") : '<p class="muted">Todavía no hay ventas en este equipo.</p>'}
+    ${c.k === "offline" && DS.backend === "supabase" && esAdmin() && conRedNavegador() ? `<div class="notice" style="margin-top:12px"><b>Este equipo tiene Internet, pero el servidor de OLI no responde.</b> Si dura más de unos minutos, entra a <b>supabase.com</b> → proyecto <b>OLI</b>: si dice que está en pausa, toca <b>Restore</b> (reactivar). Mientras tanto se puede seguir vendiendo.</div>` : ""}
     ${rechazadas().length ? `<div class="notice bad" style="margin-top:12px">${rechazadas().length} cambio(s) no se pudieron enviar porque el servidor no los aceptó. Siguen guardados aquí. Avísale al administrador.</div>` : ""}
     <div class="small muted" style="margin-top:12px">Este equipo: <b>${esc(DEV.nombre || DEV.id)}</b></div>`;
 }, {live: true});

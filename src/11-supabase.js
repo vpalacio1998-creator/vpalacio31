@@ -3,7 +3,10 @@
    Tiempo real: Supabase Realtime (postgres_changes). La anon key es pública por diseño: la seguridad real está en RLS y en oli_apply.
    Nunca hay claves secretas en el frontend. Config en window.OLI_CONFIG (generada en el build desde variables de entorno). */
 const APP_VERSION = window.OLI_BUILD || "dev";
-const SB = {client: null, org: null, store: null, role: null, email: "", chan: null, rt: "", rtWasDown: false, authError: false, subs: false};
+const SB = {client: null, org: null, store: null, role: null, email: "", chan: null, rt: "", rtWasDown: false, authError: false, subs: false, sinVerificar: false};
+/* ¿el error es de red (sin Internet, servidor caído o en pausa, WiFi sin salida)? No es lo mismo que una clave mala o una sesión revocada. */
+const errRed = e => !!e && ((window.supabase && typeof window.supabase.isAuthRetryableFetchError === "function" && window.supabase.isAuthRetryableFetchError(e)) ||
+  e.name === "AuthRetryableFetchError" || e.code === "timeout" || e.status === 0 || /failed to fetch|networkerror|network request failed|load failed/i.test(String(e.message || "")));
 const SB_ADMIN_COLS = ADMIN_COLS.concat(["audit"]);
 
 async function bootSupabase(ident) {
@@ -11,10 +14,28 @@ async function bootSupabase(ident) {
   if (!window.supabase || !window.supabase.createClient) { DS.mode = "local"; DS.error = "No se pudo cargar la conexión con el servidor."; changed(); return; }
   SB.client = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey, {auth: {persistSession: true, autoRefreshToken: true, detectSessionInUrl: false}, realtime: {params: {eventsPerSecond: 20}}});
   DS.mode = "db"; DS.backend = "supabase"; REMOTE.kind = "supabase"; REMOTE.desc = "Supabase"; REMOTE.apply = sbApply;
-  let session = null; try { const r = await SB.client.auth.getSession(); session = r.data && r.data.session; } catch (e) {}
-  if (!session && ident && ident.sb && typeof navigator !== "undefined" && navigator.onLine === false) { usarIdent(ident); sbIniciar(); return; }       // sin Internet: se usa la sesión guardada
+  SB.client.auth.onAuthStateChange(sbCambioSesion);
+  let session = null, err = null; try { const r = await withTimeout(SB.client.auth.getSession(), 5000); session = r.data && r.data.session; err = r.error; } catch (e) { err = e; }
+  /* La sesión vencida se renueva con el servidor. Si el servidor no responde (sin Internet, caído, en pausa o WiFi sin salida),
+     el equipo que ya había ingresado abre con lo guardado y se reconecta solo cuando el servidor vuelva.
+     Una sesión cerrada o revocada (error que no es de red) sí pide ingresar de nuevo. */
+  const sinServidor = (typeof navigator !== "undefined" && navigator.onLine === false) || errRed(err);
+  if (!session && ident && ident.sb && sinServidor) {
+    usarIdent(ident); SB.sinVerificar = true; sbIniciar();
+    SB.client.auth.getSession().then(r => { const s = r && r.data && r.data.session; if (s) sbCambioSesion("TOKEN_REFRESHED", s); }).catch(() => {});   // por si la sesión se renovó justo después de los 5 segundos
+    return;
+  }
   if (!session) { DS.needsLogin = true; changed(); return; }
   await sbCompletarSesion(session);
+}
+/* cuando el servidor vuelve y la sesión se renueva, el equipo que abrió sin verificar se conecta y recarga; si la sesión fue revocada, pide ingresar */
+function sbCambioSesion(ev, session) {
+  if (!SB.sinVerificar) return;
+  if ((ev === "TOKEN_REFRESHED" || ev === "SIGNED_IN") && session) {
+    SB.sinVerificar = false; setTimeout(async () => { if (SB.chan) { try { SB.client.removeChannel(SB.chan); } catch (e) {} SB.chan = null; } await sbCompletarSesion(session); sbCargarTodo(); }, 0);
+  } else if (ev === "SIGNED_OUT") {
+    SB.sinVerificar = false; setTimeout(() => { DS.needsLogin = true; DS.loginMsg = "Tu sesión venció. Ingresa de nuevo: lo que quedó guardado en este equipo se envía al ingresar."; changed(); }, 0);
+  }
 }
 async function sbCompletarSesion(session) {
   let me = null, fallo = false; try { const r = await withTimeout(SB.client.rpc("oli_me"), 9000); me = r.data; fallo = !!r.error; } catch (e) { fallo = true; }
@@ -23,7 +44,7 @@ async function sbCompletarSesion(session) {
   else if (!me) { DS.needsLogin = false; DS.needsOrg = true; DS.uid = session.user.id; SB.email = session.user.email || ""; changed(); return; }
   else { SB.org = me.org_id; SB.store = me.store_id; SB.role = me.role; DS.uid = session.user.id; DS.isAdmin = !!me.is_admin; DS.nombre = me.name || (session.user.email || "").split("@")[0]; SB.email = session.user.email || "";
     await IDB.kvSet("ident", {uid: DS.uid, isAdmin: DS.isAdmin, org: SB.org, store: SB.store, role: SB.role, nombre: DS.nombre, sb: true}); }
-  DS.needsLogin = false; DS.needsOrg = false; await purgarNoPermitido();
+  DS.needsLogin = false; DS.needsOrg = false; DS.loginMsg = ""; await purgarNoPermitido();
   if (DS.isAdmin && S.tab === "vender" && !leerHash()) S.tab = "hoy";                                       // el administrador empieza en Inicio (al arrancar aún no se sabía quién entraba)
   sbIniciar();
 }
@@ -79,7 +100,8 @@ async function sbApply(op) {
   return x;
 }
 async function sbLogin(email, pass) {
-  const r = await SB.client.auth.signInWithPassword({email: email.trim(), password: pass});
+  let r; try { r = await withTimeout(SB.client.auth.signInWithPassword({email: email.trim(), password: pass}), 20000); } catch (e) { r = {error: e, data: {}}; }
+  if (r.error && errRed(r.error)) throw new Error("No hay conexión con el servidor de OLI. Revisa el Internet; si hay Internet, el servidor no está respondiendo: avísale al administrador.");
   if (r.error || !r.data.session) { const e = new Error("No pudimos ingresar. Revisa tu correo y contraseña."); throw e; }
   await sbCompletarSesion(r.data.session);
 }
