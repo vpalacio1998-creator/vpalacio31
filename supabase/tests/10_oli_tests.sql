@@ -210,6 +210,13 @@ begin
   reset role; set role authenticated; perform t_as(e1);
   r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','cn9','col','cajashelado','id','2026-10-03_d1','t',42300,'data','{"fecha":"2026-10-03","dev":"d1","items":[{"id":"c10","t":42300,"sabor":"h-choco","motivo":"acabo","uid":"x"},{"id":"z3","t":42400,"anula":"c10","uid":"x"}]}'::jsonb)), 'd1', '1.0');
   perform t_assert(r->0->>'status' = 'applied' and (select qty from inventory_current where product_id = 'h-choco') = 5, 'reenviar el documento no revive el cambio anulado; el empleado anula el suyo');
+  -- T24: una anulación del administrador hecha en la tablet de la empleada no bloquea los cambios que ella marque después
+  reset role; set role authenticated; perform t_as(a);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','cn10','col','cajashelado','id','2026-10-04_d1','t',50000,'data','{"fecha":"2026-10-04","dev":"d1","items":[{"id":"za","t":50000,"anula":"c9","uid":"a"}]}'::jsonb)), 'd1', '1.0');
+  perform t_assert(r->0->>'status' = 'applied', 'el administrador anula desde la tablet de la empleada');
+  reset role; set role authenticated; perform t_as(e1);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','cn11','col','cajashelado','id','2026-10-04_d1','t',50100,'data','{"fecha":"2026-10-04","dev":"d1","items":[{"id":"za","t":50000,"anula":"c9","uid":"a"},{"id":"c11","t":50100,"sabor":"h-choco","motivo":"acabo","uid":"x"}]}'::jsonb)), 'd1', '1.0');
+  perform t_assert(r->0->>'status' = 'applied', 'después, la empleada marca su cambio de caja en esa misma tablet sin que se rechace');
   -- T16: coherencia de totales
   reset role;
   perform t_assert((select sum(total) from sales) = (select sum(amount) from payments), 'total de ventas = total de pagos');

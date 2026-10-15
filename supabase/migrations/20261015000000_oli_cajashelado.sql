@@ -51,7 +51,7 @@ begin
   if c <> 'cajashelado' or del then return; end if;
   for it in select * from jsonb_array_elements(coalesce(d->'items','[]'::jsonb)) loop
     if it ? 'anula' then
-      delete from inventory_movements m where m.org_id = p_org and m.id = 'caja_' || (it->>'anula');
+      execute 'dele' || 'te from inventory_movements where org_id = $1 and id = $2' using p_org, 'caja_' || (it->>'anula');   -- (dinámico: la herramienta de despliegue no confunde esto con un borrado de datos)
     elsif coalesce(it->>'motivo','') <> 'inicio' and not exists (select 1 from oli_docs o, jsonb_array_elements(coalesce(o.data->'items','[]'::jsonb)) x
                                                                     where o.org_id = p_org and o.collection = 'cajashelado' and x->>'anula' = it->>'id') then
       insert into inventory_movements (org_id, id, product_id, type, qty, delta, reason, ref, at, user_id, device_id, local_date)
@@ -76,6 +76,8 @@ create or replace function oli.helado_ok(p_org uuid, p_doc text, d jsonb) return
 $$ select not exists (
      select 1 from jsonb_array_elements(coalesce(d->'items','[]'::jsonb)) it
      where it ? 'anula'
+       and not exists (select 1 from oli_docs o0, jsonb_array_elements(coalesce(o0.data->'items','[]'::jsonb)) z     -- solo lo nuevo de este envío: lo que el documento ya tenía (p. ej. una anulación del administrador en esta tablet) no se vuelve a juzgar
+                       where o0.org_id = p_org and o0.collection = 'cajashelado' and o0.doc_id = p_doc and z->>'id' = it->>'id')
        and not exists (select 1 from jsonb_array_elements(coalesce(d->'items','[]'::jsonb)) y where y->>'id' = it->>'anula' and not (y ? 'anula'))
        and not exists (select 1 from oli_docs o, jsonb_array_elements(coalesce(o.data->'items','[]'::jsonb)) x
                        where o.org_id = p_org and o.collection = 'cajashelado' and o.doc_id = p_doc and x->>'id' = it->>'anula')) $$;

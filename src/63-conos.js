@@ -28,8 +28,9 @@ function rendimientoCajas() {
       for (let i = 0; i < es.length; i++) {
         const desde = es[i].t, fin = es[i + 1] || null, hasta = fin ? fin.t : null, bolas = sum(ls.filter(x => x.t >= desde && (hasta == null || x.t < hasta)), x => x.q);
         const parcial = es[i].motivo === "inicio";                                   // se empezó a contar con la caja ya empezada: no se sabe cuánto traía
-        const estado = fin && fin.motivo === "danada" ? "danada" : bolas > c.max ? "muchas" : !fin ? "abierta" : parcial ? "parcial" : bolas < c.min ? "pocas" : "ok";
-        cajas.push({sabor: s, desde, hasta, bolas, estado, parcial, abierta: !fin, apertura: es[i], cierre: fin, bc: es[i].bc || c.bolasCaja});
+        const bc = es[i].bc || c.bolasCaja, mn = bc - (c.bolasCaja - c.min), mx = bc + (c.max - c.bolasCaja);   // cada caja con las bolas esperadas cuando se abrió (si se cambia el número, las viejas no se re-juzgan)
+        const estado = fin && fin.motivo === "danada" ? "danada" : bolas > mx ? "muchas" : !fin ? "abierta" : parcial ? "parcial" : bolas < mn ? "pocas" : "ok";
+        cajas.push({sabor: s, desde, hasta, bolas, estado, parcial, abierta: !fin, apertura: es[i], cierre: fin, bc, min: mn, max: mx});
       }
       out[s] = cajas;
     }
@@ -42,13 +43,13 @@ const pillCaja = k => `<span class="pill ${ESTADO_CAJA[k.estado][0]}">${ESTADO_C
 /* conos mal configurados: sin barquillo, cucurucho o vaso válidos no se descuenta lo que gastan */
 function conosIncompletos() { return prods().filter(p => p.cono && p.activo !== false).map(p => ({p, falta: ["barquillo", "cucurucho", "vaso"].filter(k => !p.cono[k] || !prod(p.cono[k]))})).filter(x => x.falta.length); }
 function alertasHelado() {
-  const c = confConos(), out = [], desde = Date.now() - 14 * 864e5, rango = `lo esperado es ${c.bolasCaja}; aceptable ${c.min} a ${c.max}`;
+  const out = [], desde = Date.now() - 14 * 864e5, rangoDe = k => `lo esperado es ${k.bc}; aceptable ${k.min} a ${k.max}`;
   const nota = " También pasa si al vender se marca un sabor distinto al que se sirvió.";
   for (const x of conosIncompletos()) out.push({sev: "warn", t: `Al producto ${x.p.nombre} le falta definir: ${x.falta.join(", ")}.`, d: "Sin eso no se descuenta del inventario lo que gasta cada cono. Edítalo en Productos."});
   for (const k of Object.values(rendimientoCajas()).flat()) {
     const n = nombreSabor(k.sabor);
-    if (k.estado === "pocas" && k.hasta >= desde) out.push({sev: "bad", sabor: k.sabor, t: `La caja de ${n} dio ${k.bolas} bolas (${rango}).`, d: "Se están sirviendo bolas más grandes o se perdió producto: es plata que se pierde." + nota});
-    else if (k.estado === "muchas" && (k.abierta || k.hasta >= desde)) out.push({sev: "warn", sabor: k.sabor, t: k.abierta ? `La caja abierta de ${n} ya va en ${k.bolas} bolas (máximo aceptable ${c.max}).` : `La caja de ${n} dio ${k.bolas} bolas (${rango}).`, d: "Se están sirviendo bolas más pequeñas de lo que se le ofrece al cliente." + nota});
+    if (k.estado === "pocas" && k.hasta >= desde) out.push({sev: "bad", sabor: k.sabor, t: `La caja de ${n} dio ${k.bolas} bolas (${rangoDe(k)}).`, d: "Se están sirviendo bolas más grandes o se perdió producto: es plata que se pierde." + nota});
+    else if (k.estado === "muchas" && (k.abierta || k.hasta >= desde)) out.push({sev: "warn", sabor: k.sabor, t: k.abierta ? `La caja abierta de ${n} ya va en ${k.bolas} bolas (máximo aceptable ${k.max}).` : `La caja de ${n} dio ${k.bolas} bolas (${rangoDe(k)}).`, d: "Se están sirviendo bolas más pequeñas de lo que se le ofrece al cliente." + nota});
   }
   return out;
 }
@@ -142,7 +143,7 @@ ACT.anularCambio = async (el, d) => {
   const e = itemsHelado().find(x => x.id === d.id && x.sabor); if (!e) return;
   if (!puedeAnularCambio(e)) { toast("Pasaron más de " + MIN_ANULAR_CAJA + " minutos o no es de este equipo: pídeselo al administrador.", true); return; }
   if (!(await confirmar({titulo: "¿Anular el cambio de " + nombreSabor(e.sabor) + " de las " + hora(e.t) + "?", texto: "Úsalo si se marcó por error o dos veces. La caja vuelve al inventario y las bolas se cuentan como si ese cambio no hubiera pasado.", si: "Sí, anular", no: "No"}))) return;
-  await guardar(() => anularCambioCaja(e), "Cambio anulado"); if (S.cambio) redrawSheet(true);
+  await guardar(() => anularCambioCaja(e), "Cambio anulado"); redrawSheet(true);
 };
 async function registrarCambioCaja(sabor, motivo, obs) {
   const p = prod(sabor); if (!p || !p.sabor) throw new Error("Elige el sabor.");
@@ -168,12 +169,12 @@ function cardHelados() {
     ${ss.map(s => { const cs = r[s.id] || [], ab = cs.find(k => k.abierta), st = stockDe(s.id), ult = cs.filter(k => !k.abierta && !k.parcial).slice(-1)[0];
       return `<div class="row" style="padding:9px 0;align-items:flex-start"><div class="l" style="flex:1"><b>${esc(nombreSabor(s.id))}</b>
         <div class="small muted">${st == null ? "Cajas cerradas: sin contar" : "Cajas cerradas: " + fmtN(Math.max(0, st), 0)} · ${ab ? "abierta desde " + diaCorto(ymd(new Date(ab.desde))) + " " + hora(ab.desde) + (adm ? " · lleva " + ab.bolas + (ab.bolas === 1 ? " bola" : " bolas") : "") : "aún no se cuenta"}</div>
-        ${adm && (ult || (ab && ab.estado === "muchas")) ? `<div class="small" style="margin-top:3px">${ab && ab.estado === "muchas" ? pillCaja(ab) + " la abierta ya pasó de " + c.max : pillCaja(ult) + " última caja: " + ult.bolas + " bolas"}</div>` : ""}</div></div>`; }).join("")}
+        ${adm && (ult || (ab && ab.estado === "muchas")) ? `<div class="small" style="margin-top:3px">${ab && ab.estado === "muchas" ? pillCaja(ab) + " la abierta ya pasó de " + ab.max : pillCaja(ult) + " última caja: " + ult.bolas + " bolas"}</div>` : ""}</div></div>`; }).join("")}
     ${adm ? `<p class="xs muted" style="margin:8px 0 0">Esperado ${c.bolasCaja} bolas por caja · aceptable ${c.min} a ${c.max} (se cambia en Ajustes).</p><button class="btn ghost sm" style="margin-top:8px" data-act="verRendimiento">Ver todas las cajas</button>` : ""}</div>`;
 }
 ACT.verRendimiento = () => abrir(() => {
   const ks = cajasCerradasHelado().slice(0, 60), c = confConos();
   return head("Rendimiento de cajas de helado") + `<p class="muted" style="margin-top:0">Esperado ${c.bolasCaja} bolas por caja; aceptable de ${c.min} a ${c.max}. Una caja dañada no cuenta para el rendimiento: va a pérdidas.</p>
-    ${ks.length ? `<div class="card flat">${ks.map(k => { pedirNombres([k.cierre.uid]); return `<div class="row" style="align-items:flex-start;padding:9px 0"><div class="l" style="flex:1"><b>${esc(nombreSabor(k.sabor))} · ${k.bolas} bolas</b><div class="small muted">${diaCorto(ymd(new Date(k.desde)))} ${hora(k.desde)} → ${diaCorto(ymd(new Date(k.hasta)))} ${hora(k.hasta)} · cambió ${esc(nombreDe(k.cierre.uid) || "—")}${k.cierre.obs ? " · " + esc(k.cierre.obs) : ""}</div></div>${pillCaja(k)}</div>`; }).join("")}</div>` : '<p class="muted">Todavía no se ha terminado ninguna caja. Cuando se marque el primer cambio, aparecerá aquí cuántas bolas dio.</p>'}
+    ${ks.length ? `<div class="card flat">${ks.map(k => { pedirNombres([k.cierre.uid]); return `<div class="row" style="align-items:flex-start;padding:9px 0"><div class="l" style="flex:1"><b>${esc(nombreSabor(k.sabor))} · ${k.bolas} bolas</b><div class="small muted">${diaCorto(ymd(new Date(k.desde)))} ${hora(k.desde)} → ${diaCorto(ymd(new Date(k.hasta)))} ${hora(k.hasta)} · cambió ${esc(nombreDe(k.cierre.uid) || "—")}${k.cierre.obs ? " · " + esc(k.cierre.obs) : ""}</div></div><div style="text-align:right">${pillCaja(k)}${esAdmin() ? `<div><button class="btn ghost sm" style="margin-top:4px" data-act="anularCambio" data-id="${esc(k.cierre.id)}" aria-label="Anular el cambio de caja de ${esc(nombreSabor(k.sabor))} de las ${hora(k.hasta)}">Anular cambio</button></div>` : ""}</div></div>`; }).join("")}</div>` : '<p class="muted">Todavía no se ha terminado ninguna caja. Cuando se marque el primer cambio, aparecerá aquí cuántas bolas dio.</p>'}
     <button class="btn pri wide" style="margin-top:12px" data-act="cerrar">Entendido</button>`;
 });
