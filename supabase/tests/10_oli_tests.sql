@@ -242,6 +242,12 @@ begin
   reset role; set role authenticated; perform t_as(e1);
   r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','cf8','col','cajashelado','id','2026-10-05_d1','t',60700,'data','{"fecha":"2026-10-05","dev":"d1","items":[{"id":"c20","t":60000,"sabor":"h-choco","motivo":"acabo","uid":"x"},{"id":"z22","t":60400,"anula":"c20","uid":"x"},{"id":"c23","t":60500,"sabor":"h-choco","motivo":"acabo","uid":"x"},{"id":"z23","t":60600,"anula":"c23","uid":"a"},{"id":"c24","t":60700,"sabor":"h-choco","motivo":"acabo","uid":"x"}]}'::jsonb)), 'd1', '1.0');
   perform t_assert(r->0->>'status' = 'applied' and (select qty from inventory_current where product_id = 'h-choco') = v - 1, 'la tablet reenvía su documento con la anulación del administrador y su cambio nuevo entra');
+  -- T27: visita diaria — la clave pública (anon) puede llamar oli_ping y solo recibe la hora (no datos)
+  reset role; set role anon;
+  perform t_assert(oli_ping() is not null, 'anon puede llamar oli_ping (visita diaria)');
+  perform t_assert(not has_table_privilege('anon', 'public.oli_docs', 'select'), 'anon sigue sin poder leer oli_docs');
+  reset role;
+  perform t_assert(not exists (select 1 from information_schema.routines where routine_name = 'oli_ping' and data_type <> 'timestamp with time zone'), 'oli_ping solo devuelve una hora');
   -- T26: borrar un producto guardado sin equipo (device_id vacío) sí lo borra (antes respondía "applied" y no hacía nada)
   reset role; set role authenticated; perform t_as(a);
   r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','bz1','col','productos','id','p-borrable','t',70000,'data','{"nombre":"Borrable","precio":1000}'::jsonb)), null, 'asistente');
