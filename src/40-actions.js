@@ -102,6 +102,7 @@ async function reabrirCaja(c) {
 }
 async function toggleChecklist(grupo, k) {
   const id = cajaId(S.today), cur = col("checklists")[id] || {fecha: S.today, dev: DEV.id, apertura: {}, cierre: {}}, g = Object.assign({}, cur[grupo]);
+  if (!g[k] && grupo === "tarde" && !yaEsHoraDeLuz()) throw new Error("Esto se marca desde las 5:30 p. m.");
   if (g[k]) delete g[k]; else g[k] = Date.now(); await put("checklists", id, Object.assign({}, cur, {[grupo]: g}));
 }
 

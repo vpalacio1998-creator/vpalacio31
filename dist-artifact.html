@@ -331,7 +331,7 @@ details.help span{display:block;font-weight:500;font-size:13px;line-height:1.35;
 <div class="sheet hidden" id="sheet"><div class="bg"></div><div class="panel" role="dialog" aria-modal="true" id="panel"></div></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script>window.OLI_BUILD="b87dab97";</script>
+<script>window.OLI_BUILD="3c856a67";</script>
 <script>
 (function(){
 "use strict";
@@ -1147,7 +1147,7 @@ const stockMap = () => memo("stockMap", () => {
   for (const d of Object.values(col("movinv"))) for (const x of (d.items || [])) if (x.delta) (del[x.pid] = del[x.pid] || []).push(x);   // entradas, compras, producción, consumo
   const out = {}, base = id => { const s = stockDocs()[id]; if (!s || s.base == null) return null; let q = s.base; const t0 = s.t || 0; for (const x of (sold[id] || [])) if (x.t > t0) q -= x.q; for (const x of (mer[id] || [])) if (x.t > t0) q -= x.q; for (const x of (del[id] || [])) if (x.t > t0) q += x.q; for (const x of (ab[id] || [])) if (x.t > t0) q -= 1; return Math.round(q * 1000) / 1000; };
   for (const p of prods()) if (p.controla !== false && !p.combo) out[p.id] = base(p.id);
-  for (const p of prods()) if (p.combo) { let m = Infinity; for (const c of p.combo) { const s = out[c.pid]; if (s == null) { m = null; break; } m = Math.min(m, Math.floor(s / c.q)); } out[p.id] = m === Infinity ? null : m; }
+  for (const p of prods()) if (p.combo) { let m = Infinity; for (const c of p.combo) { if (esSabor(c.pid)) continue; const s = out[c.pid]; if (s == null) { m = null; break; } m = Math.min(m, Math.floor(s / c.q)); } out[p.id] = m === Infinity ? null : m; }
   return out;
 });
 window.stockMap = stockMap;
@@ -1858,6 +1858,7 @@ async function reabrirCaja(c) {
 }
 async function toggleChecklist(grupo, k) {
   const id = cajaId(S.today), cur = col("checklists")[id] || {fecha: S.today, dev: DEV.id, apertura: {}, cierre: {}}, g = Object.assign({}, cur[grupo]);
+  if (!g[k] && grupo === "tarde" && !yaEsHoraDeLuz()) throw new Error("Esto se marca desde las 5:30 p. m.");
   if (g[k]) delete g[k]; else g[k] = Date.now(); await put("checklists", id, Object.assign({}, cur, {[grupo]: g}));
 }
 
@@ -2238,7 +2239,8 @@ const CHECK_TARDE = [["luzAfuera", "Prendí la luz de afuera (a las 5:30 p. m.)"
 const CHECK_CI = [["caja", "Caja cerrada"], ["efectivo", "Efectivo contado"], ["inv", "Revisé el inventario"], ["mermas", "Anoté lo que se dañó"], ["novedades", "Anoté las novedades"]];
 function checklistHTML(grupo, items) {
   const cl = checklistDe(S.today)[grupo] || {}, hechos = items.filter(([k]) => cl[k]).length;
-  return `<div class="card"><div class="row" style="padding-top:0"><h3 style="margin:0">${({apertura: "Al abrir", tarde: "En la tarde", cierre: "Al cerrar"})[grupo] || ""}</h3><span class="pill ${hechos === items.length ? "ok" : ""}">${hechos}/${items.length}</span></div>${items.map(([k, t]) => `<label class="check" style="width:100%;padding:6px 0;min-height:48px"><input type="checkbox" data-act-change="check" data-g="${grupo}" data-k="${k}" ${cl[k] ? "checked" : ""}> ${esc(t)}</label>`).join("")}</div>`;
+  return `<div class="card"><div class="row" style="padding-top:0"><h3 style="margin:0">${({apertura: "Al abrir", tarde: "En la tarde", cierre: "Al cerrar"})[grupo] || ""}</h3><span class="pill ${hechos === items.length ? "ok" : ""}">${hechos}/${items.length}</span></div>${items.map(([k, t]) => { const antes = grupo === "tarde" && !cl[k] && !yaEsHoraDeLuz();   // la luz de afuera se marca desde las 5:30 p. m. (si no, la alerta no saldría)
+    return `<label class="check" style="width:100%;padding:6px 0;min-height:48px${antes ? ";opacity:.6" : ""}"><input type="checkbox" data-act-change="check" data-g="${grupo}" data-k="${k}" ${cl[k] ? "checked" : ""} ${antes ? "disabled" : ""}> ${esc(t)}${antes ? ' <span class="xs muted">· se marca desde las 5:30 p. m.</span>' : ""}</label>`; }).join("")}</div>`;
 }
 document.addEventListener("change", e => { const t = e.target; if (t.dataset && t.dataset.actChange === "check") toggleChecklist(t.dataset.g, t.dataset.k).catch(err => toast(errMsg(err), true)); });
 const cajaPendiente = () => cajasAll().filter(x => x.dev === DEV.id && x.fecha < S.today && x.apertura && cajaEstado(x) === "abierta").sort((a, b) => b.fecha.localeCompare(a.fecha))[0] || null;
@@ -2722,21 +2724,22 @@ const primerMesDatos = () => { const fs = ventasOk().map(v => v.fecha).concat(ca
 
 function resumenMes(mes) {
   const a = mes + "-01", fin = lastOfMonth(a), b = fin < S.today ? fin : S.today, en = f => !!f && f >= a && f <= b;
-  const L = liquidez({a, b}), dias = {}, dia = f => dias[f] || (dias[f] = {f, vendido: 0, n: 0, gastos: 0, devol: 0, dif: 0, cajas: 0, abiertas: 0});
+  const L = liquidez({a, b}), dias = {}, dia = f => dias[f] || (dias[f] = {f, vendido: 0, n: 0, gastos: 0, devol: 0, dif: 0, sinAnotar: 0, cajas: 0, abiertas: 0, cerradas: 0});
   const porMedio = {}, porCat = {};
   for (const v of ventasOk()) if (en(v.fecha)) { const d = dia(v.fecha), x = Number(v.total) || 0; d.vendido += x; d.n++; porMedio[v.m || "Otro"] = (porMedio[v.m || "Otro"] || 0) + x; }
   for (const g of gastosEn(a, b)) { const x = Number(g.valor) || 0; dia(g.fecha).gastos += x; porCat[g.cat || "Otros"] = (porCat[g.cat || "Otros"] || 0) + x; }
-  const sinCerrar = [];
+  const sinCerrar = []; let cerradas = 0;
   for (const c of cajasAll()) if (en(c.fecha)) {
     const d = dia(c.fecha);
     if (c.apertura) { d.cajas++; if (cajaEstado(c) === "abierta") { d.abiertas++; if (c.fecha < S.today) sinCerrar.push(c); } }
     for (const mv of (c.movs || [])) if (mv.tipo === "retiro" && empiezaCon(mv.motivo, "Devolución a cliente")) d.devol += Number(mv.monto) || 0;
     const ci = (c.cierres || []).slice(-1)[0];   // misma regla que la liquidez: un faltante por "Gasto sin anotar" se resta cuando se anota el gasto
-    if (ci && c.apertura && cajaEstado(c) === "cerrada") { const x = Number(ci.dif) || 0; if (x && !(x < 0 && empiezaCon(ci.obs, "Gasto sin anotar"))) d.dif += x; }
+    if (ci && c.apertura && cajaEstado(c) === "cerrada") { const x = Number(ci.dif) || 0; d.cerradas++; cerradas++;
+      if (x < 0 && empiezaCon(ci.obs, "Gasto sin anotar")) d.sinAnotar -= x; else if (x) d.dif += x; }
   }
   let acum = 0;
   const filas = Object.values(dias).sort((x, y) => x.f.localeCompare(y.f)).map(d => { const neto = d.vendido - d.gastos - d.devol + d.dif; acum += neto; return Object.assign(d, {neto, acum}); });
-  return {a, b, L, filas, porMedio, porCat, sinCerrar, incompleto: DS.mode === "db" && a < addDays(S.today, -HIST_DIAS)};
+  return {a, b, L, filas, porMedio, porCat, sinCerrar, cerradas, incompleto: DS.mode === "db" && a < addDays(S.today, -HIST_DIAS)};
 }
 
 function cajaMesHTML() {
@@ -2754,7 +2757,7 @@ function cajaMesHTML() {
       <div class="kpi main"><span>Vendido menos gastos</span><b>${plata(L.total)}</b><small>Efectivo ${plata(L.efectivo)} · cuentas ${plata(L.cuentas)}</small></div>
       <div class="kpi"><span>Vendido</span><b>${fmt(L.ventas)}</b><small>${plural(L.nV, "venta", "ventas")}, sin anuladas</small></div>
       <div class="kpi"><span>Gastos</span><b>${fmt(L.gastos)}</b><small>${plural(L.nG, "gasto", "gastos")}, también los pagados desde la caja</small></div>
-      <div class="kpi${L.difs < 0 ? " neg" : ""}"><span>${L.difs < 0 ? "Faltó al cerrar caja" : L.difs > 0 ? "Sobró al cerrar caja" : "Cierres de caja"}</span><b>${plata(L.difs)}</b><small>${L.nDifs ? plural(L.nDifs, "cierre", "cierres") + " con diferencia" : "Todo cuadró"}</small></div>
+      <div class="kpi${L.difs < 0 ? " neg" : ""}"><span>${L.difs < 0 ? "Faltó al cerrar caja" : L.difs > 0 ? "Sobró al cerrar caja" : "Cierres de caja"}</span><b>${plata(L.difs)}</b><small>${L.nDifs ? plural(L.nDifs, "cierre", "cierres") + " con diferencia" : !R.cerradas ? "Ninguna caja cerrada" : L.sinAnotar ? "" : "Todo cuadró"}${L.sinAnotar ? (L.nDifs ? " · " : "") + "faltó " + fmt(L.sinAnotar) + " por gastos sin anotar" : ""}</small></div>
     </div>
     ${R.sinCerrar.length ? `<div class="notice bad" style="margin-bottom:12px"><b>${R.sinCerrar.length === 1 ? "Una caja quedó sin cerrar" : R.sinCerrar.length + " cajas quedaron sin cerrar"}:</b> ${esc(R.sinCerrar.map(c => nombreEq(c) + " (" + diaCorto(c.fecha) + ")").join(", "))}. Ciérrenla en ese equipo para que su efectivo y su diferencia entren en la cuenta.</div>` : ""}
     <div class="two">
@@ -2767,7 +2770,9 @@ function cajaMesHTML() {
       ${L.sinAnotar ? fila("Faltó por «Gasto sin anotar»", "Se resta cuando anoten ese gasto en Dinero", L.sinAnotar) : ""}</div>` : ""}
     <div class="card"><h3>Día por día</h3><p class="small muted" style="margin-top:-4px">Toca un día para ver qué se vendió.</p>
       ${tablaVista([{h: "Día", f: d => `<button class="lnk" data-act="verDiaVentas" data-f="${esc(d.f)}">${esc(diaCorto(d.f))}</button>`}, {h: "Vendido", n: 1, f: d => fmt(d.vendido)}, {h: "Gastos", n: 1, f: d => d.gastos || d.devol ? "− " + fmt(d.gastos + d.devol) : "–"},
-        {h: "Caja", n: 1, f: d => d.dif ? `<span style="color:${d.dif < 0 ? "var(--danger)" : "inherit"}">${d.dif < 0 ? "Faltó " : "Sobró "}${fmt(Math.abs(d.dif))}</span>` : d.abiertas ? '<span class="muted">abierta</span>' : d.cajas ? "cuadró" : "–"},
+        {h: "Caja", n: 1, f: d => [d.dif ? `<span style="color:${d.dif < 0 ? "var(--danger)" : "inherit"}">${d.dif < 0 ? "Faltó " : "Sobró "}${fmt(Math.abs(d.dif))}</span>` : "",
+          d.sinAnotar ? `<span class="muted">Faltó ${fmt(d.sinAnotar)} (gasto sin anotar)</span>` : "", d.abiertas ? '<span class="muted">abierta</span>' : "",
+          !d.dif && !d.sinAnotar && d.cerradas ? "cuadró" : ""].filter(Boolean).join("<br>") || "–"},
         {h: "Acumulado", n: 1, f: d => `<b>${plata(d.acum)}</b>`}], R.filas)}
     </div>
     <p class="xs muted">Acumulado = lo vendido menos los gastos y las devoluciones, más o menos lo que faltó o sobró al cerrar caja (igual que «¿Cuánta plata hay?» en Dinero). No incluye la plata con la que empezaron ni el costo de lo vendido: la utilidad está en Dinero → Mes.</p>`}`;
@@ -2779,32 +2784,39 @@ ACT.verDiaVentas = (el, d) => { if (!d.f) return; S.vdDia = d.f; S.vdMes = d.f.s
 /* >>> 66-luz.js */
 /* ============ 66 · a las 5:30 p. m.: prender la luz de afuera ============
    Con la caja abierta, desde las 5:30 p. m. sale una ventana con sonido y un aviso fijo arriba hasta que alguien toque
-   "Ya la prendí" (si la cierran sin marcar, la ventana vuelve a salir cada 10 minutos). Queda en la lista "En la tarde" de la
-   caja; si se marca en un equipo, la alerta se quita en los demás. La hora es la del equipo. */
+   "Ya la prendí" (si la cierran sin marcar, la ventana vuelve 10 minutos después de cerrarla). Queda en la lista "En la tarde"
+   de la caja, que solo se puede marcar desde las 5:30; si se marca en un equipo, la alerta se quita en los demás.
+   La hora es la del equipo. Una ventana de OLI en pausa (otra ventana tiene el control) no avisa. */
 const HORA_LUZ = {h: 17, m: 30};
-const LUZ = {ultimaVentana: 0, pendiente: false};
-const luzHecha = () => Object.values(col("checklists")).some(c => c && c.fecha === S.today && c.tarde && c.tarde.luzAfuera);
-const yaEsHoraDeLuz = () => { const d = new Date(); return d.getHours() * 60 + d.getMinutes() >= HORA_LUZ.h * 60 + HORA_LUZ.m; };
+const LUZ = {ultimaVentana: 0, pendiente: false, ac: null};
+const desdeLuz = f => parse(f).getTime() + (HORA_LUZ.h * 60 + HORA_LUZ.m) * 60000;           // 5:30 p. m. de ese día
+const luzHecha = () => Object.values(col("checklists")).some(c => c && c.fecha === S.today && c.tarde && Number(c.tarde.luzAfuera) >= desdeLuz(c.fecha));
+const yaEsHoraDeLuz = () => Date.now() >= desdeLuz(S.today);
 function luzPendiente() {
-  if (DS.mode === "loading" || DS.needsLogin || DS.needsOrg) return false;
+  if (DS.bloqueada || DS.mode === "loading" || DS.needsLogin || DS.needsOrg) return false;
   const c = cajaHoy(); return !!c && cajaEstado(c) === "abierta" && yaEsHoraDeLuz() && !luzHecha();
 }
-const avisoLuzHTML = () => luzPendiente() ? `<div class="notice luz" role="alert">${ic("luz", 26)}<span><b>Prende la luz de afuera.</b> Ya son las 5:30 p. m.</span><button class="btn pri sm" data-act="luzPrendida">${ic("ok", 16)} YA LA PRENDÍ</button></div>` : "";
-const ventanaLuz = () => `<div class="luz-v">${ic("luz", 64)}<h2>Son las 5:30 p. m.</h2><p><b>Prende la luz de afuera.</b><br>Es muy importante.</p>
+const avisoLuzHTML = () => luzPendiente() ? `<div class="notice luz" role="alert">${ic("luz", 26)}<span><b>Prende la luz de afuera.</b> Ya pasaron las 5:30 p. m.</span><button class="btn pri sm" data-act="luzPrendida">${ic("ok", 16)} YA LA PRENDÍ</button></div>` : "";
+const ventanaLuz = () => `<div class="luz-v">${ic("luz", 64)}<h2>Hora de prender la luz de afuera</h2><p><b>Ya pasaron las 5:30 p. m.</b><br>Prende la luz de afuera: es muy importante.</p>
   <button class="btn pri xl wide" data-act="luzPrendida">${ic("ok", 22)} YA LA PRENDÍ</button><button class="btn ghost wide" style="margin-top:10px" data-act="cerrar">Ahora no (te recuerdo en 10 minutos)</button></div>`;
 async function marcarLuzAfuera() {
   const id = cajaId(S.today), cur = col("checklists")[id] || {fecha: S.today, dev: DEV.id, apertura: {}, cierre: {}};
-  if ((cur.tarde || {}).luzAfuera) return;
+  if (Number((cur.tarde || {}).luzAfuera) >= desdeLuz(S.today)) return;
   await put("checklists", id, Object.assign({}, cur, {tarde: Object.assign({}, cur.tarde, {luzAfuera: Date.now()})})); audit("LUZ_AFUERA", id, "");
 }
+/* el navegador (sobre todo en iPad) solo deja sonar si antes hubo un toque: el sonido se prepara con cualquier toque en la pantalla */
+function audioLuz() { try { LUZ.ac = LUZ.ac || new (window.AudioContext || window.webkitAudioContext)(); if (LUZ.ac.state !== "running") LUZ.ac.resume().catch(() => {}); } catch (e) {} return LUZ.ac; }
+["click", "touchend"].forEach(ev => document.addEventListener(ev, () => { if (!LUZ.ac || LUZ.ac.state !== "running") audioLuz(); }, {capture: true, passive: true}));
 function sonarAviso() {
-  try { const A = new (window.AudioContext || window.webkitAudioContext)(), o = A.createOscillator(), g = A.createGain(); g.gain.value = 0.2; o.connect(g); g.connect(A.destination);
-    o.frequency.value = 880; o.start(); setTimeout(() => { o.frequency.value = 660; }, 300); setTimeout(() => { o.frequency.value = 880; }, 600); setTimeout(() => { o.stop(); A.close(); }, 900); } catch (e) {}
+  try { const A = audioLuz(); if (A) { const o = A.createOscillator(), g = A.createGain(), t = A.currentTime; g.gain.value = 0.2; o.connect(g); g.connect(A.destination);
+    o.frequency.setValueAtTime(880, t); o.frequency.setValueAtTime(660, t + 0.3); o.frequency.setValueAtTime(880, t + 0.6); o.start(t); o.stop(t + 0.9); } } catch (e) {}
   try { if (navigator.vibrate) navigator.vibrate([300, 150, 300]); } catch (e) {}
 }
 function revisarLuz() {
+  if (DS.bloqueada) return;                                                   // la ventana en pausa no avisa (la otra sí)
+  if (sheetFn === ventanaLuz) LUZ.ultimaVentana = Date.now();                // los 10 minutos cuentan desde que se cierra la ventana
   const p = luzPendiente();
-  if (p !== LUZ.pendiente) { LUZ.pendiente = p; banners(); if (!p && sheetFn === ventanaLuz) cerrar(); }
+  if (p !== LUZ.pendiente) { LUZ.pendiente = p; if (!p && sheetFn === ventanaLuz) cerrar(); changed(); }   // redibuja: aviso de arriba y casilla de "En la tarde"
   if (p && Date.now() - LUZ.ultimaVentana > 10 * 60000 && !operacionEnCurso()) { LUZ.ultimaVentana = Date.now(); abrir(ventanaLuz); sonarAviso(); }   // nunca en medio de una venta
 }
 setInterval(() => { try { revisarLuz(); } catch (e) {} }, 15000);
@@ -2883,9 +2895,9 @@ const fijoDia = () => Math.round(totalFijos() / diasMes());
 // punto de equilibrio: cuánto de los gastos fijos del mes ya cubrió la utilidad bruta (ventas − costo) y cuánto falta
 function equilibrio() {
   // el ritmo se mide desde el primer día con ventas del mes (si el negocio abrió a mitad de mes, no se cuentan días sin operar)
-  const fijos = totalFijos(), mes = finanzas(firstOfMonth(S.today), S.today), hoy = finanzas(S.today, S.today), dm = diasMes(), ini = ventasOk().filter(v => v.fecha >= firstOfMonth(S.today)).map(v => v.fecha).sort()[0] || S.today, dia = diffDays(S.today, ini) + 1 + (parse(ini).getDate() - 1) * 0;
+  const fijos = totalFijos(), mes = finanzas(firstOfMonth(S.today), S.today), hoy = finanzas(S.today, S.today), dm = diasMes(), primera = ventasOk().filter(v => v.fecha >= firstOfMonth(S.today)).map(v => v.fecha).sort()[0] || null, ini = primera || S.today, dia = diffDays(S.today, ini) + 1 + (parse(ini).getDate() - 1) * 0;
   const bruta = mes.bruta - gastosVariables(firstOfMonth(S.today), S.today), falta = Math.max(0, fijos - bruta), uds = mes.uds || 0, gU = uds ? mes.bruta / uds : 0, quedan = Math.max(1, dm - parse(S.today).getDate() + 1);   // días de calendario que quedan, contando hoy
-  return {fijos, bruta, falta, avance: fijos ? clamp(bruta / fijos, 0, 1) : 0, esperado: fijos ? dia / (dm - parse(ini).getDate() + 1) : 0, diasOp: dm - parse(ini).getDate() + 1, hoyBruta: hoy.bruta - gastosVariables(S.today, S.today), cuota: Math.round(fijos / dm), porDia: Math.ceil(falta / quedan), udsDia: gU > 0 ? Math.ceil(falta / quedan / gU) : null, dia, dm, ini};
+  return {fijos, bruta, falta, avance: fijos ? clamp(bruta / fijos, 0, 1) : 0, esperado: fijos ? dia / (dm - parse(ini).getDate() + 1) : 0, diasOp: dm - parse(ini).getDate() + 1, hoyBruta: hoy.bruta - gastosVariables(S.today, S.today), cuota: Math.round(fijos / dm), porDia: Math.ceil(falta / quedan), udsDia: gU > 0 ? Math.ceil(falta / quedan / gU) : null, dia, dm, ini, primera};
 }
 function bEquilibrio() {
   const e = equilibrio();
@@ -2896,11 +2908,11 @@ function bEquilibrio() {
     <div class="bar" style="height:12px;position:relative"><i style="width:${Math.round(e.avance * 100)}%"></i><span title="Donde deberías ir hoy" style="position:absolute;top:-3px;bottom:-3px;left:${Math.round(e.esperado * 100)}%;width:2px;background:var(--ink)"></span></div>
     <div class="small" style="margin-top:6px"><b>${fmtN(e.avance * 100, 1)}%</b> de los gastos fijos cubiertos · ${e.falta > 0 ? "faltan " + fmt(e.falta) : "¡gastos del mes cubiertos! Lo que sigue es ganancia."}</div>
     ${e.bruta < 0 ? `<div class="small" style="margin-top:2px;color:var(--danger)">Este mes lo vendido todavía no cubre el costo de lo vendido y los otros gastos: va en ${fmt(e.bruta)}. Por eso faltan más que los gastos fijos.</div>` : ""}
-    ${e.falta > 0 ? `<div class="small" style="margin-top:2px;color:${adelante ? "var(--marca-d)" : "var(--warn)"}">${adelante ? "Vas al día" : "Vas por debajo del ritmo"}: ${e.ini > firstOfMonth(S.today) ? "el negocio empezó a vender el " + parse(e.ini).getDate() + " y de esos " + e.diasOp + " días del mes van " + e.dia : "van " + e.dia + " de los " + e.diasOp + " días del mes"}, así que a hoy deberías llevar el ${fmtN(e.esperado * 100, 0)}%.</div>
+    ${e.falta > 0 ? `<div class="small" style="margin-top:2px;color:${adelante ? "var(--marca-d)" : "var(--warn)"}">${!e.primera ? "Todavía no hay ventas este mes." : (adelante ? "Vas al día" : "Vas por debajo del ritmo") + ": " + (e.primera > firstOfMonth(S.today) ? "el negocio empezó a vender el " + parse(e.primera).getDate() + " y de esos " + e.diasOp + " días del mes van " + e.dia : "van " + e.dia + " de los " + e.diasOp + " días del mes") + ", así que a hoy deberías llevar el " + fmtN(e.esperado * 100, 0) + "%."}</div>
       <div class="small muted">Para cubrirlos este mes necesitas ~${fmt(e.porDia)} de utilidad bruta por día${e.udsDia ? " (unas " + e.udsDia + " unidades)" : ""}. Hoy llevas ${fmt(e.hoyBruta)}; la cuota normal de gastos fijos es ${fmt(e.cuota)} por día.</div>` : ""}`;
 }
 ACT.verFijos = () => { const e = equilibrio(); abrir(() => head("Gastos fijos del mes") + `<p class="muted" style="margin-top:0">Lo que hay que cubrir cada mes, pase lo que pase.</p>${gastosFijosPlan().map(g => `<div class="row"><span>${esc(g.n)}</span><b>${g.v ? fmt(g.v) : '<span class="pill warn">Falta el valor</span>'}</b></div>`).join("")}<div class="row"><b>Total al mes</b><b>${fmt(e.fijos)}</b></div><div class="row"><span>Por día (${e.dm} días)</span><b>${fmt(e.cuota)}</b></div>
-  <p class="small muted">Punto de equilibrio: la utilidad bruta del mes (ventas − costo de lo vendido − otros gastos) debe llegar a ${fmt(e.fijos)}. Llevas ${fmt(Math.max(0, e.bruta))}.</p><button class="btn ghost wide" data-act="editFijos">Editar gastos fijos</button>`); };
+  <p class="small muted">Punto de equilibrio: la utilidad bruta del mes (ventas − costo de lo vendido − otros gastos) debe llegar a ${fmt(e.fijos)}. Llevas ${e.bruta < 0 ? `<span style="color:var(--danger)">− ${fmt(-e.bruta)}</span>` : fmt(e.bruta)}.</p><button class="btn ghost wide" data-act="editFijos">Editar gastos fijos</button>`); };
 function bHacer() {
   const d = decisionesHoy(), n = hoyTareas(), items = [].concat(d.urgente.map(x => ({s: "bad", x})), d.importante.map(x => ({s: "warn", x})), d.oportunidad.map(x => ({s: "ok", x}))).slice(0, 5);
   return `<div class="full card"><div class="row" style="padding-top:0"><h3 style="margin:0">¿Qué deberías hacer?</h3><div class="small" style="display:flex;gap:10px"><span>${ic("alerta", 14)}<b style="color:var(--danger)"> ${n.urg}</b> urgentes</span><span><b style="color:var(--warn)">${n.imp}</b> importantes</span><span><b style="color:var(--marca)">${n.opo}</b> oportunidades</span></div></div>
@@ -3336,7 +3348,7 @@ VIEWS.equipo = () => {
     ${aud.length ? aud.map(a => { pedirNombres([a.u]); return `<div class="row" style="align-items:flex-start;padding:8px 0"><div class="l"><b>${esc(audTxt(a.a))}</b><div class="small muted">${esc(a.d || "")}</div></div><div style="text-align:right" class="xs muted">${diaCorto(ymd(new Date(a.t)))} ${hora(a.t)}<br>${esc(nombreDe(a.u) || "")}</div></div>`; }).join("") : '<p class="muted">No hay registros.</p>'}</div>
   ${rechazadas().length ? `<div class="card"><h3>Operaciones que el servidor rechazó</h3>${rechazadas().map(o => `<div class="row"><div class="l"><b>${esc(o.path)}</b><div class="small muted">${esc(o.error || "")}</div></div></div>`).join("")}<p class="small muted">Siguen guardadas en este equipo. Si necesitas recuperarlas, no borres los datos del navegador.</p></div>` : ""}`;
 };
-const AUD_TXT = {APERTURA_CAJA: "Caja abierta", CIERRE_CAJA: "Caja cerrada", REABRIR_CAJA: "Caja reabierta", CAJA_RETIRO: "Salió dinero de caja", CAJA_INGRESO: "Entró dinero a caja", CAJA_GASTO: "Pago desde caja", ANULACION: "Venta anulada", DESCUENTO: "Descuento aplicado", MERMA: "Pérdida anotada", AJUSTE_INVENTARIO: "Inventario ajustado", CAMBIO_PRECIO: "Cambio de precio", CAMBIO_COSTO: "Cambio de costo", PRODUCTO_CREADO: "Producto creado", PRODUCTO_EDITADO: "Producto editado", PRODUCTO_DESACTIVADO: "Producto desactivado", PRODUCTO_REACTIVADO: "Producto reactivado", GASTO: "Gasto registrado", GASTO_BORRADO: "Gasto borrado", COMPRA_PEDIDO: "Compra creada", COMPRA_RECIBIDA: "Compra recibida", PRODUCCION: "Producción registrada", RECETA: "Receta guardada", CONFIG: "Configuración", TERCERO: "Tercero guardado", CONFLICTO_INVENTARIO: "Venta que necesita revisión", SYNC_RECHAZADA: "Envío rechazado"};
+const AUD_TXT = {LUZ_AFUERA: "Prendió la luz de afuera", PLATA_CONTADA: "Anotó la plata que tienen", PLATA_CONTADA_QUITADA: "Quitó la plata anotada", APERTURA_CAJA: "Caja abierta", CIERRE_CAJA: "Caja cerrada", REABRIR_CAJA: "Caja reabierta", CAJA_RETIRO: "Salió dinero de caja", CAJA_INGRESO: "Entró dinero a caja", CAJA_GASTO: "Pago desde caja", ANULACION: "Venta anulada", DESCUENTO: "Descuento aplicado", MERMA: "Pérdida anotada", AJUSTE_INVENTARIO: "Inventario ajustado", CAMBIO_PRECIO: "Cambio de precio", CAMBIO_COSTO: "Cambio de costo", PRODUCTO_CREADO: "Producto creado", PRODUCTO_EDITADO: "Producto editado", PRODUCTO_DESACTIVADO: "Producto desactivado", PRODUCTO_REACTIVADO: "Producto reactivado", GASTO: "Gasto registrado", GASTO_BORRADO: "Gasto borrado", COMPRA_PEDIDO: "Compra creada", COMPRA_RECIBIDA: "Compra recibida", PRODUCCION: "Producción registrada", RECETA: "Receta guardada", CONFIG: "Configuración", TERCERO: "Tercero guardado", CONFLICTO_INVENTARIO: "Venta que necesita revisión", SYNC_RECHAZADA: "Envío rechazado"};
 const audTxt = a => AUD_TXT[a] || a;
 ACT.audFiltro = (el, d) => { S.audFiltro = d.v; draw(); };
 ACT.renombrarDev = () => abrir(() => head("Nombre de este equipo") + `<p class="muted" style="margin-top:0">Así lo verá el administrador.</p>${sel("dv-n", ["Caja 1", "Caja 2", "Caja 3", "Celular del administrador"], DEV.nombre)}<label class="f" for="dv-o">Otro nombre</label><input class="in plain" id="dv-o" value=""><button class="btn pri xl wide" style="margin-top:14px" data-act="doRenombrar">GUARDAR</button>`);

@@ -64,7 +64,7 @@ const stockMap = () => memo("stockMap", () => {
   for (const d of Object.values(col("movinv"))) for (const x of (d.items || [])) if (x.delta) (del[x.pid] = del[x.pid] || []).push(x);   // entradas, compras, producción, consumo
   const out = {}, base = id => { const s = stockDocs()[id]; if (!s || s.base == null) return null; let q = s.base; const t0 = s.t || 0; for (const x of (sold[id] || [])) if (x.t > t0) q -= x.q; for (const x of (mer[id] || [])) if (x.t > t0) q -= x.q; for (const x of (del[id] || [])) if (x.t > t0) q += x.q; for (const x of (ab[id] || [])) if (x.t > t0) q -= 1; return Math.round(q * 1000) / 1000; };
   for (const p of prods()) if (p.controla !== false && !p.combo) out[p.id] = base(p.id);
-  for (const p of prods()) if (p.combo) { let m = Infinity; for (const c of p.combo) { const s = out[c.pid]; if (s == null) { m = null; break; } m = Math.min(m, Math.floor(s / c.q)); } out[p.id] = m === Infinity ? null : m; }
+  for (const p of prods()) if (p.combo) { let m = Infinity; for (const c of p.combo) { if (esSabor(c.pid)) continue; const s = out[c.pid]; if (s == null) { m = null; break; } m = Math.min(m, Math.floor(s / c.q)); } out[p.id] = m === Infinity ? null : m; }
   return out;
 });
 window.stockMap = stockMap;

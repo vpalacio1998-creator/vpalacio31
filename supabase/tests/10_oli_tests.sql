@@ -259,6 +259,22 @@ begin
   set role authenticated; perform t_as(a);
   r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','pg3','col','meta','id','purgas','t',80200,'data','{"cortes":{}}'::jsonb)), 'dA', '1.0');
   reset role;
+  -- T30: un sabor de helado dentro de un combo (los conos de antes) son bolas: el servidor no resta cajas por venta; lo demás sí
+  reset role; set role authenticated; perform t_as(a);
+  r := oli_apply(jsonb_build_array(
+    jsonb_build_object('op_id','sb1','col','productos','id','h-vaini','t',95000,'data','{"nombre":"Helado Vainilla","tipo":"insumo","unidad":"cajas","sabor":true,"precio":0}'::jsonb),
+    jsonb_build_object('op_id','sb2','col','stock','id','h-vaini','t',95000,'data','{"base":3,"t":95000}'::jsonb),
+    jsonb_build_object('op_id','sb3','col','productos','id','i-cucu','t',95000,'data','{"nombre":"Cucurucho","tipo":"insumo","precio":0}'::jsonb),
+    jsonb_build_object('op_id','sb4','col','stock','id','i-cucu','t',95000,'data','{"base":50,"t":95000}'::jsonb),
+    jsonb_build_object('op_id','sb5','col','productos','id','p-conov','t',95000,'data','{"nombre":"Cono 1 bola Vainilla","precio":5000,"combo":[{"pid":"h-vaini","q":1},{"pid":"i-cucu","q":1}]}'::jsonb)), 'dA', '1.0');
+  perform t_assert((select count(*) from jsonb_array_elements(r) el where el->>'status' = 'applied') = 5, 'sabor, cucurucho y cono de antes guardados');
+  reset role; set role authenticated; perform t_as(e1);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','sb6','col','ventas','id','2026-10-04_d1','t',95100,'data', jsonb_build_object('fecha','2026-10-04','dev','d1','ventas', jsonb_build_array(
+         jsonb_build_object('id','d1-conov-1','n',70,'num','Caja 1 #70','t',95100,'fecha','2026-10-04','uid',e1::text,'dev','d1','m','Efectivo','total',10000,'sub',10000,'desc',0,'estado','confirmada','items','[{"pid":"p-conov","n":"Cono 1 bola Vainilla","q":2,"p":5000,"d":0}]'::jsonb),
+         jsonb_build_object('id','d1-conov-2','n',71,'num','Caja 1 #71','t',95200,'fecha','2026-10-04','uid',e1::text,'dev','d1','m','Efectivo','total',5000,'sub',5000,'desc',0,'estado','confirmada','items','[{"pid":"p-conov","n":"Cono 1 bola Vainilla","q":1,"p":5000,"d":0,"gasta":[{"pid":"h-vaini","q":1},{"pid":"i-cucu","q":1}]}]'::jsonb))))), 'd1', '1.0');
+  reset role;
+  perform t_assert(r->0->>'status' = 'applied' and (select qty from inventory_current where product_id = 'h-vaini') = 3, 'vender conos de antes no resta cajas de helado en el servidor (son bolas)');
+  perform t_assert((select qty from inventory_current where product_id = 'i-cucu') = 47, 'pero sí resta los cucuruchos de esos conos (3)');
   -- T29: la plata contada (config/saldos) la guarda solo el administrador y el empleado no la puede leer ni cambiar
   reset role; set role authenticated; perform t_as(a);
   r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','sl1','col','config','id','saldos','t',90000,'data','{"efectivo":500000,"cuentas":1200000,"desde":"2026-10-17","t":90000,"uid":"x"}'::jsonb)), 'dA', '1.0');
