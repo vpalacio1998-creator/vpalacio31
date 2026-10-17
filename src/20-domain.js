@@ -15,7 +15,7 @@ const terminados = () => prods().filter(p => p.tipo !== "insumo");
 const insumos = () => prods().filter(p => p.tipo === "insumo");
 const costos = () => col("costos");
 function costoEn(id, t) { const c = costos()[id]; if (!c) return null; const h = c.hist || []; if (!h.length) return c.costo == null ? null : c.costo; let r = h[0].c; for (const e of h) if (e.t <= t) r = e.c; return r; }
-function costoUnit(pid, t = Date.now()) { const p = prod(pid); if (!p) return null; if (p.combo) { let s = 0; for (const c of p.combo) { const x = costoUnit(c.pid, t); if (x == null) return null; s += x * c.q; } return s; } return costoEn(pid, t); }
+function costoUnit(pid, t = Date.now()) { const p = prod(pid); if (!p) return null; if (p.combo) { let s = 0; for (const c of p.combo) { const x = costoUnit(c.pid, t); if (x == null) return null; s += x * (esSabor(c.pid) ? c.q / bolasCaja() : c.q); } return s; } return costoEn(pid, t); }   // un sabor de helado en un combo va en bolas (la caja trae bolasCaja)
 const costoActual = pid => costoUnit(pid, Date.now());
 
 /* ---------- ventas ---------- */
@@ -30,18 +30,24 @@ const ventasOk = () => memo("ventasOk", () => ventasAll().filter(v => !v.anulada
 const ventasEn = (a, b) => ventasOk().filter(v => v.fecha >= a && v.fecha <= b);
 /* qué inventario gasta una línea (de una venta o del pedido): los combos se abren en sus componentes; un cono gasta su barquillo y su cucurucho o vaso.
    Las bolas de helado no se descuentan una a una: se miden por caja de cada sabor (ver 63-conos). */
-function consumoLinea(it) {
+function consumoBruto(it) {
   if (Array.isArray(it.gasta)) return it.gasta;                       // lo que se guardó al vender (no cambia si después se edita el producto)
   const p = prod(it.pid);
   if (p && p.combo) return p.combo.map(c => ({pid: c.pid, q: c.q * it.q}));
   if (p && p.cono) return gastoCono(p, it.pres, it.q);
   return [{pid: it.pid, q: it.q}];
 }
+/* un sabor de helado se lleva por cajas: si un combo o una venta guardada lo trae (p. ej. los conos de antes, "1 de Helado Red velvet"),
+   eso son BOLAS, no cajas. No baja el inventario por venta (baja al abrir cada caja) y cuesta la caja ÷ bolasCaja por bola. */
+const esSabor = pid => !!(prod(pid) || {}).sabor;
+const consumoLinea = it => consumoBruto(it).filter(x => !esSabor(x.pid));
+const bolasDeLinea = it => consumoBruto(it).filter(x => esSabor(x.pid));
 const gastoCono = (p, pres, q) => [p.cono.barquillo, pres === "vaso" ? p.cono.vaso : p.cono.cucurucho].filter(Boolean).map(pid => ({pid, q}));
 function lineasExp(v) {
   const out = [];
   for (const it of (v.items || [])) {
     for (const x of consumoLinea(it)) out.push({pid: x.pid, q: x.q, t: v.t});
+    for (const x of bolasDeLinea(it)) out.push({pid: x.pid, q: x.q / (it.bc || bolasCaja()), t: v.t, porCaja: true});
     if (Array.isArray(it.sab)) for (const s of it.sab) out.push({pid: s, q: it.q / (it.bc || bolasCaja()), t: v.t, porCaja: true});   // bolas en fracción de caja: para costo y consumo, no para el inventario (ese baja al abrir cada caja)
   }
   return out;

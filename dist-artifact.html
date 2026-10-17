@@ -331,7 +331,7 @@ details.help span{display:block;font-weight:500;font-size:13px;line-height:1.35;
 <div class="sheet hidden" id="sheet"><div class="bg"></div><div class="panel" role="dialog" aria-modal="true" id="panel"></div></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script>window.OLI_BUILD="b6a2820f";</script>
+<script>window.OLI_BUILD="b87dab97";</script>
 <script>
 (function(){
 "use strict";
@@ -1098,7 +1098,7 @@ const terminados = () => prods().filter(p => p.tipo !== "insumo");
 const insumos = () => prods().filter(p => p.tipo === "insumo");
 const costos = () => col("costos");
 function costoEn(id, t) { const c = costos()[id]; if (!c) return null; const h = c.hist || []; if (!h.length) return c.costo == null ? null : c.costo; let r = h[0].c; for (const e of h) if (e.t <= t) r = e.c; return r; }
-function costoUnit(pid, t = Date.now()) { const p = prod(pid); if (!p) return null; if (p.combo) { let s = 0; for (const c of p.combo) { const x = costoUnit(c.pid, t); if (x == null) return null; s += x * c.q; } return s; } return costoEn(pid, t); }
+function costoUnit(pid, t = Date.now()) { const p = prod(pid); if (!p) return null; if (p.combo) { let s = 0; for (const c of p.combo) { const x = costoUnit(c.pid, t); if (x == null) return null; s += x * (esSabor(c.pid) ? c.q / bolasCaja() : c.q); } return s; } return costoEn(pid, t); }   // un sabor de helado en un combo va en bolas (la caja trae bolasCaja)
 const costoActual = pid => costoUnit(pid, Date.now());
 
 /* ---------- ventas ---------- */
@@ -1113,18 +1113,24 @@ const ventasOk = () => memo("ventasOk", () => ventasAll().filter(v => !v.anulada
 const ventasEn = (a, b) => ventasOk().filter(v => v.fecha >= a && v.fecha <= b);
 /* qué inventario gasta una línea (de una venta o del pedido): los combos se abren en sus componentes; un cono gasta su barquillo y su cucurucho o vaso.
    Las bolas de helado no se descuentan una a una: se miden por caja de cada sabor (ver 63-conos). */
-function consumoLinea(it) {
+function consumoBruto(it) {
   if (Array.isArray(it.gasta)) return it.gasta;                       // lo que se guardó al vender (no cambia si después se edita el producto)
   const p = prod(it.pid);
   if (p && p.combo) return p.combo.map(c => ({pid: c.pid, q: c.q * it.q}));
   if (p && p.cono) return gastoCono(p, it.pres, it.q);
   return [{pid: it.pid, q: it.q}];
 }
+/* un sabor de helado se lleva por cajas: si un combo o una venta guardada lo trae (p. ej. los conos de antes, "1 de Helado Red velvet"),
+   eso son BOLAS, no cajas. No baja el inventario por venta (baja al abrir cada caja) y cuesta la caja ÷ bolasCaja por bola. */
+const esSabor = pid => !!(prod(pid) || {}).sabor;
+const consumoLinea = it => consumoBruto(it).filter(x => !esSabor(x.pid));
+const bolasDeLinea = it => consumoBruto(it).filter(x => esSabor(x.pid));
 const gastoCono = (p, pres, q) => [p.cono.barquillo, pres === "vaso" ? p.cono.vaso : p.cono.cucurucho].filter(Boolean).map(pid => ({pid, q}));
 function lineasExp(v) {
   const out = [];
   for (const it of (v.items || [])) {
     for (const x of consumoLinea(it)) out.push({pid: x.pid, q: x.q, t: v.t});
+    for (const x of bolasDeLinea(it)) out.push({pid: x.pid, q: x.q / (it.bc || bolasCaja()), t: v.t, porCaja: true});
     if (Array.isArray(it.sab)) for (const s of it.sab) out.push({pid: s, q: it.q / (it.bc || bolasCaja()), t: v.t, porCaja: true});   // bolas en fracción de caja: para costo y consumo, no para el inventario (ese baja al abrir cada caja)
   }
   return out;
@@ -2879,17 +2885,19 @@ function equilibrio() {
   // el ritmo se mide desde el primer día con ventas del mes (si el negocio abrió a mitad de mes, no se cuentan días sin operar)
   const fijos = totalFijos(), mes = finanzas(firstOfMonth(S.today), S.today), hoy = finanzas(S.today, S.today), dm = diasMes(), ini = ventasOk().filter(v => v.fecha >= firstOfMonth(S.today)).map(v => v.fecha).sort()[0] || S.today, dia = diffDays(S.today, ini) + 1 + (parse(ini).getDate() - 1) * 0;
   const bruta = mes.bruta - gastosVariables(firstOfMonth(S.today), S.today), falta = Math.max(0, fijos - bruta), uds = mes.uds || 0, gU = uds ? mes.bruta / uds : 0, quedan = Math.max(1, dm - parse(S.today).getDate() + 1);   // días de calendario que quedan, contando hoy
-  return {fijos, bruta, falta, avance: fijos ? clamp(bruta / fijos, 0, 1) : 0, esperado: fijos ? dia / (dm - parse(ini).getDate() + 1) : 0, diasOp: dm - parse(ini).getDate() + 1, hoyBruta: hoy.bruta - gastosVariables(S.today, S.today), cuota: Math.round(fijos / dm), porDia: Math.ceil(falta / quedan), udsDia: gU > 0 ? Math.ceil(falta / quedan / gU) : null, dia, dm};
+  return {fijos, bruta, falta, avance: fijos ? clamp(bruta / fijos, 0, 1) : 0, esperado: fijos ? dia / (dm - parse(ini).getDate() + 1) : 0, diasOp: dm - parse(ini).getDate() + 1, hoyBruta: hoy.bruta - gastosVariables(S.today, S.today), cuota: Math.round(fijos / dm), porDia: Math.ceil(falta / quedan), udsDia: gU > 0 ? Math.ceil(falta / quedan / gU) : null, dia, dm, ini};
 }
 function bEquilibrio() {
   const e = equilibrio();
   if (!e.fijos) return '<b>PUNTO DE EQUILIBRIO</b><p class="muted small">Escribe tus gastos fijos (arriendo, trabajadoras, servicios) en Ajustes y OLI te muestra cuánto falta para cubrirlos.</p><button class="btn ghost sm" data-act="ir" data-r="ajustes">Ir a Ajustes</button>';
   const adelante = e.avance >= e.esperado;
   return `<div class="row" style="border:0;padding:0"><b>PUNTO DE EQUILIBRIO DEL MES</b><button class="btn ghost sm" data-act="verFijos">Gastos</button></div>
-    <div class="big" style="font-size:26px;margin:4px 0">${fmt(Math.max(0, e.bruta))} <span class="muted" style="font-size:16px">de ${fmt(e.fijos)}</span></div>
+    <div class="big" style="font-size:26px;margin:4px 0">${e.bruta < 0 ? `<span style="color:var(--danger)">− ${fmt(-e.bruta)}</span>` : fmt(e.bruta)} <span class="muted" style="font-size:16px">de ${fmt(e.fijos)}</span></div>
     <div class="bar" style="height:12px;position:relative"><i style="width:${Math.round(e.avance * 100)}%"></i><span title="Donde deberías ir hoy" style="position:absolute;top:-3px;bottom:-3px;left:${Math.round(e.esperado * 100)}%;width:2px;background:var(--ink)"></span></div>
     <div class="small" style="margin-top:6px"><b>${fmtN(e.avance * 100, 1)}%</b> de los gastos fijos cubiertos · ${e.falta > 0 ? "faltan " + fmt(e.falta) : "¡gastos del mes cubiertos! Lo que sigue es ganancia."}</div>
-    ${e.falta > 0 ? `<div class="small ${adelante ? "" : "muted"}" style="margin-top:2px;color:${adelante ? "var(--marca-d)" : "var(--warn)"}">${adelante ? "Vas al día" : "Vas por debajo del ritmo"}: con ${e.dia} de ${e.diasOp} días de operación este mes deberías llevar ${fmtN(e.esperado * 100, 0)}%.</div><div class="small muted">Necesitas ~${fmt(e.porDia)} de utilidad bruta por día${e.udsDia ? " (unas " + e.udsDia + " unidades)" : ""} hasta fin de mes. Hoy llevas ${fmt(Math.max(0, e.hoyBruta))} de ${fmt(e.cuota)}.</div>` : ""}`;
+    ${e.bruta < 0 ? `<div class="small" style="margin-top:2px;color:var(--danger)">Este mes lo vendido todavía no cubre el costo de lo vendido y los otros gastos: va en ${fmt(e.bruta)}. Por eso faltan más que los gastos fijos.</div>` : ""}
+    ${e.falta > 0 ? `<div class="small" style="margin-top:2px;color:${adelante ? "var(--marca-d)" : "var(--warn)"}">${adelante ? "Vas al día" : "Vas por debajo del ritmo"}: ${e.ini > firstOfMonth(S.today) ? "el negocio empezó a vender el " + parse(e.ini).getDate() + " y de esos " + e.diasOp + " días del mes van " + e.dia : "van " + e.dia + " de los " + e.diasOp + " días del mes"}, así que a hoy deberías llevar el ${fmtN(e.esperado * 100, 0)}%.</div>
+      <div class="small muted">Para cubrirlos este mes necesitas ~${fmt(e.porDia)} de utilidad bruta por día${e.udsDia ? " (unas " + e.udsDia + " unidades)" : ""}. Hoy llevas ${fmt(e.hoyBruta)}; la cuota normal de gastos fijos es ${fmt(e.cuota)} por día.</div>` : ""}`;
 }
 ACT.verFijos = () => { const e = equilibrio(); abrir(() => head("Gastos fijos del mes") + `<p class="muted" style="margin-top:0">Lo que hay que cubrir cada mes, pase lo que pase.</p>${gastosFijosPlan().map(g => `<div class="row"><span>${esc(g.n)}</span><b>${g.v ? fmt(g.v) : '<span class="pill warn">Falta el valor</span>'}</b></div>`).join("")}<div class="row"><b>Total al mes</b><b>${fmt(e.fijos)}</b></div><div class="row"><span>Por día (${e.dm} días)</span><b>${fmt(e.cuota)}</b></div>
   <p class="small muted">Punto de equilibrio: la utilidad bruta del mes (ventas − costo de lo vendido − otros gastos) debe llegar a ${fmt(e.fijos)}. Llevas ${fmt(Math.max(0, e.bruta))}.</p><button class="btn ghost wide" data-act="editFijos">Editar gastos fijos</button>`); };
