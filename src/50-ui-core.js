@@ -1,11 +1,11 @@
 /* ============ 50 · interfaz: base (navegación, ventanas, componentes) ============
    Principios: una acción principal por pantalla, botones grandes, texto humano, ícono + texto, errores recuperables. */
 const RUTAS = {
-  hoy: {t: "Inicio", i: "hoy", rol: "admin"}, vender: {t: "Vender", i: "vender", rol: "all"}, caja: {t: "Caja", i: "caja", rol: "all"}, inventario: {t: "Inventario", i: "inventario", rol: "all"},
+  hoy: {t: "Inicio", i: "hoy", rol: "admin"}, vender: {t: "Vender", i: "vender", rol: "all"}, caja: {t: "Caja", i: "caja", rol: "all"}, ventas: {t: "Ventas por día", i: "calendario", rol: "admin"}, inventario: {t: "Inventario", i: "inventario", rol: "all"},
   compras: {t: "Compras", i: "compras", rol: "admin"}, productos: {t: "Productos", i: "productos", rol: "admin"}, analisis: {t: "Análisis", i: "analisis", rol: "admin"}, finanzas: {t: "Dinero", i: "finanzas", rol: "admin"},
   contabilidad: {t: "Contabilidad", i: "reportes", rol: "admin"}, reportes: {t: "Informes", i: "descargar", rol: "admin"}, equipo: {t: "Equipo", i: "equipo", rol: "admin"}, ajustes: {t: "Ajustes", i: "ajustes", rol: "admin"}
 };
-const GRUPOS_ADMIN = [["Operación", ["vender", "caja", "inventario", "compras"]], ["Negocio", ["productos", "analisis", "finanzas"]], ["Administración", ["contabilidad", "reportes", "equipo", "ajustes"]]];
+const GRUPOS_ADMIN = [["Operación", ["vender", "caja", "ventas", "inventario", "compras"]], ["Negocio", ["productos", "analisis", "finanzas"]], ["Administración", ["contabilidad", "reportes", "equipo", "ajustes"]]];
 const rutasPermitidas = () => esAdmin() ? Object.keys(RUTAS) : ["vender", "caja", "inventario"];
 const rutaOk = r => !!RUTAS[r] && rutasPermitidas().includes(r);
 

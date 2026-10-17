@@ -264,3 +264,26 @@ details.help span{display:block;font-weight:500;font-size:13px;line-height:1.35;
 .pline{padding:10px 0;border-bottom:1px solid var(--line)}.pline:last-child{border-bottom:0}
 .pl-top{display:flex;align-items:flex-start;justify-content:space-between;gap:8px}.pl-top .l{min-width:0}.pl-top b{overflow-wrap:anywhere}
 .pl-bot{display:flex;align-items:center;justify-content:space-between;margin-top:6px}.pl-tot{font-size:17px;font-variant-numeric:tabular-nums}
+/* ventas por día: calendario que se despliega */
+.vd-bar{display:flex;gap:8px;align-items:stretch;margin-bottom:10px}
+.vd-flecha{min-width:48px;padding:0 10px;font-size:24px;line-height:1}
+.vd-fecha{flex:1;min-width:0;justify-content:flex-start;text-align:left}
+.vd-fecha>span:nth-of-type(1){flex:1;min-width:0;line-height:1.25;overflow-wrap:anywhere;font-weight:500}
+.vd-r{margin:0 0 12px}.vd-r .btn[aria-pressed="true"]{background:var(--marca-soft);color:var(--marca-d)}
+.vd-cal{padding:14px 12px}
+.vd-cal-h{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}.vd-cal-h b{font-size:17px}
+.vd-grid{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:4px}
+.vd-w{text-align:center;font-size:12px;font-weight:700;color:var(--muted);padding:2px 0 4px}
+.vd-d{min-width:0;min-height:52px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:1px;padding:4px 1px;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--ink);font:inherit;cursor:pointer}
+.vd-d b{position:relative;font-size:15px;line-height:1.2;font-variant-numeric:tabular-nums}
+.vd-d small{max-width:100%;font-size:11px;line-height:1.2;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums}
+.vd-d.con{background:var(--marca-soft);background:color-mix(in srgb,var(--marca) var(--vd-n,15%),var(--surface));border-color:transparent}
+.vd-d.con small{color:var(--ink);font-weight:600}
+.vd-d.hoy{box-shadow:inset 0 0 0 2px var(--line)}.vd-d.hoy b{text-decoration:underline;text-underline-offset:3px}
+.vd-d.sel{outline:3px solid var(--ink);outline-offset:-1px}
+.vd-d:disabled{opacity:.35;cursor:default;background:transparent}
+.vd-d.vacio{border:0;background:none;cursor:default}
+.vd-fest{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--warn);vertical-align:middle}
+.vd-d .vd-fest{position:absolute;top:0;right:-8px}
+.vd-barra{height:6px;margin-top:6px;border-radius:3px;background:var(--surface-2);overflow:hidden}.vd-barra i{display:block;height:100%;border-radius:3px;background:var(--menta)}
+@media (min-width:640px){.vd-d{min-height:60px}.vd-d small{font-size:12px}.vd-cal{max-width:560px}}
