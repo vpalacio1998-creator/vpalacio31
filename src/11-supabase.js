@@ -32,7 +32,7 @@ function revocarSesion(s) { if (!s || !s.access_token || SB.revocadas.has(s.acce
 /* la sesión se cerró o el servidor la rechazó: este equipo olvida la identidad y lo que solo ve el administrador (las ventas por enviar se conservan) */
 async function olvidarIdentidad() {
   await IDB.tx([["kv", "del", "ident"]]).catch(() => {});
-  const soloAdmin = new Set(SB_ADMIN_COLS); for (const c of soloAdmin) delete DS.c[c];
+  const soloAdmin = new Set(SB_ADMIN_COLS); for (const c of soloAdmin) { delete DS.c[c]; delete DS.ready[c]; }   // al volver a ingresar se espera a que lleguen de nuevo
   try { const all = await IDB.getAll("docs"), ops = []; for (const [p, x] of Object.entries(all || {})) if (x && soloAdmin.has(x.col)) ops.push(["docs", "del", p]); if (ops.length) await IDB.tx(ops); } catch (e) {}
   DS.isAdmin = false; DS.uid = null; SB.role = null;
 }
@@ -115,9 +115,9 @@ function usarIdent(i) { DS.uid = i.uid; DS.isAdmin = i.isAdmin; SB.org = i.org; 
 /* lo que este rol no puede leer no debe quedarse en el dispositivo (p. ej. costos en la tablet del empleado) */
 function sbIniciar() {
   const cols = SHARED_COLS.concat(DS.isAdmin ? SB_ADMIN_COLS : []);
-  for (const n of SHARED_COLS) if (Object.keys(DS.c[n] || {}).length) DS.ready[n] = true;
+  for (const n of (SB.sinVerificar ? cols : SHARED_COLS)) if (SB.sinVerificar || Object.keys(DS.c[n] || {}).length) DS.ready[n] = true;   // sin servidor no llega nada más: se usa lo guardado
   sbCargarTodo(cols); if (!SB.sinVerificar) sbRealtime();                                  // sin sesión verificada no se pide nada al servidor: se espera a que la sesión se renueve
-  setTimeout(() => { for (const n of SHARED_COLS) DS.ready[n] = true; DS.fromCache = false; changed(); }, 6000);
+  const gen = SB.gen; setTimeout(() => { if (gen !== SB.gen) return; for (const n of cols) DS.ready[n] = true; DS.fromCache = false; changed(); }, 6000);   // no marca nada de una sesión que ya se cerró
   recalcEstado(); changed(); kickSync(500);
   if (!SB.subs) { SB.subs = true;
     setInterval(() => { if (pendientes().length) { netFail = false; kickSync(); } }, 20000);

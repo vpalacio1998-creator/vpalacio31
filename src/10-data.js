@@ -290,7 +290,7 @@ async function conectarClaude(db, user, ident) {
   try { if (user) { const me = await user.me(); DS.uid = me.id; DS.nombre = me.name || ""; DS.isAdmin = !!(await user.canEdit()); const cw = await user.can("data.write"); DS.canWrite = cw === null ? true : !!cw || DS.isAdmin; await IDB.kvSet("ident", {uid: DS.uid, isAdmin: DS.isAdmin}); } } catch (e) {}
   if (!DS.isAdmin) await purgarNoPermitido();
   SHARED_COLS.forEach(subscribe); if (DS.isAdmin) ADMIN_COLS.forEach(subscribe);
-  setTimeout(() => { for (const n of SHARED_COLS) DS.ready[n] = true; DS.fromCache = false; changed(); }, 5000);
+  setTimeout(() => { for (const n of SHARED_COLS.concat(DS.isAdmin ? ADMIN_COLS : [])) DS.ready[n] = true; DS.fromCache = false; changed(); }, 5000);
   recalcEstado(); changed(); kickSync(500);
   setInterval(() => { if (enviables().length) { netFail = false; kickSync(); } }, 20000);
   setInterval(() => heartbeat(), 45000);

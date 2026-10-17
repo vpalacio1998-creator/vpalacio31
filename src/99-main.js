@@ -114,7 +114,7 @@ const anulacionDe = id => { for (const d of Object.values(col("anulaciones"))) f
 const MIN_ANULAR_EMP = 10;
 function puedeAnular(v) {
   if (v.anulada) return {ok: false, txt: ""};
-  const caja = cajaDe(v.fecha, v.dev); if (caja && cajaEstado(caja) === "cerrada") return {ok: false, txt: "La caja de esta venta ya está cerrada. Si devolviste el dinero, regístralo en Caja como “Sacar dinero”."};
+  const caja = cajaDe(v.fecha, v.dev); if (caja && cajaEstado(caja) === "cerrada") return {ok: false, txt: esc("La caja de esta venta ya está cerrada. " + msgDevolucionCerrada(v))};
   if (esAdmin()) return {ok: true};
   if (v.uid === uidActual() && v.dev === DEV.id && Date.now() - v.t < MIN_ANULAR_EMP * 60000 && caja && cajaEstado(caja) === "abierta") return {ok: true};
   return {ok: false, txt: "Pasaron más de " + MIN_ANULAR_EMP + " minutos o no es tu venta: pídele al administrador que la anule."};

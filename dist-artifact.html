@@ -133,7 +133,7 @@ th{position:sticky;top:0;text-align:left;font-size:12px;font-weight:700;color:va
 td{padding:10px 12px;border-top:1px solid var(--line);white-space:nowrap}
 td.n,th.n{text-align:right}
 tr.click{cursor:pointer}tr.click:hover td{background:var(--marca-soft)}
-.two{display:grid;gap:14px}.three{display:grid;gap:14px}
+.two{display:grid;gap:14px;grid-template-columns:minmax(0,1fr)}.three{display:grid;gap:14px;grid-template-columns:minmax(0,1fr)}.two>*,.three>*{min-width:0}   /* una columna en celular: lo ancho (tablas, botones) se desplaza por dentro y no ensancha la pantalla */
 
 /* ---- charts ---- */
 .chart{width:100%;height:auto;display:block;overflow:visible}
@@ -292,6 +292,16 @@ details.help span{display:block;font-weight:500;font-size:13px;line-height:1.35;
 .vd-d .vd-fest{position:absolute;top:0;right:-8px}
 .vd-barra{height:6px;margin-top:6px;border-radius:3px;background:var(--surface-2);overflow:hidden}.vd-barra i{display:block;height:100%;border-radius:3px;background:var(--menta)}
 @media (min-width:640px){.vd-d{min-height:60px}.vd-d small{font-size:12px}.vd-cal{max-width:560px}}
+/* ¿cuánta plata hay? (liquidez, en Dinero) */
+.kpis.k2{grid-template-columns:repeat(2,minmax(0,1fr));margin:10px 0 6px}
+.liq-h{display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap}.liq-h h3{margin:0}.liq-h details.help[open]{flex-basis:100%}.liq-h details.help[open] span{max-width:none}
+.liq-cap{margin:0;font-weight:600}
+.liq-total{font-family:var(--display);font-weight:600;font-size:clamp(30px,8vw,40px);line-height:1.1;color:var(--marca-d);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.liq-total.neg{color:var(--danger)}
+.liq-bolsas .kpi small{overflow-wrap:anywhere}
+.liq-det{margin-top:8px}.liq-det summary{font-weight:700;font-size:14px;min-height:40px;display:flex;align-items:center;cursor:pointer}
+.liq-sep{font-size:15px;margin:18px 0 8px;color:var(--muted)}
+.kpi small.liq-pend{color:var(--warn);font-weight:700;margin-top:4px}
 
 </style>
 <div class="app" id="app">
@@ -315,7 +325,7 @@ details.help span{display:block;font-weight:500;font-size:13px;line-height:1.35;
 <div class="sheet hidden" id="sheet"><div class="bg"></div><div class="panel" role="dialog" aria-modal="true" id="panel"></div></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script>window.OLI_BUILD="b43bd623";</script>
+<script>window.OLI_BUILD="5f9928e5";</script>
 <script>
 (function(){
 "use strict";
@@ -753,7 +763,7 @@ async function conectarClaude(db, user, ident) {
   try { if (user) { const me = await user.me(); DS.uid = me.id; DS.nombre = me.name || ""; DS.isAdmin = !!(await user.canEdit()); const cw = await user.can("data.write"); DS.canWrite = cw === null ? true : !!cw || DS.isAdmin; await IDB.kvSet("ident", {uid: DS.uid, isAdmin: DS.isAdmin}); } } catch (e) {}
   if (!DS.isAdmin) await purgarNoPermitido();
   SHARED_COLS.forEach(subscribe); if (DS.isAdmin) ADMIN_COLS.forEach(subscribe);
-  setTimeout(() => { for (const n of SHARED_COLS) DS.ready[n] = true; DS.fromCache = false; changed(); }, 5000);
+  setTimeout(() => { for (const n of SHARED_COLS.concat(DS.isAdmin ? ADMIN_COLS : [])) DS.ready[n] = true; DS.fromCache = false; changed(); }, 5000);
   recalcEstado(); changed(); kickSync(500);
   setInterval(() => { if (enviables().length) { netFail = false; kickSync(); } }, 20000);
   setInterval(() => heartbeat(), 45000);
@@ -829,7 +839,7 @@ function revocarSesion(s) { if (!s || !s.access_token || SB.revocadas.has(s.acce
 /* la sesión se cerró o el servidor la rechazó: este equipo olvida la identidad y lo que solo ve el administrador (las ventas por enviar se conservan) */
 async function olvidarIdentidad() {
   await IDB.tx([["kv", "del", "ident"]]).catch(() => {});
-  const soloAdmin = new Set(SB_ADMIN_COLS); for (const c of soloAdmin) delete DS.c[c];
+  const soloAdmin = new Set(SB_ADMIN_COLS); for (const c of soloAdmin) { delete DS.c[c]; delete DS.ready[c]; }   // al volver a ingresar se espera a que lleguen de nuevo
   try { const all = await IDB.getAll("docs"), ops = []; for (const [p, x] of Object.entries(all || {})) if (x && soloAdmin.has(x.col)) ops.push(["docs", "del", p]); if (ops.length) await IDB.tx(ops); } catch (e) {}
   DS.isAdmin = false; DS.uid = null; SB.role = null;
 }
@@ -912,9 +922,9 @@ function usarIdent(i) { DS.uid = i.uid; DS.isAdmin = i.isAdmin; SB.org = i.org; 
 /* lo que este rol no puede leer no debe quedarse en el dispositivo (p. ej. costos en la tablet del empleado) */
 function sbIniciar() {
   const cols = SHARED_COLS.concat(DS.isAdmin ? SB_ADMIN_COLS : []);
-  for (const n of SHARED_COLS) if (Object.keys(DS.c[n] || {}).length) DS.ready[n] = true;
+  for (const n of (SB.sinVerificar ? cols : SHARED_COLS)) if (SB.sinVerificar || Object.keys(DS.c[n] || {}).length) DS.ready[n] = true;   // sin servidor no llega nada más: se usa lo guardado
   sbCargarTodo(cols); if (!SB.sinVerificar) sbRealtime();                                  // sin sesión verificada no se pide nada al servidor: se espera a que la sesión se renueve
-  setTimeout(() => { for (const n of SHARED_COLS) DS.ready[n] = true; DS.fromCache = false; changed(); }, 6000);
+  const gen = SB.gen; setTimeout(() => { if (gen !== SB.gen) return; for (const n of cols) DS.ready[n] = true; DS.fromCache = false; changed(); }, 6000);   // no marca nada de una sesión que ya se cerró
   recalcEstado(); changed(); kickSync(500);
   if (!SB.subs) { SB.subs = true;
     setInterval(() => { if (pendientes().length) { netFail = false; kickSync(); } }, 20000);
@@ -1790,9 +1800,11 @@ async function registrarVenta(opts) {
   if (desc > 0) audit("DESCUENTO", venta.id, fmt(desc) + " sobre " + fmt(sub));
   return venta;
 }
+const msgDevolucionCerrada = v => v.m === "Efectivo" ? "Si devolviste el dinero, regístralo en Caja: “Sacar dinero” → “Devolución a cliente”."
+  : "Se pagó con " + v.m + ": si devolviste el dinero por ese medio, no lo saques de la caja; el administrador lo anota en Dinero → Registrar gasto (categoría Otros), con el medio por el que se devolvió" + (v.m === "QR Bancolombia" ? " (por QR: Transferencia)." : ".");
 async function anularVenta(v, motivo) {
   const caja = cajaDe(v.fecha, v.dev);
-  if (caja && cajaEstado(caja) === "cerrada") throw new Error("Esta venta es de una caja ya cerrada. Si devolviste el dinero, regístralo en Caja como “Sacar dinero”.");
+  if (caja && cajaEstado(caja) === "cerrada") throw new Error("Esta venta es de una caja ya cerrada. " + msgDevolucionCerrada(v));
   const propio = v.uid === uidActual() && v.dev === DEV.id && Date.now() - v.t < 10 * 60000 && caja && cajaEstado(caja) === "abierta";
   if (!esAdmin() && !propio) throw Object.assign(new Error("denied"), {code: "denied"});
   const id = cajaId(v.fecha, DEV.id), cur = col("anulaciones")[id] || {fecha: v.fecha, dev: DEV.id, items: []};
@@ -2241,12 +2253,12 @@ ACT.abrirCajaHoy = () => abrir(() => `${head("Abrir caja")}<p style="margin-top:
   <button class="btn pri xl wide" style="margin-top:14px" data-act="doAbrir">${ic("ok", 22)} ABRIR CAJA</button>`, {});
 ACT.aperturaMonto = (el, d) => { $("#ap-monto").value = Number(d.v) ? fmt(Number(d.v)) : "$0"; };
 ACT.doAbrir = async () => { const v = num($("#ap-monto").value); await guardar(async () => { await abrirCaja(v); cerrar(); draw(); }, "Caja abierta. ¡A vender!"); };
-const MOT_MOV = {retiro: ["Retiro del dueño", "Consignación", "Cambio de billetes", "Otro"], ingreso: ["Base adicional", "Cambio de billetes", "Otro"], gasto: ["Insumos", "Domicilio", "Aseo", "Transporte", "Otro"]};
+const MOT_MOV = {retiro: ["Retiro del dueño", "Consignación", "Devolución a cliente", "Cambio de billetes", "Otro"], ingreso: ["Base adicional", "Cambio de billetes", "Otro"], gasto: ["Insumos", "Domicilio", "Aseo", "Transporte", "Otro"]};
 const TIT_MOV = {retiro: "Sacar dinero de la caja", ingreso: "Entró dinero a la caja", gasto: "Pagué algo con dinero de la caja"};
 const permisoMov = () => esAdmin() || ((col("meta").permisos || {}).movimientosEmpleado !== false);
 ACT.movCaja = (el, d) => { if (!permisoMov()) { toast("Pídele al administrador que haga este movimiento.", true); return; } S.movTipo = d.t;
   abrir(() => `${head(TIT_MOV[S.movTipo])}<label class="f" for="mv-monto">¿Cuánto?</label><input class="in money" id="mv-monto" inputmode="numeric" placeholder="$0">${teclado("mv-monto")}
-  <label class="f">¿Para qué?</label>${sel("mv-mot", MOT_MOV[S.movTipo], "")}<label class="f" for="mv-nota">Detalle (opcional)</label><input class="in plain" id="mv-nota" placeholder="Ej: compra de vasos">
+  <label class="f">¿Para qué?</label>${sel("mv-mot", MOT_MOV[S.movTipo], "")}${S.movTipo === "retiro" ? `<p class="xs muted" style="margin:4px 0 0">¿Devolución de una venta con la caja todavía abierta? Mejor anula la venta en «Ventas de hoy»: la caja se ajusta sola. «Devolución a cliente» es para ventas de cajas ya cerradas.</p>` : ""}<label class="f" for="mv-nota">Detalle (opcional)</label><input class="in plain" id="mv-nota" placeholder="Ej: compra de vasos">
   <button class="btn pri xl wide" style="margin-top:14px" data-act="doMov">GUARDAR</button>`); };
 ACT.doMov = async () => { const m = num($("#mv-monto").value), mot = selVal("mv-mot"), nota = $("#mv-nota").value.trim(); if (!mot) { toast("Elige para qué fue.", true); return; }
   await guardar(async () => { await movimientoCaja(S.movTipo, m, mot + (nota ? " · " + nota : ""), S.movTipo === "gasto" ? "Otros" : ""); cerrar(); draw(); }, "Guardado"); };
@@ -3082,7 +3094,7 @@ VIEWS.finanzas = () => {
   const rent = rentabilidad(a, b), orden = {util: (x, y) => y.util - x.util, uds: (x, y) => y.uds - x.uds, margen: (x, y) => (y.margen || 0) - (x.margen || 0), bajo: (x, y) => (x.margen || 9) - (y.margen || 9)}[S.rentOrden];
   const pts = serie.length > 45 ? serie.filter((_, i) => i % Math.ceil(serie.length / 45) === 0) : serie;
   const mes = finanzas(firstOfMonth(S.today), S.today), fijos = totalFijos(), diaN = parse(S.today).getDate(), dMes = parse(lastOfMonth(S.today)).getDate(), uds = mes.uds, gU = uds ? mes.bruta / uds : 0, falta = Math.max(0, fijos - mes.bruta);
-  return cabecera("Dinero", periodoTxt(a, b), `<button class="btn pri xl" data-act="nuevoGasto">${ic("plus", 20)} REGISTRAR GASTO</button>`) + `<div style="margin-bottom:14px">${rangoControles()}</div>
+  return cabecera("Dinero", "Cuánta plata hay y cómo te fue", `<button class="btn pri xl" data-act="nuevoGasto">${ic("plus", 20)} REGISTRAR GASTO</button>`) + liquidezHTML() + `<h3 class="liq-sep">Cómo te fue · ${esc(periodoTxt(a, b))}</h3><div style="margin-bottom:14px">${rangoControles()}</div>
   <div class="card"><h3>Cómo te fue</h3>
     <div class="row"><div class="l"><b>Ventas</b><div class="small muted">Lo que entró por vender · ${f.n} ventas</div></div><div class="r big" style="font-size:24px">${fmt(f.ventas)}</div></div>
     <div class="row"><div class="l">− Costo de lo vendido<div class="small muted">Lo que te costó lo que vendiste${f.sinCosto ? " · " + fmtN(f.sinCosto, 0) + " uds sin costo" : ""}${f.sinCostoHelado ? " · falta el costo de algún sabor de helado" : ""}</div></div><div class="r">${fmt(f.cogs)}</div></div>
@@ -3098,13 +3110,18 @@ VIEWS.finanzas = () => {
 };
 ACT.rentOrden = (el, d) => { S.rentOrden = d.v; draw(); };
 ACT.nuevoGasto = () => abrir(() => head("Registrar gasto") + `<label class="f" for="gs-v">¿Cuánto pagaste?</label><input class="in money" id="gs-v" inputmode="numeric" placeholder="$0" style="font-size:24px;min-height:58px" autofocus>${teclado("gs-v")}
-  <label class="f">¿En qué?</label>${sel("gs-cat", CATS_GASTO, "")}<label class="f">¿Con qué pagaste?</label>${sel("gs-m", ["Efectivo", "Transferencia", "Nequi", "Tarjeta"], "Efectivo")}
+  <label class="f">¿En qué?</label>${sel("gs-cat", CATS_GASTO, "")}<label class="f">¿Con qué pagaste?</label>${sel("gs-m", ["Efectivo", "Transferencia", "Nequi", "Daviplata", "Tarjeta", "Otro"], "Efectivo")}<p class="xs muted" style="margin:4px 0 0">Si lo estás pagando con plata de una caja que sigue abierta, anótalo en esa caja → «Pagué algo» y no aquí. Si esa caja ya se cerró (por ejemplo, faltó plata y se marcó «Gasto sin anotar»), anótalo aquí, una sola vez.</p>
+  ${conteoAhora(saldosIni()) ? `<label class="f">Contaron la plata el ${esc(diaCorto(saldosIni().desde))} a las ${esc(hora(saldosIni().t))}. Si el gasto es de ese día: ¿ya estaba pagado cuando contaron?</label>${sel("gs-antes", ["No, se pagó después", "Sí, ya estaba pagado"], "")}` : ""}
   <details style="margin:12px 0"><summary class="small" style="font-weight:700;min-height:40px;display:flex;align-items:center;cursor:pointer">Más datos (opcional)</summary><label class="f" for="gs-d">Detalle</label><input class="in plain" id="gs-d" placeholder="Ej: recibo de luz">
     <label class="f" for="gs-prov">Proveedor o a quién le pagaste</label><input class="in plain" id="gs-prov"><div class="split"><div><label class="f" for="gs-base">Base (sin IVA)</label><input class="in money" id="gs-base" inputmode="numeric"></div><div><label class="f" for="gs-iva">IVA</label><input class="in money" id="gs-iva" inputmode="numeric"></div></div>
-    <label class="f" for="gs-ret">Retención (si aplica)</label><input class="in money" id="gs-ret" inputmode="numeric"><label class="f" for="gs-sop">Soporte (enlace, número o código)</label><input class="in plain" id="gs-sop"><label class="f" for="gs-f">Fecha</label><input class="in" type="date" id="gs-f" value="${S.today}"></details>
+    <label class="f" for="gs-ret">Retención (si aplica)</label><input class="in money" id="gs-ret" inputmode="numeric"><label class="f" for="gs-sop">Soporte (enlace, número o código)</label><input class="in plain" id="gs-sop"><label class="f" for="gs-f">Fecha</label><input class="in" type="date" id="gs-f" value="${S.today}" max="${S.today}"></details>
   <button class="btn pri xl wide" data-act="doGasto">GUARDAR GASTO</button>`);
-ACT.doGasto = async () => { const v = num($("#gs-v").value), cat = selVal("gs-cat"); if (!v) { toast("Escribe cuánto pagaste.", true); return; } if (!cat) { toast("Elige en qué fue el gasto.", true); return; }
-  await guardar(async () => { await guardarGasto({fecha: $("#gs-f").value || S.today, cat, desc: $("#gs-d").value.trim(), valor: v, m: selVal("gs-m") || "Efectivo", proveedor: $("#gs-prov").value.trim(), base: num($("#gs-base").value), iva: num($("#gs-iva").value), retencion: num($("#gs-ret").value), soporte: {ref: $("#gs-sop").value.trim()}}); cerrar(); }, "Gasto guardado"); };
+ACT.doGasto = async () => { const v = num($("#gs-v").value), cat = selVal("gs-cat"), fecha = $("#gs-f").value || S.today; if (!v) { toast("Escribe cuánto pagaste.", true); return; } if (!cat) { toast("Elige en qué fue el gasto.", true); return; }
+  if (fecha > S.today) { toast("La fecha no puede ser futura: anota el gasto cuando lo pagues.", true); return; }
+  const g = {fecha, cat, desc: $("#gs-d").value.trim(), valor: v, m: selVal("gs-m") || "Efectivo", proveedor: $("#gs-prov").value.trim(), base: num($("#gs-base").value), iva: num($("#gs-iva").value), retencion: num($("#gs-ret").value), soporte: {ref: $("#gs-sop").value.trim()}};
+  // el mismo día en que contaron la plata: si ya estaba pagado antes de contar, el conteo ya lo descontó (no se resta dos veces)
+  const s = saldosIni(); if (conteoAhora(s) && fecha === s.desde) { const r = selVal("gs-antes"); if (!r) { toast("Dinos si el gasto ya estaba pagado cuando contaron la plata.", true); return; } if (r.indexOf("Sí") === 0) g.antesConteo = s.t; }
+  await guardar(async () => { await guardarGasto(g); cerrar(); }, "Gasto guardado"); };
 ACT.borrarGasto = async (el, d) => { if (await confirmar({titulo: "¿Borrar este gasto?", texto: "Quedará anotado en la auditoría.", si: "Sí, borrar", no: "No", peligro: true})) await guardar(() => borrarGasto(d.id), "Gasto borrado"); };
 
 /* ---------- análisis ---------- */
@@ -3250,6 +3267,150 @@ function aplicarTema() { const t = temaActual(), r = document.documentElement; i
 ACT.tema = (el, d) => { try { localStorage.setItem("oli-tema", d.v); } catch (e) {} aplicarTema(); draw(); };
 ACT.cargarDemo = async () => { if (await confirmar({titulo: "¿Cargar datos de demostración?", texto: "Se crean productos y un mes de ventas de ejemplo. Puedes borrarlos después.", si: "Sí, cargar", no: "No"})) { toast("Cargando datos de demostración…"); await guardar(() => cargarDemo(), "Datos de demostración listos"); draw(); } };
 ACT.borrarDemo = async () => { if (await confirmar({titulo: "¿Borrar los datos de demostración?", texto: "Se borran los productos y ventas de ejemplo. Tu información real no se toca.", si: "Sí, borrar", no: "No", peligro: true})) { toast("Borrando…"); await guardar(() => borrarDemo(), "Datos de demostración borrados"); draw(); } };
+
+/* >>> 74-liquidez.js */
+/* ============ 74 · ¿cuánta plata hay? (liquidez, administrador) ============
+   Plata que hay = la plata que tenían cuando la contaron (si la anotan) + lo que se vendió (sin anuladas)
+   − todos los gastos pagados (los de "Dinero" y los pagos hechos desde la caja, también materia prima)
+   − devoluciones a clientes ± lo que faltó o sobró al cerrar caja (menos los faltantes por "Gasto sin anotar": ese gasto se
+   anota y se resta una vez). Lo que entra o sale de la caja por "Otro" no se suma ni se resta (no se sabe qué fue): se muestra.
+   Se separa en efectivo y en cuentas (banco, Nequi, Daviplata, tarjeta y otros medios) según el medio de pago.
+   No se resta: el costo de lo vendido (al vender no sale plata), las compras (OLI no sabe si ya se pagaron ni con qué),
+   los retiros del dueño, las bases de caja ni el cambio de billetes (la plata cambia de lugar, sigue siendo del negocio).
+   Una consignación pasa plata del efectivo a las cuentas. Con conteo, cuenta lo que pasó después de contar (hora del
+   equipo donde se guardó). Cada equipo con servidor guarda HIST_DIAS días de ventas y cajas: para que el total siga
+   completo, hay que volver a contar la plata antes de que pase ese tiempo. */
+const saldosIni = () => { const s = col("config").saldos; return s && typeof s.t === "number" ? s : null; };   // {efectivo, cuentas, desde, t, uid}
+const enEfectivo = m => m === "Efectivo";
+const empiezaCon = (txt, pre) => String(txt || "").indexOf(pre) === 0;
+const pesosDe = v => num(String(v == null ? "" : v).replace(/[.,]\d{1,2}\s*$/, ""));   // "1.200.000,00" → 1200000: los centavos no se suman como pesos
+const conteoAhora = s => !!s && s.t > parse(s.desde).getTime();                       // contaron a una hora (no "al empezar el día")
+
+function liquidez() {
+  const s = saldosIni(), t0 = s ? s.t : 0, cajas = cajasAll(), hoy = S.today;
+  // sin conteo anotado: desde el primer día con ventas o cajas guardadas en este equipo (los gastos se cuentan desde ese día)
+  const fechasDatos = ventasOk().map(v => v.fecha).concat(cajas.map(c => c.fecha)).filter(Boolean).sort();
+  const desde = s ? s.desde : (fechasDatos[0] || Object.values(col("gastos")).map(g => g && g.fecha).filter(Boolean).sort()[0] || hoy);
+  // ¿entra en la cuenta? con conteo: lo que pasó después de contar; sin conteo: desde el primer día. Lo de fechas futuras, no.
+  const despues = (fecha, t) => !!fecha && fecha <= hoy && (s ? (fecha > s.desde || (fecha === s.desde && (Number(t) || 0) > t0)) : fecha >= desde);
+  const medios = {}, med = m => medios[m] || (medios[m] = {entro: 0, salio: 0});
+  let vEf = 0, vCu = 0, nV = 0, pend = 0;
+  for (const v of ventasOk()) if (despues(v.fecha, v.t)) {
+    const x = Number(v.total) || 0, m = v.m || "Otro"; nV++; med(m).entro += x;
+    if (enEfectivo(m)) vEf += x; else { vCu += x; if (v.pend) pend += x; }
+  }
+  // venta de antes del conteo anulada después: esa plata estaba en el conteo y salió (se devolvió). Un cobro duplicado nunca
+  // entró dos veces, y un pago digital que no se confirmó no estaba en el conteo: esos no se restan.
+  let anEf = 0, anCu = 0, nAn = 0;
+  if (s) {
+    const idx = {}, prim = {}; for (const v of ventasAll()) idx[v.id] = v;
+    for (const d of Object.values(col("anulaciones"))) for (const a of ((d && d.items) || [])) { const t = Number(a.t) || 0; if (!prim[a.ventaId] || t < prim[a.ventaId].t) prim[a.ventaId] = {t, motivo: a.motivo}; }   // una venta anulada dos veces cuenta una vez
+    for (const [vid, a] of Object.entries(prim)) {
+      if (!(a.t > t0) || empiezaCon(a.motivo, "Cobro duplicado")) continue;
+      const v = idx[vid]; if (!v || despues(v.fecha, v.t) || v.pend) continue;
+      const x = Number(v.total) || 0, m = v.m || "Otro"; nAn++; med(m).salio += x; if (enEfectivo(m)) anEf += x; else anCu += x;
+    }
+  }
+  let gEf = 0, gCu = 0, nG = 0;
+  for (const g of Object.values(col("gastos"))) if (g && despues(g.fecha, g.t) && !(s && g.antesConteo === s.t)) {   // pagado antes de contar: el conteo ya lo descontó
+    const x = Number(g.valor) || 0, m = g.m || "Efectivo"; nG++; med(m).salio += x;
+    if (enEfectivo(m)) gEf += x; else gCu += x;
+  }
+  let consig = 0, retDueno = 0, devol = 0, otrosRet = 0, otrosIng = 0, difs = 0, nDifs = 0, sinAnotar = 0; const sinAnotarF = [];
+  for (const c of cajas) {
+    for (const mv of (c.movs || [])) if (despues(c.fecha, mv.t)) {
+      const x = Number(mv.monto) || 0;
+      if (mv.tipo === "gasto") { nG++; gEf += x; med("Efectivo").salio += x; }
+      else if (mv.tipo === "retiro") {
+        if (empiezaCon(mv.motivo, "Consignación")) consig += x; else if (empiezaCon(mv.motivo, "Retiro del dueño")) retDueno += x;
+        else if (empiezaCon(mv.motivo, "Devolución a cliente")) { devol += x; med("Efectivo").salio += x; }
+        else if (empiezaCon(mv.motivo, "Otro")) otrosRet += x;                                   // "Cambio de billetes" solo cambia la plata de lugar
+      } else if (mv.tipo === "ingreso" && empiezaCon(mv.motivo, "Otro")) otrosIng += x;          // "Base adicional" y "Cambio de billetes": la plata cambia de lugar
+    }
+    // lo que faltó o sobró al cerrar: solo cajas abiertas después del conteo (si no, el conteo ya lo incluye)
+    const ci = (c.cierres || []).slice(-1)[0];
+    if (ci && cajaEstado(c) === "cerrada" && c.apertura && despues(c.fecha, c.apertura.t)) { const d = Number(ci.dif) || 0;
+      if (d < 0 && empiezaCon(ci.obs, "Gasto sin anotar")) { sinAnotar -= d; sinAnotarF.push(c.fecha); }   // ese gasto se anota en Dinero y se resta allá: aquí no, para no restarlo dos veces
+      else if (d) { difs += d; nDifs++; } }
+  }
+  const sEf = s ? Number(s.efectivo) || 0 : 0, sCu = s ? Number(s.cuentas) || 0 : 0;
+  const efectivo = sEf + vEf - anEf - gEf - devol + difs - consig, cuentas = sCu + vCu - anCu - gCu + consig;
+  // compras recibidas en el mismo tiempo: se muestran, no se restan
+  let compras = 0, nCompras = 0;
+  for (const c of Object.values(col("compras"))) if (c && c.estado === "recibido") { const f = c.recFecha || c.fecha; if (despues(f, c.recT || c.t)) { compras += sum(c.lineas || [], l => (Number(l.costo) || 0) * (Number(l.q) || 0)) + (Number(c.iva) || 0); nCompras++; } }
+  const abiertas = cajas.filter(c => cajaEstado(c) === "abierta").map(c => ({nombre: c.devNombre || (col("dispositivos")[c.dev] || {}).nombre || "Caja", fecha: c.fecha, esperado: cajaCalc(c).esperado}));
+  // ventas que otros equipos aún no han enviado (lo dicen ellos mismos al reportarse)
+  const sinEnviar = DS.mode === "db" ? sum(Object.values(col("dispositivos")).filter(d => d && d.dev !== DEV.id), d => Number(d.ventasPend) || 0) : 0;
+  const cargando = DS.mode === "db" && ["ventas", "cajas", "anulaciones", "gastos", "config"].some(n => !DS.ready[n]);
+  const incompleto = DS.mode === "db" && desde < addDays(hoy, -(HIST_DIAS - 5));   // con servidor, este equipo ya no tiene todas las ventas de ese tiempo
+  return {conSaldo: !!s, saldo: s, desde, sEf, sCu, ventas: vEf + vCu, vEf, vCu, nV, anulDesp: anEf + anCu, nAn, gastos: gEf + gCu, gEf, gCu, nG,
+    devol, otrosRet, otrosIng, sinAnotar, sinAnotarF: uniq(sinAnotarF).sort(), difs, nDifs, consig, retDueno, pend, efectivo, cuentas, total: efectivo + cuentas, medios, compras, nCompras, abiertas, sinEnviar, cargando, incompleto};
+}
+
+function liquidezHTML() {
+  const L = liquidez(), neg = L.total < 0;
+  if (L.cargando) return `<div class="card liq" id="liquidez"><div class="liq-h"><h3>¿Cuánta plata hay?</h3></div><p class="muted" style="margin:6px 0 0">Cargando ventas y gastos…</p></div>`;
+  const signo = v => v < 0 ? "− " : "", plata = v => signo(v) + fmt(Math.abs(v));
+  const fila = (txt, sub, v, sg) => `<div class="row"><div class="l">${txt}${sub ? `<div class="small muted">${sub}</div>` : ""}</div><div class="r">${sg || ""}${fmt(Math.abs(v))}</div></div>`;
+  const plural = (n, uno, varios) => n + " " + (n === 1 ? uno : varios);
+  const desdeTxt = L.conSaldo ? (conteoAhora(L.saldo) ? (L.saldo.desde === S.today ? "Desde hoy a las " : "Desde el " + diaMesLiq(L.desde) + " a las ") + hora(L.saldo.t) + ", cuando contaron la plata"
+      : "Desde el comienzo del " + diaMesLiq(L.desde) + ", cuando contaron la plata")
+    : "Desde el " + diaMesLiq(L.desde) + " · con lo que está registrado en OLI";
+  const ayudaTxt = (L.conSaldo ? "Es la plata que debería tener el negocio: la que contaron, " : "Es lo que se vendió ") + (L.conSaldo ? "más lo que se vendió, " : "") + "menos todos los gastos pagados (también los que se pagan desde la caja) y las devoluciones a clientes, "
+    + "más o menos lo que sobró o faltó al cerrar caja. No resta el costo de lo vendido, ni las compras (OLI no sabe si ya se pagaron), ni los retiros del dueño: esa plata sigue siendo del negocio aunque cambie de lugar. "
+    + "Las comisiones del datáfono y de las apps no se descuentan.";
+  const medios = Object.entries(L.medios).filter(([, x]) => x.entro || x.salio).sort((a, b) => (b[1].entro - b[1].salio) - (a[1].entro - a[1].salio));
+  const viejas = L.abiertas.filter(c => c.fecha < S.today);
+  const cajasTxt = L.abiertas.length ? "En las cajas abiertas (con la base): " + fmt(sum(L.abiertas, c => c.esperado)) + (viejas.length ? " · " + plural(viejas.length, "sin cerrar", "sin cerrar") + " desde el " + diaMesLiq(viejas.map(c => c.fecha).sort()[0]) : "") : "Ninguna caja abierta";
+  return `<div class="card liq" id="liquidez">
+    <div class="liq-h"><h3>¿Cuánta plata hay?</h3>${ayuda(esc(ayudaTxt))}</div>
+    <p class="small muted" style="margin:2px 0 6px">${esc(desdeTxt)}</p>
+    <p class="xs muted liq-cap">${L.conSaldo ? "Plata que debería haber" : "Lo vendido menos lo gastado"}</p>
+    <div class="liq-total${neg ? " neg" : ""}">${plata(L.total)}</div>
+    <div class="kpis k2 liq-bolsas">
+      <div class="kpi${L.efectivo < 0 ? " neg" : ""}"><span>En efectivo</span><b>${plata(L.efectivo)}</b><small>${esc(cajasTxt)}</small></div>
+      <div class="kpi${L.cuentas < 0 ? " neg" : ""}"><span>En cuentas</span><b>${plata(L.cuentas)}</b><small>Banco, Nequi, Daviplata, tarjeta y otros medios</small>${L.pend ? `<small class="liq-pend">${fmt(L.pend)} de Nequi, Daviplata o QR aún por confirmar</small>` : ""}</div>
+    </div>
+    ${L.conSaldo ? fila("+ Plata que tenían al contar", "Efectivo " + fmt(L.sEf) + " · cuentas " + fmt(L.sCu), L.sEf + L.sCu, "") : ""}
+    ${fila("+ Lo que se vendió", plural(L.nV, "venta", "ventas") + " (sin las anuladas)", L.ventas, "")}
+    ${L.anulDesp ? fila("− Ventas anuladas después de contar", plural(L.nAn, "venta", "ventas") + " de antes del conteo: esa plata se devolvió", L.anulDesp, "− ") : ""}
+    ${fila("− Gastos pagados", L.nG ? plural(L.nG, "gasto", "gastos") + ", también los pagados desde la caja" : "No hay gastos registrados", L.gastos, "− ")}
+    ${L.devol ? fila("− Devoluciones a clientes", "“Sacar dinero” → “Devolución a cliente”", L.devol, "− ") : ""}
+    ${L.difs ? fila(L.difs < 0 ? "− Faltó al cerrar caja" : "+ Sobró al cerrar caja", plural(L.nDifs, "cierre", "cierres") + " con diferencia", L.difs, L.difs < 0 ? "− " : "") : ""}
+    <div class="row"><div class="l"><b>= ${L.conSaldo ? "Plata que debería haber" : "Lo vendido menos lo gastado"}</b></div><div class="r" style="color:${neg ? "var(--danger)" : "var(--marca-d)"}">${plata(L.total)}</div></div>
+    ${medios.length || L.consig ? `<details class="liq-det"><summary>Ver por medio de pago</summary><p class="xs muted" style="margin:0 0 4px">Lo que entró y salió por cada medio${L.conSaldo ? ", sin la plata que contaron" : ""}${L.difs ? " ni lo que faltó o sobró al cerrar caja" : ""}.</p>
+      ${medios.map(([m, x]) => `<div class="row"><div class="l">${esc(m)}<div class="small muted">${x.entro ? "Entró " + fmt(x.entro) : ""}${x.entro && x.salio ? " · " : ""}${x.salio ? "salió " + fmt(x.salio) : ""}</div></div><div class="r">${plata(x.entro - x.salio)}</div></div>`).join("")}
+      ${L.consig ? `<div class="row"><div class="l">Consignaciones<div class="small muted">Efectivo que salió de la caja hacia el banco: pasa de efectivo a cuentas</div></div><div class="r">${fmt(L.consig)}</div></div>` : ""}</details>` : ""}
+    ${L.sinEnviar ? `<div class="notice" style="margin-top:12px">Faltan por llegar ${plural(L.sinEnviar, "venta", "ventas")} de otros equipos: se suman solas cuando lleguen.</div>` : ""}
+    ${!L.conSaldo ? `<div class="notice" style="margin-top:12px">Este total no incluye la plata que ya tenían antes del ${esc(diaMesLiq(L.desde))}. Para saber la plata real, cuenten el efectivo y miren los saldos del banco y de Nequi, y anótenlos: desde ahí OLI sigue la cuenta sola.</div>` : ""}
+    ${L.incompleto ? `<div class="notice bad" style="margin-top:12px">${L.conSaldo ? `<b>Vuelvan a contar la plata.</b> La cuenta empieza el ${esc(diaMesLiq(L.desde))} y este equipo solo guarda los últimos ${HIST_DIAS} días de ventas: ya falta información.` : `Este equipo guarda los últimos ${HIST_DIAS} días de ventas: lo de antes no está en esta cuenta.`}</div>` : ""}
+    ${L.sinAnotar ? `<div class="notice" style="margin-top:12px">Al cerrar caja (${esc(L.sinAnotarF.map(diaMesLiq).join(", "))}) faltaron ${fmt(L.sinAnotar)} marcados como «Gasto sin anotar»: aquí no se restan. Si ese gasto todavía no está en Dinero, anótenlo en «Registrar gasto»; si ya lo anotaron, no hagan nada más.</div>` : ""}
+    ${L.otrosRet || L.otrosIng ? `<p class="small muted" style="margin:10px 0 0">${L.otrosRet ? "Salieron " + fmt(L.otrosRet) + " de la caja" : ""}${L.otrosRet && L.otrosIng ? " y entraron " + fmt(L.otrosIng) : L.otrosIng ? "Entraron " + fmt(L.otrosIng) + " a la caja" : ""} por «Otro»: no se suman ni se restan porque no se sabe qué fue. Si fue un pago, anótenlo como gasto (una sola vez); si la plata ya no está, vuelvan a contar.</p>` : ""}
+    ${L.retDueno ? `<p class="small muted" style="margin:10px 0 0">El dueño sacó ${fmt(L.retDueno)} de la caja en este tiempo y aquí se sigue contando como plata del negocio. Si se usó en algo del negocio, anótenlo como gasto; si ya no está (por ejemplo, fue para algo personal), vuelvan a contar la plata.</p>` : ""}
+    ${L.nCompras ? `<p class="small muted" style="margin:10px 0 0">Compras recibidas en este tiempo: ${fmt(L.compras)} (${L.nCompras}). No se restan porque OLI no sabe si ya se pagaron: si ya las pagaron y no las anotaron como gasto, anótenlas como gasto.</p>` : ""}
+    <div class="btns" style="margin-top:12px"><button class="btn ${L.conSaldo ? "ghost" : "pri"} sm" data-act="contarPlata">${ic("moneda", 16)} ${L.conSaldo ? "Volver a contar la plata" : "Anotar la plata que tenemos"}</button></div>
+  </div>`;
+}
+const diaMesLiq = f => parse(f).toLocaleDateString("es-CO", {day: "numeric", month: "long"});
+
+/* ---------- contar la plata (punto de partida) ---------- */
+ACT.contarPlata = () => { const L = liquidez(), conMin = DS.mode === "db";
+  abrir(() => head("¿Cuánta plata tienen?") + `<p style="margin-top:0">Cuenten el efectivo (lo de las cajas y lo guardado) y miren cuánto hay en el banco, Nequi y Daviplata. Desde ese momento, OLI suma lo que se venda y resta los gastos. Antes de guardar, anoten los gastos que ya pagaron y no han registrado.</p>
+  ${L.abiertas.length ? `<div class="notice" style="margin:0 0 10px">Hay ${L.abiertas.length === 1 ? "una caja abierta" : L.abiertas.length + " cajas abiertas"}: guarden apenas terminen de contar, sin vender en el medio.</div>` : ""}
+  <label class="f" for="lq-ef">Efectivo</label><input class="in money" id="lq-ef" inputmode="numeric" placeholder="$0">${L.conSaldo ? `<p class="xs muted" style="margin:4px 0 0">Según OLI debería haber ${esc(fmt(L.efectivo))}.</p>` : ""}
+  <label class="f" for="lq-cu">En cuentas (banco, Nequi, Daviplata…)</label><input class="in money" id="lq-cu" inputmode="numeric" placeholder="$0">${L.conSaldo ? `<p class="xs muted" style="margin:4px 0 0">Según OLI debería haber ${esc(fmt(L.cuentas))}.</p>` : ""}
+  <details style="margin:12px 0"><summary class="small" style="font-weight:700;min-height:40px;display:flex;align-items:center;cursor:pointer">La contaron al empezar un día (antes de vender)</summary><label class="f" for="lq-f">¿Qué día?</label><input class="in" type="date" id="lq-f" max="${S.today}"${conMin ? ` min="${addDays(S.today, -(HIST_DIAS - 5))}"` : ""}><p class="xs muted" style="margin:4px 0 0">OLI sumará todo lo vendido y restará los gastos desde el comienzo de ese día.</p></details>
+  <button class="btn pri xl wide" data-act="doContarPlata">GUARDAR</button>${L.conSaldo ? `<button class="btn ghost sm" style="margin-top:10px" data-act="quitarSaldos">Quitar lo que anotamos</button>` : ""}`); };
+ACT.doContarPlata = async () => {
+  const ef = $("#lq-ef").value.trim(), cu = $("#lq-cu").value.trim(), f = ($("#lq-f") || {}).value || "";
+  if (!ef || !cu) { toast(!ef ? "Escribe cuánto efectivo hay (si no hay, escribe 0)." : "Escribe cuánto hay en cuentas (si no hay, escribe 0).", true); return; }
+  if (f && (f > S.today || (DS.mode === "db" && f < addDays(S.today, -(HIST_DIAS - 5))))) { toast(f > S.today ? "La fecha no puede ser futura." : "Elige un día de los últimos " + (HIST_DIAS - 5) + " días.", true); return; }
+  const desde = f || S.today, t = f ? parse(f).getTime() : Date.now();   // con fecha: al comienzo de ese día; sin fecha: ahora
+  await guardar(async () => { await guardarSaldos({efectivo: Math.max(0, pesosDe(ef)), cuentas: Math.max(0, pesosDe(cu)), desde, t}); cerrar(); draw(); }, "Listo: desde aquí OLI lleva la cuenta");
+};
+ACT.quitarSaldos = async () => { if (await confirmar({titulo: "¿Quitar la plata que anotaron?", texto: "OLI volverá a contar solo desde lo registrado. Quedará anotado en la auditoría.", si: "Sí, quitar", no: "No", peligro: true})) await guardar(async () => { await quitarSaldos(); draw(); }, "Listo"); };
+async function guardarSaldos(o) { exigirAdmin(); await put("config", "saldos", {efectivo: o.efectivo, cuentas: o.cuentas, desde: o.desde, t: o.t, guardado: Date.now(), uid: uidActual()}); audit("PLATA_CONTADA", "saldos", "Efectivo " + fmt(o.efectivo) + " · cuentas " + fmt(o.cuentas) + " · desde " + o.desde); }
+async function quitarSaldos() { exigirAdmin(); await remove("config", "saldos"); audit("PLATA_CONTADA_QUITADA", "saldos", ""); }
 
 /* >>> 75-datos-informes.js */
 /* ============ 75 · datos para informes, contabilidad e integridad ============
@@ -4269,13 +4430,13 @@ async function cargarDemo() {
   await put("dispositivos", DEMO + "c1", {dev: "demo-c1", nombre: "Caja 1 (demo)", uid: "demo-u1", rol: "empleado", vis: now - 4000, pend: 0, ventasPend: 0});
   await put("dispositivos", DEMO + "c2", {dev: "demo-c2", nombre: "Caja 2 (demo)", uid: "demo-u2", rol: "empleado", vis: now - 9 * 60000, pend: 3, ventasPend: 3});
   await guardarConfig({nombre: "OLI (demostración)", metaDia: 500000, margenObjetivo: .6, gastosFijos: [{n: "Arriendo", v: 1500000}, {n: "Nómina", v: 3000000}, {n: "Servicios", v: 365000}], movimientosEmpleado: true, preciosIncluyenImpuesto: true});
-  await put("meta", "app", {modo: "demo", creado: now, version: 2}); Object.assign(NAMES, DEMO_PERSONAS);
+  const prev = col("meta").app; await put("meta", "app", {modo: "demo", creado: (prev && prev.modo === "demo" && prev.creado) || now, version: 2}); Object.assign(NAMES, DEMO_PERSONAS);   // volver a cargar la demo conserva cuándo empezó
 }
 async function borrarDemo() {
   exigirAdmin(); const cols = SHARED_COLS.concat(ADMIN_COLS).filter(c => c !== "meta");
   for (const c of cols) for (const id of Object.keys(DS.c[c] || {})) if (esDemoId(id)) await remove(c, id);
   for (const id of Object.keys(DS.c.stock || {})) if (esDemoId(id)) await remove("stock", id);
-  const m = col("meta").app; if (m && m.modo === "demo") { await remove("meta", "app"); await remove("config", "negocio").catch(() => {}); }
+  const m = col("meta").app; if (m && m.modo === "demo") { await remove("meta", "app"); await remove("config", "negocio").catch(() => {}); const sv = col("config").saldos; if (sv && (sv.guardado || 0) >= (m.creado || 0)) await remove("config", "saldos").catch(() => {}); }   // la plata anotada durante la demo no es real (la de antes, sí)
 }
 
 /* >>> 99-main.js */
@@ -4395,7 +4556,7 @@ const anulacionDe = id => { for (const d of Object.values(col("anulaciones"))) f
 const MIN_ANULAR_EMP = 10;
 function puedeAnular(v) {
   if (v.anulada) return {ok: false, txt: ""};
-  const caja = cajaDe(v.fecha, v.dev); if (caja && cajaEstado(caja) === "cerrada") return {ok: false, txt: "La caja de esta venta ya está cerrada. Si devolviste el dinero, regístralo en Caja como “Sacar dinero”."};
+  const caja = cajaDe(v.fecha, v.dev); if (caja && cajaEstado(caja) === "cerrada") return {ok: false, txt: esc("La caja de esta venta ya está cerrada. " + msgDevolucionCerrada(v))};
   if (esAdmin()) return {ok: true};
   if (v.uid === uidActual() && v.dev === DEV.id && Date.now() - v.t < MIN_ANULAR_EMP * 60000 && caja && cajaEstado(caja) === "abierta") return {ok: true};
   return {ok: false, txt: "Pasaron más de " + MIN_ANULAR_EMP + " minutos o no es tu venta: pídele al administrador que la anule."};

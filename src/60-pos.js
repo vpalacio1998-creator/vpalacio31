@@ -167,12 +167,12 @@ ACT.abrirCajaHoy = () => abrir(() => `${head("Abrir caja")}<p style="margin-top:
   <button class="btn pri xl wide" style="margin-top:14px" data-act="doAbrir">${ic("ok", 22)} ABRIR CAJA</button>`, {});
 ACT.aperturaMonto = (el, d) => { $("#ap-monto").value = Number(d.v) ? fmt(Number(d.v)) : "$0"; };
 ACT.doAbrir = async () => { const v = num($("#ap-monto").value); await guardar(async () => { await abrirCaja(v); cerrar(); draw(); }, "Caja abierta. ¡A vender!"); };
-const MOT_MOV = {retiro: ["Retiro del dueño", "Consignación", "Cambio de billetes", "Otro"], ingreso: ["Base adicional", "Cambio de billetes", "Otro"], gasto: ["Insumos", "Domicilio", "Aseo", "Transporte", "Otro"]};
+const MOT_MOV = {retiro: ["Retiro del dueño", "Consignación", "Devolución a cliente", "Cambio de billetes", "Otro"], ingreso: ["Base adicional", "Cambio de billetes", "Otro"], gasto: ["Insumos", "Domicilio", "Aseo", "Transporte", "Otro"]};
 const TIT_MOV = {retiro: "Sacar dinero de la caja", ingreso: "Entró dinero a la caja", gasto: "Pagué algo con dinero de la caja"};
 const permisoMov = () => esAdmin() || ((col("meta").permisos || {}).movimientosEmpleado !== false);
 ACT.movCaja = (el, d) => { if (!permisoMov()) { toast("Pídele al administrador que haga este movimiento.", true); return; } S.movTipo = d.t;
   abrir(() => `${head(TIT_MOV[S.movTipo])}<label class="f" for="mv-monto">¿Cuánto?</label><input class="in money" id="mv-monto" inputmode="numeric" placeholder="$0">${teclado("mv-monto")}
-  <label class="f">¿Para qué?</label>${sel("mv-mot", MOT_MOV[S.movTipo], "")}<label class="f" for="mv-nota">Detalle (opcional)</label><input class="in plain" id="mv-nota" placeholder="Ej: compra de vasos">
+  <label class="f">¿Para qué?</label>${sel("mv-mot", MOT_MOV[S.movTipo], "")}${S.movTipo === "retiro" ? `<p class="xs muted" style="margin:4px 0 0">¿Devolución de una venta con la caja todavía abierta? Mejor anula la venta en «Ventas de hoy»: la caja se ajusta sola. «Devolución a cliente» es para ventas de cajas ya cerradas.</p>` : ""}<label class="f" for="mv-nota">Detalle (opcional)</label><input class="in plain" id="mv-nota" placeholder="Ej: compra de vasos">
   <button class="btn pri xl wide" style="margin-top:14px" data-act="doMov">GUARDAR</button>`); };
 ACT.doMov = async () => { const m = num($("#mv-monto").value), mot = selVal("mv-mot"), nota = $("#mv-nota").value.trim(); if (!mot) { toast("Elige para qué fue.", true); return; }
   await guardar(async () => { await movimientoCaja(S.movTipo, m, mot + (nota ? " · " + nota : ""), S.movTipo === "gasto" ? "Otros" : ""); cerrar(); draw(); }, "Guardado"); };

@@ -84,11 +84,11 @@ async function cargarDemo() {
   await put("dispositivos", DEMO + "c1", {dev: "demo-c1", nombre: "Caja 1 (demo)", uid: "demo-u1", rol: "empleado", vis: now - 4000, pend: 0, ventasPend: 0});
   await put("dispositivos", DEMO + "c2", {dev: "demo-c2", nombre: "Caja 2 (demo)", uid: "demo-u2", rol: "empleado", vis: now - 9 * 60000, pend: 3, ventasPend: 3});
   await guardarConfig({nombre: "OLI (demostración)", metaDia: 500000, margenObjetivo: .6, gastosFijos: [{n: "Arriendo", v: 1500000}, {n: "Nómina", v: 3000000}, {n: "Servicios", v: 365000}], movimientosEmpleado: true, preciosIncluyenImpuesto: true});
-  await put("meta", "app", {modo: "demo", creado: now, version: 2}); Object.assign(NAMES, DEMO_PERSONAS);
+  const prev = col("meta").app; await put("meta", "app", {modo: "demo", creado: (prev && prev.modo === "demo" && prev.creado) || now, version: 2}); Object.assign(NAMES, DEMO_PERSONAS);   // volver a cargar la demo conserva cuándo empezó
 }
 async function borrarDemo() {
   exigirAdmin(); const cols = SHARED_COLS.concat(ADMIN_COLS).filter(c => c !== "meta");
   for (const c of cols) for (const id of Object.keys(DS.c[c] || {})) if (esDemoId(id)) await remove(c, id);
   for (const id of Object.keys(DS.c.stock || {})) if (esDemoId(id)) await remove("stock", id);
-  const m = col("meta").app; if (m && m.modo === "demo") { await remove("meta", "app"); await remove("config", "negocio").catch(() => {}); }
+  const m = col("meta").app; if (m && m.modo === "demo") { await remove("meta", "app"); await remove("config", "negocio").catch(() => {}); const sv = col("config").saldos; if (sv && (sv.guardado || 0) >= (m.creado || 0)) await remove("config", "saldos").catch(() => {}); }   // la plata anotada durante la demo no es real (la de antes, sí)
 }

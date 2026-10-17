@@ -57,9 +57,11 @@ async function registrarVenta(opts) {
   if (desc > 0) audit("DESCUENTO", venta.id, fmt(desc) + " sobre " + fmt(sub));
   return venta;
 }
+const msgDevolucionCerrada = v => v.m === "Efectivo" ? "Si devolviste el dinero, regístralo en Caja: “Sacar dinero” → “Devolución a cliente”."
+  : "Se pagó con " + v.m + ": si devolviste el dinero por ese medio, no lo saques de la caja; el administrador lo anota en Dinero → Registrar gasto (categoría Otros), con el medio por el que se devolvió" + (v.m === "QR Bancolombia" ? " (por QR: Transferencia)." : ".");
 async function anularVenta(v, motivo) {
   const caja = cajaDe(v.fecha, v.dev);
-  if (caja && cajaEstado(caja) === "cerrada") throw new Error("Esta venta es de una caja ya cerrada. Si devolviste el dinero, regístralo en Caja como “Sacar dinero”.");
+  if (caja && cajaEstado(caja) === "cerrada") throw new Error("Esta venta es de una caja ya cerrada. " + msgDevolucionCerrada(v));
   const propio = v.uid === uidActual() && v.dev === DEV.id && Date.now() - v.t < 10 * 60000 && caja && cajaEstado(caja) === "abierta";
   if (!esAdmin() && !propio) throw Object.assign(new Error("denied"), {code: "denied"});
   const id = cajaId(v.fecha, DEV.id), cur = col("anulaciones")[id] || {fecha: v.fecha, dev: DEV.id, items: []};

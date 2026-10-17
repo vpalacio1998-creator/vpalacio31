@@ -8,7 +8,7 @@ VIEWS.finanzas = () => {
   const rent = rentabilidad(a, b), orden = {util: (x, y) => y.util - x.util, uds: (x, y) => y.uds - x.uds, margen: (x, y) => (y.margen || 0) - (x.margen || 0), bajo: (x, y) => (x.margen || 9) - (y.margen || 9)}[S.rentOrden];
   const pts = serie.length > 45 ? serie.filter((_, i) => i % Math.ceil(serie.length / 45) === 0) : serie;
   const mes = finanzas(firstOfMonth(S.today), S.today), fijos = totalFijos(), diaN = parse(S.today).getDate(), dMes = parse(lastOfMonth(S.today)).getDate(), uds = mes.uds, gU = uds ? mes.bruta / uds : 0, falta = Math.max(0, fijos - mes.bruta);
-  return cabecera("Dinero", periodoTxt(a, b), `<button class="btn pri xl" data-act="nuevoGasto">${ic("plus", 20)} REGISTRAR GASTO</button>`) + `<div style="margin-bottom:14px">${rangoControles()}</div>
+  return cabecera("Dinero", "Cuánta plata hay y cómo te fue", `<button class="btn pri xl" data-act="nuevoGasto">${ic("plus", 20)} REGISTRAR GASTO</button>`) + liquidezHTML() + `<h3 class="liq-sep">Cómo te fue · ${esc(periodoTxt(a, b))}</h3><div style="margin-bottom:14px">${rangoControles()}</div>
   <div class="card"><h3>Cómo te fue</h3>
     <div class="row"><div class="l"><b>Ventas</b><div class="small muted">Lo que entró por vender · ${f.n} ventas</div></div><div class="r big" style="font-size:24px">${fmt(f.ventas)}</div></div>
     <div class="row"><div class="l">− Costo de lo vendido<div class="small muted">Lo que te costó lo que vendiste${f.sinCosto ? " · " + fmtN(f.sinCosto, 0) + " uds sin costo" : ""}${f.sinCostoHelado ? " · falta el costo de algún sabor de helado" : ""}</div></div><div class="r">${fmt(f.cogs)}</div></div>
@@ -24,13 +24,18 @@ VIEWS.finanzas = () => {
 };
 ACT.rentOrden = (el, d) => { S.rentOrden = d.v; draw(); };
 ACT.nuevoGasto = () => abrir(() => head("Registrar gasto") + `<label class="f" for="gs-v">¿Cuánto pagaste?</label><input class="in money" id="gs-v" inputmode="numeric" placeholder="$0" style="font-size:24px;min-height:58px" autofocus>${teclado("gs-v")}
-  <label class="f">¿En qué?</label>${sel("gs-cat", CATS_GASTO, "")}<label class="f">¿Con qué pagaste?</label>${sel("gs-m", ["Efectivo", "Transferencia", "Nequi", "Tarjeta"], "Efectivo")}
+  <label class="f">¿En qué?</label>${sel("gs-cat", CATS_GASTO, "")}<label class="f">¿Con qué pagaste?</label>${sel("gs-m", ["Efectivo", "Transferencia", "Nequi", "Daviplata", "Tarjeta", "Otro"], "Efectivo")}<p class="xs muted" style="margin:4px 0 0">Si lo estás pagando con plata de una caja que sigue abierta, anótalo en esa caja → «Pagué algo» y no aquí. Si esa caja ya se cerró (por ejemplo, faltó plata y se marcó «Gasto sin anotar»), anótalo aquí, una sola vez.</p>
+  ${conteoAhora(saldosIni()) ? `<label class="f">Contaron la plata el ${esc(diaCorto(saldosIni().desde))} a las ${esc(hora(saldosIni().t))}. Si el gasto es de ese día: ¿ya estaba pagado cuando contaron?</label>${sel("gs-antes", ["No, se pagó después", "Sí, ya estaba pagado"], "")}` : ""}
   <details style="margin:12px 0"><summary class="small" style="font-weight:700;min-height:40px;display:flex;align-items:center;cursor:pointer">Más datos (opcional)</summary><label class="f" for="gs-d">Detalle</label><input class="in plain" id="gs-d" placeholder="Ej: recibo de luz">
     <label class="f" for="gs-prov">Proveedor o a quién le pagaste</label><input class="in plain" id="gs-prov"><div class="split"><div><label class="f" for="gs-base">Base (sin IVA)</label><input class="in money" id="gs-base" inputmode="numeric"></div><div><label class="f" for="gs-iva">IVA</label><input class="in money" id="gs-iva" inputmode="numeric"></div></div>
-    <label class="f" for="gs-ret">Retención (si aplica)</label><input class="in money" id="gs-ret" inputmode="numeric"><label class="f" for="gs-sop">Soporte (enlace, número o código)</label><input class="in plain" id="gs-sop"><label class="f" for="gs-f">Fecha</label><input class="in" type="date" id="gs-f" value="${S.today}"></details>
+    <label class="f" for="gs-ret">Retención (si aplica)</label><input class="in money" id="gs-ret" inputmode="numeric"><label class="f" for="gs-sop">Soporte (enlace, número o código)</label><input class="in plain" id="gs-sop"><label class="f" for="gs-f">Fecha</label><input class="in" type="date" id="gs-f" value="${S.today}" max="${S.today}"></details>
   <button class="btn pri xl wide" data-act="doGasto">GUARDAR GASTO</button>`);
-ACT.doGasto = async () => { const v = num($("#gs-v").value), cat = selVal("gs-cat"); if (!v) { toast("Escribe cuánto pagaste.", true); return; } if (!cat) { toast("Elige en qué fue el gasto.", true); return; }
-  await guardar(async () => { await guardarGasto({fecha: $("#gs-f").value || S.today, cat, desc: $("#gs-d").value.trim(), valor: v, m: selVal("gs-m") || "Efectivo", proveedor: $("#gs-prov").value.trim(), base: num($("#gs-base").value), iva: num($("#gs-iva").value), retencion: num($("#gs-ret").value), soporte: {ref: $("#gs-sop").value.trim()}}); cerrar(); }, "Gasto guardado"); };
+ACT.doGasto = async () => { const v = num($("#gs-v").value), cat = selVal("gs-cat"), fecha = $("#gs-f").value || S.today; if (!v) { toast("Escribe cuánto pagaste.", true); return; } if (!cat) { toast("Elige en qué fue el gasto.", true); return; }
+  if (fecha > S.today) { toast("La fecha no puede ser futura: anota el gasto cuando lo pagues.", true); return; }
+  const g = {fecha, cat, desc: $("#gs-d").value.trim(), valor: v, m: selVal("gs-m") || "Efectivo", proveedor: $("#gs-prov").value.trim(), base: num($("#gs-base").value), iva: num($("#gs-iva").value), retencion: num($("#gs-ret").value), soporte: {ref: $("#gs-sop").value.trim()}};
+  // el mismo día en que contaron la plata: si ya estaba pagado antes de contar, el conteo ya lo descontó (no se resta dos veces)
+  const s = saldosIni(); if (conteoAhora(s) && fecha === s.desde) { const r = selVal("gs-antes"); if (!r) { toast("Dinos si el gasto ya estaba pagado cuando contaron la plata.", true); return; } if (r.indexOf("Sí") === 0) g.antesConteo = s.t; }
+  await guardar(async () => { await guardarGasto(g); cerrar(); }, "Gasto guardado"); };
 ACT.borrarGasto = async (el, d) => { if (await confirmar({titulo: "¿Borrar este gasto?", texto: "Quedará anotado en la auditoría.", si: "Sí, borrar", no: "No", peligro: true})) await guardar(() => borrarGasto(d.id), "Gasto borrado"); };
 
 /* ---------- análisis ---------- */

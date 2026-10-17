@@ -259,6 +259,16 @@ begin
   set role authenticated; perform t_as(a);
   r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','pg3','col','meta','id','purgas','t',80200,'data','{"cortes":{}}'::jsonb)), 'dA', '1.0');
   reset role;
+  -- T29: la plata contada (config/saldos) la guarda solo el administrador y el empleado no la puede leer ni cambiar
+  reset role; set role authenticated; perform t_as(a);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','sl1','col','config','id','saldos','t',90000,'data','{"efectivo":500000,"cuentas":1200000,"desde":"2026-10-17","t":90000,"uid":"x"}'::jsonb)), 'dA', '1.0');
+  perform t_assert(r->0->>'status' = 'applied', 'el administrador guarda la plata contada');
+  reset role; set role authenticated; perform t_as(e1);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','sl2','col','config','id','saldos','t',90100,'data','{"efectivo":1,"cuentas":1,"desde":"2026-10-17","t":90100}'::jsonb)), 'd1', '1.0');
+  perform t_assert(r->0->>'status' = 'rejected', 'el empleado no puede cambiar la plata contada (rechazado en el servidor)');
+  perform t_assert((select count(*) from oli_docs where collection = 'config') = 0, 'el empleado no ve la plata contada (RLS)');
+  reset role;
+  perform t_assert((select (data->>'efectivo')::int from oli_docs where collection = 'config' and doc_id = 'saldos') = 500000, 'la plata contada quedó como la guardó el administrador');
   -- T27: visita diaria — la clave pública (anon) puede llamar oli_ping y solo recibe la hora (no datos)
   reset role; set role anon;
   perform t_assert(oli_ping() is not null, 'anon puede llamar oli_ping (visita diaria)');
