@@ -242,6 +242,23 @@ begin
   reset role; set role authenticated; perform t_as(e1);
   r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','cf8','col','cajashelado','id','2026-10-05_d1','t',60700,'data','{"fecha":"2026-10-05","dev":"d1","items":[{"id":"c20","t":60000,"sabor":"h-choco","motivo":"acabo","uid":"x"},{"id":"z22","t":60400,"anula":"c20","uid":"x"},{"id":"c23","t":60500,"sabor":"h-choco","motivo":"acabo","uid":"x"},{"id":"z23","t":60600,"anula":"c23","uid":"a"},{"id":"c24","t":60700,"sabor":"h-choco","motivo":"acabo","uid":"x"}]}'::jsonb)), 'd1', '1.0');
   perform t_assert(r->0->>'status' = 'applied' and (select qty from inventory_current where product_id = 'h-choco') = v - 1, 'la tablet reenvía su documento con la anulación del administrador y su cambio nuevo entra');
+  -- T28: datos borrados por el administrador antes de una fecha no vuelven (aunque un equipo los reenvíe)
+  reset role; set role authenticated; perform t_as(a);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','pg1','col','meta','id','purgas','t',80000,'data','{"cortes":{"ventas":"2026-10-04"}}'::jsonb)), 'dA', '1.0');
+  perform t_assert(r->0->>'status' = 'applied', 'el administrador fija la fecha de corte');
+  reset role; set role authenticated; perform t_as(e1);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','pg2','col','ventas','id','2026-10-02_d1','t',80100,'data', jsonb_build_object('fecha','2026-10-02','dev','d1','ventas', jsonb_build_array(
+         jsonb_build_object('id','d1-viejo-1','n',90,'num','Caja 1 #90','t',80100,'fecha','2026-10-02','uid',e1::text,'dev','d1','m','Efectivo','total',5000,'sub',5000,'desc',0,'estado','confirmada','items','[{"pid":"p1","n":"X","q":1,"p":5000,"d":0}]'::jsonb))))), 'd1', '1.0');
+  reset role;
+  perform t_assert(r->0->>'status' = 'purged' and not exists (select 1 from oli_docs where collection = 'ventas' and doc_id = '2026-10-02_d1') and not exists (select 1 from sales where id = 'd1-viejo-1'), 'una venta anterior al corte no se guarda (responde purged)');
+  set role authenticated; perform t_as(e1);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','pg2','col','ventas','id','2026-10-02_d1','t',80100,'data','{}'::jsonb)), 'd1', '1.0');
+  perform t_assert(r->0->>'status' = 'duplicate', 'reenviarla da duplicado (ya se dio por enviada)');
+  reset role;
+  perform t_assert((select count(*) from oli_docs where collection = 'ventas' and doc_id = '2026-10-03_d1') = 1, 'las ventas del día del corte o después no se tocan');
+  set role authenticated; perform t_as(a);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','pg3','col','meta','id','purgas','t',80200,'data','{"cortes":{}}'::jsonb)), 'dA', '1.0');
+  reset role;
   -- T27: visita diaria — la clave pública (anon) puede llamar oli_ping y solo recibe la hora (no datos)
   reset role; set role anon;
   perform t_assert(oli_ping() is not null, 'anon puede llamar oli_ping (visita diaria)');

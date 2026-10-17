@@ -145,7 +145,7 @@ async function sbCargar(name, gen) {
 async function sbCargarTodo(cols) {
   if (SB.sinVerificar || DS.needsLogin || !DS.uid) return;                                  // sin nadie adentro no se pide nada (sin sesión el servidor respondería vacío)
   if (SB.cargando || SB.cargasEnCamino > 0) { SB.recargar = true; return; }
-  SB.cargando = true; SB.recargar = false; const gen = SB.gen, lista = cols || sbCols(); let cortado = false;
+  SB.cargando = true; SB.recargar = false; const gen = SB.gen, lista = (cols || sbCols()).slice().sort((x, y) => (y === "meta") - (x === "meta")); let cortado = false;   // "meta" primero: trae lo que el administrador borró antes de revisar ventas y cajas
   try {
     for (const n of lista) {
       if (cortado) { DS.ready[n] = true; continue; }

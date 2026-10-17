@@ -426,6 +426,10 @@ $$ with nuevos as (
                 and not exists (select 1 from oli_docs o, jsonb_array_elements(coalesce(o.data->'items','[]'::jsonb)) x
                                 where o.org_id = p_org and o.collection = 'cajashelado' and o.doc_id = p_doc and x->>'id' = n.it->>'anula' and not (x ? 'anula'))))) $$;
 
+-- datos borrados por el administrador: meta/purgas guarda, por colección, la fecha desde la que se conservan ({"cortes": {"ventas": "2026-10-13"}})
+create or replace function oli.purga_corte(p_org uuid, c text) returns text language sql stable security definer set search_path = public as
+$$ select o.data->'cortes'->>c from oli_docs o where o.org_id = p_org and o.collection = 'meta' and o.doc_id = 'purgas' $$;
+
 create or replace function oli_apply(p_ops jsonb, p_device_id text default null, p_app_version text default null)
 returns jsonb language plpgsql security definer set search_path = public as
 $$
@@ -459,6 +463,10 @@ begin
       insert into sync_ops (op_id, org_id, store_id, device_id, user_id, collection, doc_id, kind, device_ts, status, detail) values (opid, mem.org_id, mem.store_id, dev, uid, c, id, case when del then 'del' else 'set' end, ts, 'rejected', detail);
       insert into sync_conflicts (org_id, store_id, kind, collection, doc_id, devices, detail) values (mem.org_id, mem.store_id, 'rejected_op', c, id, array[dev], jsonb_build_object('motivo', detail, 'user', uid));
       res := res || jsonb_build_object('op_id', opid, 'status', 'rejected', 'detail', detail); continue;
+    end if;
+    if not del and d ? 'fecha' and oli.purga_corte(mem.org_id, c) is not null and d->>'fecha' < oli.purga_corte(mem.org_id, c) then   -- datos que el administrador borró (antes de una fecha): no vuelven
+      insert into sync_ops (op_id, org_id, store_id, device_id, user_id, collection, doc_id, kind, device_ts, status, detail) values (opid, mem.org_id, mem.store_id, dev, uid, c, id, 'set', ts, 'purged', 'borrado por el administrador: antes de ' || oli.purga_corte(mem.org_id, c));
+      res := res || jsonb_build_object('op_id', opid, 'status', 'purged', 'detail', 'borrado por el administrador: antes de ' || oli.purga_corte(mem.org_id, c)); continue;
     end if;
     select * into cur from oli_docs where org_id = mem.org_id and collection = c and doc_id = id for update;
     if del then

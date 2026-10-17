@@ -212,11 +212,26 @@ function persistCol(name) {
 /* integridad: ventas, movimientos de caja, cierres, mermas y anulaciones nunca se borran. Si un documento del servidor
    llega con menos elementos de los que este equipo ya vio (otra ventana o alguien lo sobrescribió), el administrador lo restaura uniendo por id. */
 const UNION = {ventas: ["ventas"], cajas: ["movs", "cierres"], mermas: ["items"], anulaciones: ["items"], confirmaciones: ["items"], reaperturas: ["items"], movinv: ["items"], demandaperdida: ["items"], cajashelado: ["items"]};
+/* Datos que el administrador borró (meta/purgas: por colección, la fecha desde la que se conservan; p. ej. ventas de prueba
+   antes de abrir). No se muestran, no se restauran y lo pendiente de esas fechas se descarta: el servidor tampoco lo guarda. */
+const cortesPurga = () => ((((DS.c.meta || {}).purgas) || {}).cortes) || {};
+const purgado = (n, doc) => { const c = cortesPurga()[n]; return !!(typeof c === "string" && c && doc && typeof doc.fecha === "string" && doc.fecha < c); };
+function descartarPurgados() {
+  const cortes = cortesPurga(); if (!Object.keys(cortes).length) return;
+  const ops = [], fuera = [];
+  for (const op of Object.values(OUT)) if (!op.del && purgado(op.col, op.data)) { delete OUT[op.path]; ops.push(["outbox", "del", op.path]); fuera.push(op.path); }
+  for (const n of Object.keys(cortes)) {
+    const m = DS.c[n]; if (!m) continue; let cambio = false; const c = Object.assign({}, m);
+    for (const [id, d] of Object.entries(m)) if (purgado(n, d)) { delete c[id]; cambio = true; }
+    if (cambio) { DS.c[n] = c; persistCol(n); }
+  }
+  if (ops.length) { IDB.tx(ops).catch(() => {}); SYNC.rechazadas = rechazadas().length; recalcEstado(); audit("DATOS_DESCARTADOS", "", fuera.length + " envío(s) pendientes de fechas que el administrador borró: " + fuera.join(", ")); }
+}
 function restaurarPerdidos(name, map) {
   if (!UNION[name] || !DS.isAdmin || DS.mode !== "db") return;                                   // también en la primera carga: si el servidor perdió algo, lo guardado en este equipo lo restaura
   const prev = DS.c[name] || {}, fix = [];
   for (const [id, old] of Object.entries(prev)) {
-    if (OUT[pathOf(name, id)] || String(id).startsWith("demo-") || (RANGED.has(name) && old.fecha && old.fecha < addDays(S.today, -HIST_DIAS + 2))) continue; const cur = map[id]; let doc = cur ? Object.assign({}, cur) : Object.assign({}, old), cambio = !cur;
+    if (OUT[pathOf(name, id)] || String(id).startsWith("demo-") || purgado(name, old) || (RANGED.has(name) && old.fecha && old.fecha < addDays(S.today, -HIST_DIAS + 2))) continue; const cur = map[id]; let doc = cur ? Object.assign({}, cur) : Object.assign({}, old), cambio = !cur;
     for (const f of UNION[name]) { const ids = new Set(((cur && cur[f]) || []).map(x => x && x.id)), faltan = (old[f] || []).filter(x => x && x.id && !ids.has(x.id)); if (faltan.length) { doc[f] = ((cur && cur[f]) || []).concat(faltan).sort((x, y) => (x.t || 0) - (y.t || 0)); cambio = true; } }
     if (name === "cajas" && old.apertura && cur && !cur.apertura) { doc.apertura = old.apertura; cambio = true; }
     if (cambio) fix.push([id, doc]);
@@ -227,7 +242,8 @@ function aplicarSnapshot(name, map) {
   restaurarPerdidos(name, map);
   const m = Object.assign({}, map);
   for (const op of Object.values(OUT)) if (op.col === name) { if (op.del) delete m[op.id]; else m[op.id] = op.data; }   // lo pendiente local manda hasta que suba
-  DS.c[name] = m; DS.ready[name] = true; DS.remoteSeen = true; DS.lastRemote = Date.now(); netFail = false; persistCol(name); newSalesFeed(name); changed();
+  DS.c[name] = m; DS.ready[name] = true; DS.remoteSeen = true; DS.lastRemote = Date.now(); netFail = false; persistCol(name);
+  descartarPurgados(); newSalesFeed(name); changed();
 }
 
 /* ---------- suscripciones en tiempo real ---------- */
