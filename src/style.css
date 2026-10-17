@@ -297,3 +297,9 @@ details.help span{display:block;font-weight:500;font-size:13px;line-height:1.35;
 .liq-det{margin-top:8px}.liq-det summary{font-weight:700;font-size:14px;min-height:40px;display:flex;align-items:center;cursor:pointer}
 .liq-sep{font-size:15px;margin:18px 0 8px;color:var(--muted)}
 .kpi small.liq-pend{color:var(--warn);font-weight:700;margin-top:4px}
+/* caja: acumulado del mes */
+.cm-nav{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;text-align:center}.cm-nav b{font-size:18px}
+.lnk{background:none;border:0;padding:4px 0;font:inherit;font-weight:700;color:var(--marca-d);text-decoration:underline;text-underline-offset:3px;cursor:pointer;min-height:36px;white-space:nowrap}
+/* 5:30 p. m.: luz de afuera */
+.notice.luz{display:flex;gap:10px;align-items:center;margin:0 0 12px;background:var(--warn-soft);border-color:var(--warn);color:var(--ink)}.notice.luz span{flex:1;min-width:0}.notice.luz>svg{color:var(--warn);flex:none}
+.luz-v{text-align:center;padding:8px 4px}.luz-v>svg{color:var(--warn)}.luz-v h2{margin:10px 0 6px}.luz-v p{font-size:20px;margin:0 0 18px}

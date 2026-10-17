@@ -302,6 +302,12 @@ details.help span{display:block;font-weight:500;font-size:13px;line-height:1.35;
 .liq-det{margin-top:8px}.liq-det summary{font-weight:700;font-size:14px;min-height:40px;display:flex;align-items:center;cursor:pointer}
 .liq-sep{font-size:15px;margin:18px 0 8px;color:var(--muted)}
 .kpi small.liq-pend{color:var(--warn);font-weight:700;margin-top:4px}
+/* caja: acumulado del mes */
+.cm-nav{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;text-align:center}.cm-nav b{font-size:18px}
+.lnk{background:none;border:0;padding:4px 0;font:inherit;font-weight:700;color:var(--marca-d);text-decoration:underline;text-underline-offset:3px;cursor:pointer;min-height:36px;white-space:nowrap}
+/* 5:30 p. m.: luz de afuera */
+.notice.luz{display:flex;gap:10px;align-items:center;margin:0 0 12px;background:var(--warn-soft);border-color:var(--warn);color:var(--ink)}.notice.luz span{flex:1;min-width:0}.notice.luz>svg{color:var(--warn);flex:none}
+.luz-v{text-align:center;padding:8px 4px}.luz-v>svg{color:var(--warn)}.luz-v h2{margin:10px 0 6px}.luz-v p{font-size:20px;margin:0 0 18px}
 
 </style>
 <div class="app" id="app">
@@ -325,7 +331,7 @@ details.help span{display:block;font-weight:500;font-size:13px;line-height:1.35;
 <div class="sheet hidden" id="sheet"><div class="bg"></div><div class="panel" role="dialog" aria-modal="true" id="panel"></div></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script>window.OLI_BUILD="5f9928e5";</script>
+<script>window.OLI_BUILD="b6a2820f";</script>
 <script>
 (function(){
 "use strict";
@@ -418,6 +424,7 @@ const IC = {
   bolsa: '<path d="M6 8h12l-1 12H7L6 8z"/><path d="M9 8a3 3 0 0 1 6 0"/>',
   insumo: '<path d="M12 3c4 4 6 7 6 10a6 6 0 0 1-12 0c0-3 2-6 6-10z"/>',
   atras: '<path d="M15 5l-7 7 7 7"/>',
+  luz: '<path d="M9 18h6M10 21h4"/><path d="M12 3a6 6 0 0 0-3.6 10.8c.7.5 1.1 1.3 1.1 2.2h5c0-.9.4-1.7 1.1-2.2A6 6 0 0 0 12 3z"/>',
   sol: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.2 5.2 7 7M17 17l1.8 1.8M18.8 5.2 17 7M7 17l-1.8 1.8"/>'
 };
 const ic = (n, sz = 22) => `<svg class="ic" width="${sz}" height="${sz}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${IC[n] || IC.bolsa}</svg>`;
@@ -2220,11 +2227,12 @@ function cajaCardHTML(c, mia) {
     ${ci ? `<div class="notice ${Math.abs(ci.dif) < 1 ? "ok" : "bad"}" style="margin:10px 0 0"><b>${Math.abs(ci.dif) < 1 ? "La caja cuadró" : ci.dif > 0 ? "Sobran " + fmt(ci.dif) : "Faltan " + fmt(-ci.dif)}</b><br>Contado: ${fmt(ci.contado)}${ci.obs ? " · " + esc(ci.obs) : ""}</div>` : ""}` : ""}
     ${adm && st === "cerrada" ? `<button class="btn ghost sm" style="margin-top:10px" data-act="reabrir" data-id="${esc(c.id)}">Reabrir caja</button>` : ""}</div>`;
 }
-const CHECK_AP = [["caja", "Caja abierta con el efectivo inicial"], ["inv", "Revisé el inventario"], ["neveras", "Las neveras funcionan"], ["prods", "Los productos están disponibles"], ["limpieza", "El local está limpio"]];
+const CHECK_AP = [["caja", "Caja abierta con el efectivo inicial"], ["inv", "Revisé el inventario"], ["neveras", "Las neveras funcionan"], ["luces", "Prendí todas las luces"], ["musica", "Puse la música"], ["prods", "Los productos están disponibles"], ["limpieza", "El local está limpio"]];
+const CHECK_TARDE = [["luzAfuera", "Prendí la luz de afuera (a las 5:30 p. m.)"]];
 const CHECK_CI = [["caja", "Caja cerrada"], ["efectivo", "Efectivo contado"], ["inv", "Revisé el inventario"], ["mermas", "Anoté lo que se dañó"], ["novedades", "Anoté las novedades"]];
 function checklistHTML(grupo, items) {
   const cl = checklistDe(S.today)[grupo] || {}, hechos = items.filter(([k]) => cl[k]).length;
-  return `<div class="card"><div class="row" style="padding-top:0"><h3 style="margin:0">${grupo === "apertura" ? "Al abrir" : "Al cerrar"}</h3><span class="pill ${hechos === items.length ? "ok" : ""}">${hechos}/${items.length}</span></div>${items.map(([k, t]) => `<label class="check" style="width:100%;padding:6px 0;min-height:48px"><input type="checkbox" data-act-change="check" data-g="${grupo}" data-k="${k}" ${cl[k] ? "checked" : ""}> ${esc(t)}</label>`).join("")}</div>`;
+  return `<div class="card"><div class="row" style="padding-top:0"><h3 style="margin:0">${({apertura: "Al abrir", tarde: "En la tarde", cierre: "Al cerrar"})[grupo] || ""}</h3><span class="pill ${hechos === items.length ? "ok" : ""}">${hechos}/${items.length}</span></div>${items.map(([k, t]) => `<label class="check" style="width:100%;padding:6px 0;min-height:48px"><input type="checkbox" data-act-change="check" data-g="${grupo}" data-k="${k}" ${cl[k] ? "checked" : ""}> ${esc(t)}</label>`).join("")}</div>`;
 }
 document.addEventListener("change", e => { const t = e.target; if (t.dataset && t.dataset.actChange === "check") toggleChecklist(t.dataset.g, t.dataset.k).catch(err => toast(errMsg(err), true)); });
 const cajaPendiente = () => cajasAll().filter(x => x.dev === DEV.id && x.fecha < S.today && x.apertura && cajaEstado(x) === "abierta").sort((a, b) => b.fecha.localeCompare(a.fecha))[0] || null;
@@ -2237,8 +2245,9 @@ VIEWS.caja = () => {
   else principal = cajaCardHTML(c, true) + (st === "abierta" ? `<div class="btns" style="margin-bottom:14px"><button class="btn ghost" style="flex:1" data-act="movCaja" data-t="retiro">Sacar dinero</button><button class="btn ghost" style="flex:1" data-act="movCaja" data-t="ingreso">Entró dinero</button><button class="btn ghost" style="flex:1" data-act="movCaja" data-t="gasto">Pagué algo</button></div><button class="btn pri xl wide" data-act="cerrarCaja">${ic("lock", 22)} CERRAR CAJA</button>` : "");
   const pend = ventasOk().filter(v => v.pend && v.fecha >= addDays(S.today, -3));
   const adm = esAdmin();
-  return cabecera("Caja", "Hoy · " + diaLargo(S.today) + (DEV.nombre ? " · " + esc(DEV.nombre) : "")) + avisoCajaPendiente() + (st === "sin" ? principal : cajaCardHTML(c, true)) +
-    (st !== "sin" ? checklistHTML("apertura", CHECK_AP) : "") + (st === "abierta" ? checklistHTML("cierre", CHECK_CI) : "") +
+  if (adm && S.cajaVista === "mes") return cabecera("Caja", "Acumulado del mes") + vistaCajaSeg() + cajaMesHTML();
+  return cabecera("Caja", "Hoy · " + diaLargo(S.today) + (DEV.nombre ? " · " + esc(DEV.nombre) : "")) + (adm ? vistaCajaSeg() : "") + avisoCajaPendiente() + (st === "sin" ? principal : cajaCardHTML(c, true)) +
+    (st !== "sin" ? checklistHTML("apertura", CHECK_AP) : "") + (st === "abierta" ? checklistHTML("tarde", CHECK_TARDE) + checklistHTML("cierre", CHECK_CI) : "") +
     (pend.length ? `<div class="card"><h3>Pagos por confirmar</h3><p class="small muted" style="margin-top:-4px">Mira el aviso de tu banco o billetera. Si ya llegó, toca “Ya llegó”.</p>${pend.slice(-8).reverse().map(v => `<div class="row"><div class="l"><b>${fmt(v.total)}</b> <span class="pill">${esc(v.m)}</span><div class="small muted">${hora(v.t)}${v.ref ? " · " + esc(v.ref) : ""}</div></div><button class="btn pri sm" data-act="ya" data-id="${esc(v.id)}">Ya llegó</button></div>`).join("")}</div>` : "") +
     (st === "abierta" ? `<div class="btns" style="margin-bottom:14px"><button class="btn ghost" style="flex:1" data-act="movCaja" data-t="retiro">Sacar dinero</button><button class="btn ghost" style="flex:1" data-act="movCaja" data-t="ingreso">Entró dinero</button><button class="btn ghost" style="flex:1" data-act="movCaja" data-t="gasto">Pagué algo</button></div><button class="btn pri xl wide" data-act="cerrarCaja">${ic("lock", 22)} CERRAR CAJA</button>` : "") +
     ventasHoyHTML() +
@@ -2694,6 +2703,106 @@ ACT.vdCal = () => { S.vdCal = !S.vdCal; S.vdMes = vdFecha().slice(0, 7); draw();
 ACT.vdMes = (el, d) => { const m = masMes(S.vdMes || vdFecha().slice(0, 7), Number(d.v) || 0); if (m > S.today.slice(0, 7)) return; S.vdMes = m; draw(); };
 ACT.vdElegir = (el, d) => { const f = d.f; if (!f || f > S.today) return; S.vdDia = f; S.vdMes = f.slice(0, 7); S.vdCal = false; draw(); };   // al escoger, el calendario se recoge
 ACT.vdMover = (el, d) => { const f = addDays(vdFecha(), Number(d.v) || 0); if (f > S.today) return; S.vdDia = f; S.vdMes = f.slice(0, 7); draw(); };
+
+/* >>> 65-caja-mes.js */
+/* ============ 65 · caja: acumulado del mes (administrador) ============
+   En Caja, además de "Hoy", el administrador ve el mes acumulado: lo vendido, los gastos (los de Dinero y los pagados desde
+   la caja), las devoluciones y lo que faltó o sobró al cerrar caja, día por día y acumulado. Usa las mismas reglas que
+   "¿Cuánta plata hay?" (74-liquidez) para que los dos números cuadren. La utilidad con el costo de lo vendido está en Dinero → Mes. */
+S.cajaVista = "hoy"; S.cajaMes = null;
+const vistaCajaSeg = () => `<div class="seg" role="group" aria-label="Qué ver" style="margin-bottom:14px"><button data-act="cajaVista" data-v="hoy" aria-pressed="${S.cajaVista !== "mes"}">Hoy</button><button data-act="cajaVista" data-v="mes" aria-pressed="${S.cajaVista === "mes"}">Acumulado del mes</button></div>`;
+const mesCaja = () => S.cajaMes && S.cajaMes <= S.today.slice(0, 7) ? S.cajaMes : S.today.slice(0, 7);
+const primerMesDatos = () => { const fs = ventasOk().map(v => v.fecha).concat(cajasAll().map(c => c.fecha), Object.values(col("gastos")).map(g => g && g.fecha)).filter(Boolean).sort(); return (fs[0] || S.today).slice(0, 7); };
+
+function resumenMes(mes) {
+  const a = mes + "-01", fin = lastOfMonth(a), b = fin < S.today ? fin : S.today, en = f => !!f && f >= a && f <= b;
+  const L = liquidez({a, b}), dias = {}, dia = f => dias[f] || (dias[f] = {f, vendido: 0, n: 0, gastos: 0, devol: 0, dif: 0, cajas: 0, abiertas: 0});
+  const porMedio = {}, porCat = {};
+  for (const v of ventasOk()) if (en(v.fecha)) { const d = dia(v.fecha), x = Number(v.total) || 0; d.vendido += x; d.n++; porMedio[v.m || "Otro"] = (porMedio[v.m || "Otro"] || 0) + x; }
+  for (const g of gastosEn(a, b)) { const x = Number(g.valor) || 0; dia(g.fecha).gastos += x; porCat[g.cat || "Otros"] = (porCat[g.cat || "Otros"] || 0) + x; }
+  const sinCerrar = [];
+  for (const c of cajasAll()) if (en(c.fecha)) {
+    const d = dia(c.fecha);
+    if (c.apertura) { d.cajas++; if (cajaEstado(c) === "abierta") { d.abiertas++; if (c.fecha < S.today) sinCerrar.push(c); } }
+    for (const mv of (c.movs || [])) if (mv.tipo === "retiro" && empiezaCon(mv.motivo, "Devolución a cliente")) d.devol += Number(mv.monto) || 0;
+    const ci = (c.cierres || []).slice(-1)[0];   // misma regla que la liquidez: un faltante por "Gasto sin anotar" se resta cuando se anota el gasto
+    if (ci && c.apertura && cajaEstado(c) === "cerrada") { const x = Number(ci.dif) || 0; if (x && !(x < 0 && empiezaCon(ci.obs, "Gasto sin anotar"))) d.dif += x; }
+  }
+  let acum = 0;
+  const filas = Object.values(dias).sort((x, y) => x.f.localeCompare(y.f)).map(d => { const neto = d.vendido - d.gastos - d.devol + d.dif; acum += neto; return Object.assign(d, {neto, acum}); });
+  return {a, b, L, filas, porMedio, porCat, sinCerrar, incompleto: DS.mode === "db" && a < addDays(S.today, -HIST_DIAS)};
+}
+
+function cajaMesHTML() {
+  const mes = mesCaja(), R = resumenMes(mes), L = R.L, completo = R.b === lastOfMonth(R.a);
+  const plata = v => (v < 0 ? "− " : "") + fmt(Math.abs(v)), plural = (n, uno, varios) => n + " " + (n === 1 ? uno : varios);
+  const fila = (txt, sub, v) => `<div class="row"><div class="l">${txt}${sub ? `<div class="small muted">${sub}</div>` : ""}</div><div class="r">${plata(v)}</div></div>`;
+  const medios = Object.entries(R.porMedio).sort((x, y) => y[1] - x[1]), cats = Object.entries(R.porCat).sort((x, y) => y[1] - x[1]);
+  const nombreEq = c => c.devNombre || (col("dispositivos")[c.dev] || {}).nombre || "Caja";
+  return `<div class="cm-nav"><button class="btn ghost sm" data-act="cajaMesMover" data-v="-1" aria-label="Mes anterior" ${mes <= primerMesDatos() ? "disabled" : ""}>‹</button>
+      <div><b>${esc(nombreMes(mes))}</b><div class="small muted">${completo ? "Todo el mes" : "Del 1 al " + parse(R.b).getDate() + " (hoy)"}</div></div>
+      <button class="btn ghost sm" data-act="cajaMesMover" data-v="1" aria-label="Mes siguiente" ${mes >= S.today.slice(0, 7) ? "disabled" : ""}>›</button></div>
+    ${R.incompleto ? `<div class="notice bad" style="margin-bottom:12px">Este equipo guarda los últimos ${HIST_DIAS} días: de este mes puede faltar información.</div>` : ""}
+    ${!R.filas.length ? `<div class="card">${vacio("caja", "No hay movimientos este mes", "")}</div>` : `
+    <div class="kpis">
+      <div class="kpi main"><span>Vendido menos gastos</span><b>${plata(L.total)}</b><small>Efectivo ${plata(L.efectivo)} · cuentas ${plata(L.cuentas)}</small></div>
+      <div class="kpi"><span>Vendido</span><b>${fmt(L.ventas)}</b><small>${plural(L.nV, "venta", "ventas")}, sin anuladas</small></div>
+      <div class="kpi"><span>Gastos</span><b>${fmt(L.gastos)}</b><small>${plural(L.nG, "gasto", "gastos")}, también los pagados desde la caja</small></div>
+      <div class="kpi${L.difs < 0 ? " neg" : ""}"><span>${L.difs < 0 ? "Faltó al cerrar caja" : L.difs > 0 ? "Sobró al cerrar caja" : "Cierres de caja"}</span><b>${plata(L.difs)}</b><small>${L.nDifs ? plural(L.nDifs, "cierre", "cierres") + " con diferencia" : "Todo cuadró"}</small></div>
+    </div>
+    ${R.sinCerrar.length ? `<div class="notice bad" style="margin-bottom:12px"><b>${R.sinCerrar.length === 1 ? "Una caja quedó sin cerrar" : R.sinCerrar.length + " cajas quedaron sin cerrar"}:</b> ${esc(R.sinCerrar.map(c => nombreEq(c) + " (" + diaCorto(c.fecha) + ")").join(", "))}. Ciérrenla en ese equipo para que su efectivo y su diferencia entren en la cuenta.</div>` : ""}
+    <div class="two">
+      <div class="card"><h3>Cómo pagaron</h3>${medios.map(([m, v]) => fila(esc(m), "", v)).join("")}</div>
+      <div class="card"><h3>En qué se gastó</h3>${cats.length ? cats.map(([c, v]) => fila(esc(c), "", v)).join("") : '<p class="muted" style="margin:0">No hay gastos registrados este mes.</p>'}${L.devol ? fila("Devoluciones a clientes", "“Sacar dinero” → “Devolución a cliente”", L.devol) : ""}</div>
+    </div>
+    ${L.retDueno || L.consig || L.otrosRet || L.otrosIng || L.sinAnotar ? `<div class="card"><h3>Movimientos de caja que no suman ni restan</h3><p class="small muted" style="margin-top:-4px">La plata cambia de lugar o no se sabe qué fue.</p>
+      ${L.retDueno ? fila("Retiros del dueño", "Sigue siendo plata del negocio", L.retDueno) : ""}${L.consig ? fila("Consignaciones", "Del efectivo al banco", L.consig) : ""}
+      ${L.otrosRet ? fila("Salió de la caja por «Otro»", "Si fue un pago, anótenlo como gasto", L.otrosRet) : ""}${L.otrosIng ? fila("Entró a la caja por «Otro»", "", L.otrosIng) : ""}
+      ${L.sinAnotar ? fila("Faltó por «Gasto sin anotar»", "Se resta cuando anoten ese gasto en Dinero", L.sinAnotar) : ""}</div>` : ""}
+    <div class="card"><h3>Día por día</h3><p class="small muted" style="margin-top:-4px">Toca un día para ver qué se vendió.</p>
+      ${tablaVista([{h: "Día", f: d => `<button class="lnk" data-act="verDiaVentas" data-f="${esc(d.f)}">${esc(diaCorto(d.f))}</button>`}, {h: "Vendido", n: 1, f: d => fmt(d.vendido)}, {h: "Gastos", n: 1, f: d => d.gastos || d.devol ? "− " + fmt(d.gastos + d.devol) : "–"},
+        {h: "Caja", n: 1, f: d => d.dif ? `<span style="color:${d.dif < 0 ? "var(--danger)" : "inherit"}">${d.dif < 0 ? "Faltó " : "Sobró "}${fmt(Math.abs(d.dif))}</span>` : d.abiertas ? '<span class="muted">abierta</span>' : d.cajas ? "cuadró" : "–"},
+        {h: "Acumulado", n: 1, f: d => `<b>${plata(d.acum)}</b>`}], R.filas)}
+    </div>
+    <p class="xs muted">Acumulado = lo vendido menos los gastos y las devoluciones, más o menos lo que faltó o sobró al cerrar caja (igual que «¿Cuánta plata hay?» en Dinero). No incluye la plata con la que empezaron ni el costo de lo vendido: la utilidad está en Dinero → Mes.</p>`}`;
+}
+ACT.cajaVista = (el, d) => { S.cajaVista = d.v === "mes" ? "mes" : "hoy"; if (S.cajaVista === "mes") S.cajaMes = mesCaja(); draw(); };
+ACT.cajaMesMover = (el, d) => { const m = masMes(mesCaja(), Number(d.v) || 0); if (m > S.today.slice(0, 7) || m < primerMesDatos()) return; S.cajaMes = m; draw(); };
+ACT.verDiaVentas = (el, d) => { if (!d.f) return; S.vdDia = d.f; S.vdMes = d.f.slice(0, 7); S.vdCal = false; irA("ventas"); };
+
+/* >>> 66-luz.js */
+/* ============ 66 · a las 5:30 p. m.: prender la luz de afuera ============
+   Con la caja abierta, desde las 5:30 p. m. sale una ventana con sonido y un aviso fijo arriba hasta que alguien toque
+   "Ya la prendí" (si la cierran sin marcar, la ventana vuelve a salir cada 10 minutos). Queda en la lista "En la tarde" de la
+   caja; si se marca en un equipo, la alerta se quita en los demás. La hora es la del equipo. */
+const HORA_LUZ = {h: 17, m: 30};
+const LUZ = {ultimaVentana: 0, pendiente: false};
+const luzHecha = () => Object.values(col("checklists")).some(c => c && c.fecha === S.today && c.tarde && c.tarde.luzAfuera);
+const yaEsHoraDeLuz = () => { const d = new Date(); return d.getHours() * 60 + d.getMinutes() >= HORA_LUZ.h * 60 + HORA_LUZ.m; };
+function luzPendiente() {
+  if (DS.mode === "loading" || DS.needsLogin || DS.needsOrg) return false;
+  const c = cajaHoy(); return !!c && cajaEstado(c) === "abierta" && yaEsHoraDeLuz() && !luzHecha();
+}
+const avisoLuzHTML = () => luzPendiente() ? `<div class="notice luz" role="alert">${ic("luz", 26)}<span><b>Prende la luz de afuera.</b> Ya son las 5:30 p. m.</span><button class="btn pri sm" data-act="luzPrendida">${ic("ok", 16)} YA LA PRENDÍ</button></div>` : "";
+const ventanaLuz = () => `<div class="luz-v">${ic("luz", 64)}<h2>Son las 5:30 p. m.</h2><p><b>Prende la luz de afuera.</b><br>Es muy importante.</p>
+  <button class="btn pri xl wide" data-act="luzPrendida">${ic("ok", 22)} YA LA PRENDÍ</button><button class="btn ghost wide" style="margin-top:10px" data-act="cerrar">Ahora no (te recuerdo en 10 minutos)</button></div>`;
+async function marcarLuzAfuera() {
+  const id = cajaId(S.today), cur = col("checklists")[id] || {fecha: S.today, dev: DEV.id, apertura: {}, cierre: {}};
+  if ((cur.tarde || {}).luzAfuera) return;
+  await put("checklists", id, Object.assign({}, cur, {tarde: Object.assign({}, cur.tarde, {luzAfuera: Date.now()})})); audit("LUZ_AFUERA", id, "");
+}
+function sonarAviso() {
+  try { const A = new (window.AudioContext || window.webkitAudioContext)(), o = A.createOscillator(), g = A.createGain(); g.gain.value = 0.2; o.connect(g); g.connect(A.destination);
+    o.frequency.value = 880; o.start(); setTimeout(() => { o.frequency.value = 660; }, 300); setTimeout(() => { o.frequency.value = 880; }, 600); setTimeout(() => { o.stop(); A.close(); }, 900); } catch (e) {}
+  try { if (navigator.vibrate) navigator.vibrate([300, 150, 300]); } catch (e) {}
+}
+function revisarLuz() {
+  const p = luzPendiente();
+  if (p !== LUZ.pendiente) { LUZ.pendiente = p; banners(); if (!p && sheetFn === ventanaLuz) cerrar(); }
+  if (p && Date.now() - LUZ.ultimaVentana > 10 * 60000 && !operacionEnCurso()) { LUZ.ultimaVentana = Date.now(); abrir(ventanaLuz); sonarAviso(); }   // nunca en medio de una venta
+}
+setInterval(() => { try { revisarLuz(); } catch (e) {} }, 15000);
+ACT.luzPrendida = async () => { await guardar(() => marcarLuzAfuera(), "¡Listo! Luz de afuera prendida"); if (sheetFn === ventanaLuz) cerrar(); LUZ.pendiente = luzPendiente(); draw(); };
 
 /* >>> 70-comando.js */
 /* ============ 70 · CENTRO DE COMANDO OLI (inicio del administrador) ============
@@ -3286,13 +3395,13 @@ const empiezaCon = (txt, pre) => String(txt || "").indexOf(pre) === 0;
 const pesosDe = v => num(String(v == null ? "" : v).replace(/[.,]\d{1,2}\s*$/, ""));   // "1.200.000,00" → 1200000: los centavos no se suman como pesos
 const conteoAhora = s => !!s && s.t > parse(s.desde).getTime();                       // contaron a una hora (no "al empezar el día")
 
-function liquidez() {
-  const s = saldosIni(), t0 = s ? s.t : 0, cajas = cajasAll(), hoy = S.today;
+function liquidez(rango) {                                    // rango {a, b}: solo lo que pasó entre esas fechas (sin conteo), p. ej. un mes
+  const s = rango ? null : saldosIni(), t0 = s ? s.t : 0, cajas = cajasAll(), hoy = S.today;
   // sin conteo anotado: desde el primer día con ventas o cajas guardadas en este equipo (los gastos se cuentan desde ese día)
   const fechasDatos = ventasOk().map(v => v.fecha).concat(cajas.map(c => c.fecha)).filter(Boolean).sort();
-  const desde = s ? s.desde : (fechasDatos[0] || Object.values(col("gastos")).map(g => g && g.fecha).filter(Boolean).sort()[0] || hoy);
+  const desde = rango ? rango.a : s ? s.desde : (fechasDatos[0] || Object.values(col("gastos")).map(g => g && g.fecha).filter(Boolean).sort()[0] || hoy);
   // ¿entra en la cuenta? con conteo: lo que pasó después de contar; sin conteo: desde el primer día. Lo de fechas futuras, no.
-  const despues = (fecha, t) => !!fecha && fecha <= hoy && (s ? (fecha > s.desde || (fecha === s.desde && (Number(t) || 0) > t0)) : fecha >= desde);
+  const despues = (fecha, t) => !!fecha && fecha <= hoy && (rango ? fecha >= rango.a && fecha <= rango.b : s ? (fecha > s.desde || (fecha === s.desde && (Number(t) || 0) > t0)) : fecha >= desde);
   const medios = {}, med = m => medios[m] || (medios[m] = {entro: 0, salio: 0});
   let vEf = 0, vCu = 0, nV = 0, pend = 0;
   for (const v of ventasOk()) if (despues(v.fecha, v.t)) {
@@ -4469,7 +4578,7 @@ function drawHeader() {
   $("#searchbtn").hidden = !esAdmin();
 }
 function banners() {
-  const el = $("#banners"); let h = "";
+  const el = $("#banners"); let h = avisoLuzHTML();                    // a las 5:30 p. m.: prender la luz de afuera (66-luz)
   if (DS.mode === "db" && !SYNC.online) h += `<div class="notice" style="margin:0 0 12px;display:flex;gap:10px;align-items:center">${ic("info", 20)}<span><b>Trabajando sin conexión.</b> Las ventas se enviarán solas cuando vuelva Internet.${ventasPendientes() ? " Pendientes: <b>" + ventasPendientes() + "</b>." : ""}</span></div>`;
   else if (SYNC.estado === "sincronizando" && SYNC.total > 1) h += `<div class="notice ok" style="margin:0 0 12px">Enviando ${Math.min(SYNC.hecho + 1, SYNC.total)}/${SYNC.total}…</div>`;
   if (DS.error) h += `<div class="notice bad" style="margin:0 0 12px">${esc(DS.error)}</div>`;

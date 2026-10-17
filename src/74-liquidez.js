@@ -15,13 +15,13 @@ const empiezaCon = (txt, pre) => String(txt || "").indexOf(pre) === 0;
 const pesosDe = v => num(String(v == null ? "" : v).replace(/[.,]\d{1,2}\s*$/, ""));   // "1.200.000,00" → 1200000: los centavos no se suman como pesos
 const conteoAhora = s => !!s && s.t > parse(s.desde).getTime();                       // contaron a una hora (no "al empezar el día")
 
-function liquidez() {
-  const s = saldosIni(), t0 = s ? s.t : 0, cajas = cajasAll(), hoy = S.today;
+function liquidez(rango) {                                    // rango {a, b}: solo lo que pasó entre esas fechas (sin conteo), p. ej. un mes
+  const s = rango ? null : saldosIni(), t0 = s ? s.t : 0, cajas = cajasAll(), hoy = S.today;
   // sin conteo anotado: desde el primer día con ventas o cajas guardadas en este equipo (los gastos se cuentan desde ese día)
   const fechasDatos = ventasOk().map(v => v.fecha).concat(cajas.map(c => c.fecha)).filter(Boolean).sort();
-  const desde = s ? s.desde : (fechasDatos[0] || Object.values(col("gastos")).map(g => g && g.fecha).filter(Boolean).sort()[0] || hoy);
+  const desde = rango ? rango.a : s ? s.desde : (fechasDatos[0] || Object.values(col("gastos")).map(g => g && g.fecha).filter(Boolean).sort()[0] || hoy);
   // ¿entra en la cuenta? con conteo: lo que pasó después de contar; sin conteo: desde el primer día. Lo de fechas futuras, no.
-  const despues = (fecha, t) => !!fecha && fecha <= hoy && (s ? (fecha > s.desde || (fecha === s.desde && (Number(t) || 0) > t0)) : fecha >= desde);
+  const despues = (fecha, t) => !!fecha && fecha <= hoy && (rango ? fecha >= rango.a && fecha <= rango.b : s ? (fecha > s.desde || (fecha === s.desde && (Number(t) || 0) > t0)) : fecha >= desde);
   const medios = {}, med = m => medios[m] || (medios[m] = {entro: 0, salio: 0});
   let vEf = 0, vCu = 0, nV = 0, pend = 0;
   for (const v of ventasOk()) if (despues(v.fecha, v.t)) {

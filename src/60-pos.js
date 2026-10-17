@@ -134,11 +134,12 @@ function cajaCardHTML(c, mia) {
     ${ci ? `<div class="notice ${Math.abs(ci.dif) < 1 ? "ok" : "bad"}" style="margin:10px 0 0"><b>${Math.abs(ci.dif) < 1 ? "La caja cuadró" : ci.dif > 0 ? "Sobran " + fmt(ci.dif) : "Faltan " + fmt(-ci.dif)}</b><br>Contado: ${fmt(ci.contado)}${ci.obs ? " · " + esc(ci.obs) : ""}</div>` : ""}` : ""}
     ${adm && st === "cerrada" ? `<button class="btn ghost sm" style="margin-top:10px" data-act="reabrir" data-id="${esc(c.id)}">Reabrir caja</button>` : ""}</div>`;
 }
-const CHECK_AP = [["caja", "Caja abierta con el efectivo inicial"], ["inv", "Revisé el inventario"], ["neveras", "Las neveras funcionan"], ["prods", "Los productos están disponibles"], ["limpieza", "El local está limpio"]];
+const CHECK_AP = [["caja", "Caja abierta con el efectivo inicial"], ["inv", "Revisé el inventario"], ["neveras", "Las neveras funcionan"], ["luces", "Prendí todas las luces"], ["musica", "Puse la música"], ["prods", "Los productos están disponibles"], ["limpieza", "El local está limpio"]];
+const CHECK_TARDE = [["luzAfuera", "Prendí la luz de afuera (a las 5:30 p. m.)"]];
 const CHECK_CI = [["caja", "Caja cerrada"], ["efectivo", "Efectivo contado"], ["inv", "Revisé el inventario"], ["mermas", "Anoté lo que se dañó"], ["novedades", "Anoté las novedades"]];
 function checklistHTML(grupo, items) {
   const cl = checklistDe(S.today)[grupo] || {}, hechos = items.filter(([k]) => cl[k]).length;
-  return `<div class="card"><div class="row" style="padding-top:0"><h3 style="margin:0">${grupo === "apertura" ? "Al abrir" : "Al cerrar"}</h3><span class="pill ${hechos === items.length ? "ok" : ""}">${hechos}/${items.length}</span></div>${items.map(([k, t]) => `<label class="check" style="width:100%;padding:6px 0;min-height:48px"><input type="checkbox" data-act-change="check" data-g="${grupo}" data-k="${k}" ${cl[k] ? "checked" : ""}> ${esc(t)}</label>`).join("")}</div>`;
+  return `<div class="card"><div class="row" style="padding-top:0"><h3 style="margin:0">${({apertura: "Al abrir", tarde: "En la tarde", cierre: "Al cerrar"})[grupo] || ""}</h3><span class="pill ${hechos === items.length ? "ok" : ""}">${hechos}/${items.length}</span></div>${items.map(([k, t]) => `<label class="check" style="width:100%;padding:6px 0;min-height:48px"><input type="checkbox" data-act-change="check" data-g="${grupo}" data-k="${k}" ${cl[k] ? "checked" : ""}> ${esc(t)}</label>`).join("")}</div>`;
 }
 document.addEventListener("change", e => { const t = e.target; if (t.dataset && t.dataset.actChange === "check") toggleChecklist(t.dataset.g, t.dataset.k).catch(err => toast(errMsg(err), true)); });
 const cajaPendiente = () => cajasAll().filter(x => x.dev === DEV.id && x.fecha < S.today && x.apertura && cajaEstado(x) === "abierta").sort((a, b) => b.fecha.localeCompare(a.fecha))[0] || null;
@@ -151,8 +152,9 @@ VIEWS.caja = () => {
   else principal = cajaCardHTML(c, true) + (st === "abierta" ? `<div class="btns" style="margin-bottom:14px"><button class="btn ghost" style="flex:1" data-act="movCaja" data-t="retiro">Sacar dinero</button><button class="btn ghost" style="flex:1" data-act="movCaja" data-t="ingreso">Entró dinero</button><button class="btn ghost" style="flex:1" data-act="movCaja" data-t="gasto">Pagué algo</button></div><button class="btn pri xl wide" data-act="cerrarCaja">${ic("lock", 22)} CERRAR CAJA</button>` : "");
   const pend = ventasOk().filter(v => v.pend && v.fecha >= addDays(S.today, -3));
   const adm = esAdmin();
-  return cabecera("Caja", "Hoy · " + diaLargo(S.today) + (DEV.nombre ? " · " + esc(DEV.nombre) : "")) + avisoCajaPendiente() + (st === "sin" ? principal : cajaCardHTML(c, true)) +
-    (st !== "sin" ? checklistHTML("apertura", CHECK_AP) : "") + (st === "abierta" ? checklistHTML("cierre", CHECK_CI) : "") +
+  if (adm && S.cajaVista === "mes") return cabecera("Caja", "Acumulado del mes") + vistaCajaSeg() + cajaMesHTML();
+  return cabecera("Caja", "Hoy · " + diaLargo(S.today) + (DEV.nombre ? " · " + esc(DEV.nombre) : "")) + (adm ? vistaCajaSeg() : "") + avisoCajaPendiente() + (st === "sin" ? principal : cajaCardHTML(c, true)) +
+    (st !== "sin" ? checklistHTML("apertura", CHECK_AP) : "") + (st === "abierta" ? checklistHTML("tarde", CHECK_TARDE) + checklistHTML("cierre", CHECK_CI) : "") +
     (pend.length ? `<div class="card"><h3>Pagos por confirmar</h3><p class="small muted" style="margin-top:-4px">Mira el aviso de tu banco o billetera. Si ya llegó, toca “Ya llegó”.</p>${pend.slice(-8).reverse().map(v => `<div class="row"><div class="l"><b>${fmt(v.total)}</b> <span class="pill">${esc(v.m)}</span><div class="small muted">${hora(v.t)}${v.ref ? " · " + esc(v.ref) : ""}</div></div><button class="btn pri sm" data-act="ya" data-id="${esc(v.id)}">Ya llegó</button></div>`).join("")}</div>` : "") +
     (st === "abierta" ? `<div class="btns" style="margin-bottom:14px"><button class="btn ghost" style="flex:1" data-act="movCaja" data-t="retiro">Sacar dinero</button><button class="btn ghost" style="flex:1" data-act="movCaja" data-t="ingreso">Entró dinero</button><button class="btn ghost" style="flex:1" data-act="movCaja" data-t="gasto">Pagué algo</button></div><button class="btn pri xl wide" data-act="cerrarCaja">${ic("lock", 22)} CERRAR CAJA</button>` : "") +
     ventasHoyHTML() +

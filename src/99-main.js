@@ -27,7 +27,7 @@ function drawHeader() {
   $("#searchbtn").hidden = !esAdmin();
 }
 function banners() {
-  const el = $("#banners"); let h = "";
+  const el = $("#banners"); let h = avisoLuzHTML();                    // a las 5:30 p. m.: prender la luz de afuera (66-luz)
   if (DS.mode === "db" && !SYNC.online) h += `<div class="notice" style="margin:0 0 12px;display:flex;gap:10px;align-items:center">${ic("info", 20)}<span><b>Trabajando sin conexión.</b> Las ventas se enviarán solas cuando vuelva Internet.${ventasPendientes() ? " Pendientes: <b>" + ventasPendientes() + "</b>." : ""}</span></div>`;
   else if (SYNC.estado === "sincronizando" && SYNC.total > 1) h += `<div class="notice ok" style="margin:0 0 12px">Enviando ${Math.min(SYNC.hecho + 1, SYNC.total)}/${SYNC.total}…</div>`;
   if (DS.error) h += `<div class="notice bad" style="margin:0 0 12px">${esc(DS.error)}</div>`;
