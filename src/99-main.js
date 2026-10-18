@@ -49,7 +49,7 @@ function orgHTML() {
     <button class="btn pri xl wide" data-act="crearNegocio">CREAR MI NEGOCIO</button><button class="btn ghost wide" style="margin-top:10px" data-act="logout">Salir</button></div></div>`;
 }
 ACT.login = async () => { const b = $("#lg-err"); b.textContent = ""; const m = $("#lg-mail").value.trim(), p = $("#lg-pass").value; if (!m || !p) { b.textContent = "Escribe tu correo y tu contraseña."; return; }
-  try { await sbLogin(m, p); } catch (e) { b.textContent = navigator.onLine === false ? "No hay conexión a Internet. Para ingresar hace falta Internet." : (e.message || "No pudimos ingresar."); } };
+  try { await sbLogin(m, p); if (DS.needsLogin && DS.loginMsg && $("#lg-err")) $("#lg-err").textContent = DS.loginMsg; } catch (e) { b.textContent = navigator.onLine === false ? "No hay conexión a Internet. Para ingresar hace falta Internet." : (e.message || "No pudimos ingresar."); } };
 ACT.crearNegocio = async () => { const n = $("#og-n").value.trim(); if (!n) return; try { await sbCrearNegocio(n); } catch (e) { $("#lg-err").textContent = e.message; } };
 ACT.logout = async () => {
   if (pendientes().length && conRed()) { toast("Enviando lo pendiente…"); try { await withTimeout(syncNow(), 8000); } catch (e) {} }   // antes de salir, se intenta enviar todo

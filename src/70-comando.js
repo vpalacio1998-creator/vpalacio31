@@ -3,9 +3,26 @@
 const NAMES = {};
 function nombreDe(uid) { return NAMES[uid] || (uid === DS.uid && DS.nombre ? DS.nombre : ""); }
 async function pedirNombres(ids) {
-  ids = uniq(ids.filter(i => i && i !== "local" && !(i in NAMES))); if (!ids.length || !window.claude || !window.claude.use) return;
+  ids = uniq(ids.filter(i => i && i !== "local" && !(i in NAMES))); if (!ids.length) return;
+  if (DS.backend === "supabase") return nombresServidor();
+  if (!window.claude || !window.claude.use) return;
   try { const u = await window.claude.use("user"); if (!u) return; const ps = await u.profiles(ids); let ch = false; for (const i of ids) { NAMES[i] = (ps[i] && ps[i].name) || ""; ch = true; } if (ch) changed(); } catch (e) {}
 }
+// con servidor: el administrador lee los nombres de las personas de su negocio (memberships; el servidor solo se los deja ver a él).
+// Una persona que no aparece se vuelve a buscar como mucho una vez por minuto (p. ej. una cuenta recién creada).
+const NOMBRES_SB = {org: null, t: 0, cargando: false, lista: null};
+async function nombresServidor() {
+  if (!DS.isAdmin || !SB.client || !SB.org || DS.needsLogin || NOMBRES_SB.cargando || (NOMBRES_SB.org === SB.org && Date.now() - NOMBRES_SB.t < 60000)) return;
+  const org = SB.org; NOMBRES_SB.cargando = true;
+  try {
+    const r = await withTimeout(Promise.resolve(SB.client.from("memberships").select("user_id,display_name,role,active").eq("org_id", org)), 9000);
+    if (r && !r.error && Array.isArray(r.data) && org === SB.org && DS.isAdmin) {
+      let ch = false; for (const m of r.data) { const n = String(m.display_name || "").trim(); if (m.user_id && n && NAMES[m.user_id] !== n) { NAMES[m.user_id] = n; ch = true; } }
+      NOMBRES_SB.org = org; NOMBRES_SB.t = Date.now(); NOMBRES_SB.lista = r.data.filter(m => m && m.user_id); changed();
+    }
+  } catch (e) {} finally { NOMBRES_SB.cargando = false; }
+}
+function olvidarNombres() { for (const k of Object.keys(NAMES)) delete NAMES[k]; NOMBRES_SB.org = null; NOMBRES_SB.t = 0; NOMBRES_SB.lista = null; }
 const comandoModo = () => { try { return localStorage.getItem("oli-home") || "completa"; } catch (e) { return "completa"; } };
 ACT.modoHome = (el, d) => { try { localStorage.setItem("oli-home", d.v); } catch (e) {} draw(); };
 ACT.comp = (el, d) => { S.comp = d.v; draw(); };

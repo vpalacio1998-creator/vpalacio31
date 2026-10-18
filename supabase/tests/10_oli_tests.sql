@@ -420,6 +420,26 @@ begin
          jsonb_build_object('id','d1-ps-10','n',100,'num','Caja 1 #100','t',99200,'fecha','2026-10-07','uid',e1::text,'dev','d1','m','Efectivo','total',8000,'sub',8000,'desc',0,'estado','confirmada','items','[{"pid":"p-mango","n":"Paleta Mango","q":1,"p":8000,"d":0}]'::jsonb))))), 'd1', '1.0');
   reset role;
   perform t_assert(r->0->>'status' = 'applied' and not exists (select 1 from oli_push_queue where tag = 'venta-d1-ps-10'), 'sin nadie con avisos activados, la venta se guarda y no se arma ningún aviso');
+  -- T33: cuenta a la que el administrador le quitó el acceso (invite-user pone active = false)
+  set role authenticated; perform t_as(e2);
+  perform t_assert(oli_cuenta_estado() = 'activa', 'una cuenta con acceso se ve activa');
+  reset role; update memberships set active = false where user_id = e2;
+  set role authenticated; perform t_as(e2);
+  perform t_assert(oli_me() = 'null'::jsonb and oli_cuenta_estado() = 'sin_acceso', 'sin acceso: oli_me no devuelve negocio y la cuenta dice sin_acceso (no «crea tu negocio»)');
+  perform t_assert((select count(*) from oli_docs) = 0, 'sin acceso: el servidor no le muestra nada');
+  begin r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','sinacc1','col','mermas','id','2026-10-07_d2','t',1,'data','{"fecha":"2026-10-07","dev":"d2","items":[]}'::jsonb)), 'd2', '1.0'); ok := false;
+  exception when others then ok := sqlerrm like '%no_membership%'; end;
+  perform t_assert(ok, 'sin acceso: el servidor no le acepta cambios');
+  begin r := oli_bootstrap('Otro negocio'); ok := false; exception when others then ok := true; end;
+  perform t_assert(ok, 'sin acceso: tampoco puede crear un negocio nuevo');
+  perform t_as(x);
+  perform t_assert(oli_cuenta_estado() = 'sin_negocio', 'una cuenta sin negocio se ve como nueva');
+  reset role; update memberships set active = true where user_id = e2;
+  set role authenticated; perform t_as(e2);
+  perform t_assert(oli_cuenta_estado() = 'activa' and oli_me()->>'role' = 'employee', 'al devolverle el acceso vuelve a entrar como empleado');
+  reset role; set role anon;
+  begin perform oli_cuenta_estado(); ok := false; exception when others then ok := true; end;
+  perform t_assert(ok, 'sin sesión no se puede preguntar por cuentas');
   -- T16: coherencia de totales
   reset role;
   perform t_assert((select sum(total) from sales) = (select sum(amount) from payments), 'total de ventas = total de pagos');

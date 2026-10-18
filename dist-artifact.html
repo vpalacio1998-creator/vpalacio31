@@ -333,7 +333,7 @@ details.help span{display:block;font-weight:500;font-size:13px;line-height:1.35;
 <div class="sheet hidden" id="sheet"><div class="bg"></div><div class="panel" role="dialog" aria-modal="true" id="panel"></div></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script>window.OLI_BUILD="b62b4255";</script>
+<script>window.OLI_BUILD="3d355e54";</script>
 <script>
 (function(){
 "use strict";
@@ -888,6 +888,7 @@ function revocarSesion(s) { if (!s || !s.access_token || SB.revocadas.has(s.acce
 /* la sesión se cerró o el servidor la rechazó: este equipo olvida la identidad y lo que solo ve el administrador (las ventas por enviar se conservan) */
 async function olvidarIdentidad() {
   limpiarNotisEquipo(false);                                                                          // los avisos del administrador no se quedan en el equipo
+  olvidarNombres();                                                                                   // ni los nombres de las personas del negocio
   await IDB.tx([["kv", "del", "ident"]]).catch(() => {});
   const soloAdmin = new Set(SB_ADMIN_COLS); for (const c of soloAdmin) { delete DS.c[c]; delete DS.ready[c]; }   // al volver a ingresar se espera a que lleguen de nuevo
   try { const all = await IDB.getAll("docs"), ops = []; for (const [p, x] of Object.entries(all || {})) if (x && soloAdmin.has(x.col)) ops.push(["docs", "del", p]); if (ops.length) await IDB.tx(ops); } catch (e) {}
@@ -961,12 +962,21 @@ async function sbCompletarSesion(session) {
   try { const cur = await withTimeout(SB.client.auth.getSession(), 3000), cs = cur && cur.data && cur.data.session; if (cs && cs.user && cs.user.id !== session.user.id) { SB.gen++; await sesionPerdida("Por seguridad, ingresa de nuevo."); return; } } catch (e) {}
   if (!me && fallo && ident && ident.sb && ident.uid === session.user.id) usarIdent(ident);                           // servidor sin respuesta: identidad guardada
   else if (!me && fallo) { DS.needsLogin = true; DS.loginMsg = "Ingresaste, pero el servidor de OLI no está respondiendo. Intenta de nuevo en unos minutos."; changed(); return; }
+  else if (!me && (await cuentaEstado()) === "sin_acceso") { if (gen !== SB.gen) return; SB.gen++; await sesionPerdida(MSG_SIN_ACCESO); return; }   // el administrador le quitó el acceso
   else if (!me) { DS.needsLogin = false; DS.needsOrg = true; DS.uid = session.user.id; SB.email = session.user.email || ""; changed(); return; }
   else { SB.org = me.org_id; SB.store = me.store_id; SB.role = me.role; DS.uid = session.user.id; DS.isAdmin = !!me.is_admin; if (!DS.isAdmin) limpiarNotisEquipo(false); DS.nombre = me.name || (session.user.email || "").split("@")[0]; SB.email = session.user.email || "";
     if (gen !== SB.gen) return; await IDB.kvSet("ident", {uid: DS.uid, isAdmin: DS.isAdmin, org: SB.org, store: SB.store, role: SB.role, nombre: DS.nombre, sb: true}); }
   DS.needsLogin = false; DS.needsOrg = false; DS.loginMsg = ""; await purgarNoPermitido();
   if (DS.isAdmin && S.tab === "vender" && !leerHash()) S.tab = "hoy";                                       // el administrador empieza en Inicio (al arrancar aún no se sabía quién entraba)
   sbIniciar();
+}
+/* cuenta a la que el administrador le quitó el acceso: el servidor ya no le muestra ni le acepta nada; aquí solo se le explica y se cierra la sesión */
+const MSG_SIN_ACCESO = "Tu cuenta ya no tiene acceso a OLI. Si es un error, habla con el administrador del negocio.";
+async function cuentaEstado() { try { const r = await withTimeout(SB.client.rpc("oli_cuenta_estado"), 9000); return r && !r.error ? r.data : null; } catch (e) { return null; } }
+let revisandoAcceso = 0;
+async function revisarAcceso() {
+  if (Date.now() - revisandoAcceso < 60000) return; revisandoAcceso = Date.now(); const gen = SB.gen;
+  if ((await cuentaEstado()) === "sin_acceso" && gen === SB.gen && !DS.needsLogin) { SB.gen++; await sesionPerdida(MSG_SIN_ACCESO); }
 }
 function usarIdent(i) { DS.uid = i.uid; DS.isAdmin = i.isAdmin; SB.org = i.org; SB.store = i.store; SB.role = i.role; DS.nombre = i.nombre || ""; DS.needsLogin = false; }
 /* lo que este rol no puede leer no debe quedarse en el dispositivo (p. ej. costos en la tablet del empleado) */
@@ -1030,7 +1040,8 @@ async function sbApply(op) {
     const m = String(r.error.message || ""), st = r.error.status || r.status || 0;
     if (r.error.code === "28000" || /not_authenticated|JWT|expired/i.test(m) || st === 401) { SB.authError = true; throw {code: "unavailable", message: "sesión vencida"}; }
     if (st === 409 || r.error.code === "23505" || r.error.code === "40001" || r.error.code === "40P01") throw {code: "unavailable", message: "reintentar"};   // carrera momentánea, no es rechazo
-    if (r.error.code === "42501" || /no_membership/.test(m) || (st >= 400 && st < 500 && st !== 408 && st !== 429)) throw {code: "invalid_argument", message: m};
+    if (/no_membership/.test(m)) { revisarAcceso(); throw {code: "unavailable", message: "esta cuenta no tiene acceso al negocio"}; }   // no es un rechazo del cambio: se guarda hasta que se aclare
+    if (r.error.code === "42501" || (st >= 400 && st < 500 && st !== 408 && st !== 429)) throw {code: "invalid_argument", message: m};
     throw {code: "unavailable", message: m};
   }
   SB.authError = false; const x = r.data && r.data[0]; if (x && x.status === "rejected") throw {code: "invalid_argument", message: x.detail || "rechazada"};
@@ -1068,7 +1079,14 @@ async function sbSalir() {
   DS.needsLogin = true; DS.loginMsg = ""; DS.isAdmin = false; DS.uid = null; changed();
 }
 function borrarSesionGuardada() { try { for (let i = localStorage.length - 1; i >= 0; i--) { const k = localStorage.key(i); if (k && /^sb-.*-auth-token/.test(k)) localStorage.removeItem(k); } } catch (e) {} }
-async function sbInvitar(d) { const r = await SB.client.functions.invoke("invite-user", {body: d}); if (r.error) throw new Error((r.data && r.data.error) || "No se pudo crear la cuenta."); return r.data; }
+// si la función responde con error, el motivo viene en el cuerpo de la respuesta (r.error.context), no en r.data
+async function sbCuenta(d, msg) {
+  const r = await SB.client.functions.invoke("invite-user", {body: d});
+  if (r.error) { let m = ""; try { const b = r.error.context && typeof r.error.context.json === "function" ? await r.error.context.json() : null; m = b && b.error ? String(b.error) : ""; } catch (e) {}
+    throw new Error(m || (errRed(r.error) || r.error.name === "FunctionsFetchError" ? MSG_SIN_RED : msg || "No se pudo hacer el cambio en la cuenta.")); }
+  return r.data;
+}
+const sbInvitar = d => sbCuenta(d, "No se pudo crear la cuenta.");
 /* fotos: la imagen completa va a Storage; en el documento queda la ruta y una miniatura para verla sin conexión */
 async function sbSubirFoto(blob, pid) { const path = SB.org + "/products/" + pid + ".jpg"; const r = await SB.client.storage.from("product-images").upload(path, blob, {upsert: true, contentType: "image/jpeg"}); if (r.error) throw r.error; return path; }
 /* errores no controlados -> auditoría (monitoreo) */
@@ -3066,9 +3084,26 @@ if (window.OLI_PWA) try {
 const NAMES = {};
 function nombreDe(uid) { return NAMES[uid] || (uid === DS.uid && DS.nombre ? DS.nombre : ""); }
 async function pedirNombres(ids) {
-  ids = uniq(ids.filter(i => i && i !== "local" && !(i in NAMES))); if (!ids.length || !window.claude || !window.claude.use) return;
+  ids = uniq(ids.filter(i => i && i !== "local" && !(i in NAMES))); if (!ids.length) return;
+  if (DS.backend === "supabase") return nombresServidor();
+  if (!window.claude || !window.claude.use) return;
   try { const u = await window.claude.use("user"); if (!u) return; const ps = await u.profiles(ids); let ch = false; for (const i of ids) { NAMES[i] = (ps[i] && ps[i].name) || ""; ch = true; } if (ch) changed(); } catch (e) {}
 }
+// con servidor: el administrador lee los nombres de las personas de su negocio (memberships; el servidor solo se los deja ver a él).
+// Una persona que no aparece se vuelve a buscar como mucho una vez por minuto (p. ej. una cuenta recién creada).
+const NOMBRES_SB = {org: null, t: 0, cargando: false, lista: null};
+async function nombresServidor() {
+  if (!DS.isAdmin || !SB.client || !SB.org || DS.needsLogin || NOMBRES_SB.cargando || (NOMBRES_SB.org === SB.org && Date.now() - NOMBRES_SB.t < 60000)) return;
+  const org = SB.org; NOMBRES_SB.cargando = true;
+  try {
+    const r = await withTimeout(Promise.resolve(SB.client.from("memberships").select("user_id,display_name,role,active").eq("org_id", org)), 9000);
+    if (r && !r.error && Array.isArray(r.data) && org === SB.org && DS.isAdmin) {
+      let ch = false; for (const m of r.data) { const n = String(m.display_name || "").trim(); if (m.user_id && n && NAMES[m.user_id] !== n) { NAMES[m.user_id] = n; ch = true; } }
+      NOMBRES_SB.org = org; NOMBRES_SB.t = Date.now(); NOMBRES_SB.lista = r.data.filter(m => m && m.user_id); changed();
+    }
+  } catch (e) {} finally { NOMBRES_SB.cargando = false; }
+}
+function olvidarNombres() { for (const k of Object.keys(NAMES)) delete NAMES[k]; NOMBRES_SB.org = null; NOMBRES_SB.t = 0; NOMBRES_SB.lista = null; }
 const comandoModo = () => { try { return localStorage.getItem("oli-home") || "completa"; } catch (e) { return "completa"; } };
 ACT.modoHome = (el, d) => { try { localStorage.setItem("oli-home", d.v); } catch (e) {} draw(); };
 ACT.comp = (el, d) => { S.comp = d.v; draw(); };
@@ -3550,7 +3585,7 @@ function aMermas() {
 /* >>> 73-equipo-ajustes.js */
 /* cómo dar acceso depende de dónde corre OLI: servidor propio (cuentas con correo), Claude (botón Compartir) o un solo equipo */
 const accesoHTML = () => DS.backend === "supabase"
-  ? `<div class="notice" style="margin-top:10px"><b>Dar acceso</b><br>Crea una cuenta con correo y contraseña. <b>Empleado</b>: vende, abre y cierra caja y consulta inventario. <b>Administrador</b>: ve todo. Los permisos los valida el servidor.</div><button class="btn pri sm" style="margin-top:10px" data-act="nuevaCuenta">${ic("plus", 16)} Crear cuenta</button>`
+  ? cuentasHTML() + `<div class="notice" style="margin-top:10px"><b>Dar acceso</b><br>Crea una cuenta con correo y contraseña. <b>Empleado</b>: vende, abre y cierra caja y consulta inventario. <b>Administrador</b>: ve todo. Los permisos los valida el servidor.</div><button class="btn pri sm" style="margin-top:10px" data-act="nuevaCuenta">${ic("plus", 16)} Crear cuenta</button>`
   : DS.mode === "local" ? `<div class="notice" style="margin-top:10px"><b>Un solo equipo</b><br>En este modo OLI guarda todo en este equipo. Para que cada persona entre con su propia cuenta, conecta OLI al servidor.</div>`
   : `<div class="notice" style="margin-top:10px"><b>Cómo dar acceso</b><br>Usa el botón <b>Compartir</b> de Claude: <b>Colaborador</b> = Empleado (vende, abre y cierra caja, consulta inventario). <b>Editor</b> = Administrador. Cada persona entra con su propia cuenta de Claude, y los permisos los valida el servidor.</div>`;
 ACT.nuevaCuenta = () => abrir(() => head("Crear cuenta") + `<p class="muted" style="margin-top:0">La persona entra a OLI con este correo y esta contraseña.</p>
@@ -3564,8 +3599,46 @@ ACT.doNuevaCuenta = async () => {
   if (!email || !/@/.test(email)) { toast("Escribe un correo válido.", true); return; }
   if (password.length < 8) { toast("La contraseña debe tener al menos 8 caracteres.", true); return; }
   if (!conRed()) { toast("Para crear una cuenta se necesita Internet.", true); return; }
-  try { await sbInvitar({email, password, rol, nombre: nombre || null}); audit("CUENTA_CREADA", email, rol === "admin" ? "Administrador" : "Empleado"); cerrar(); toast("Cuenta creada. Ya puede entrar con " + email); }
+  if (S.creandoCuenta) return; S.creandoCuenta = true;                                              // un doble toque no crea dos veces
+  try { await sbInvitar({email, password, rol, nombre: nombre || null}); audit("CUENTA_CREADA", email, rol === "admin" ? "Administrador" : "Empleado"); NOMBRES_SB.t = 0; cerrar(); toast("Cuenta creada. Ya puede entrar con " + email); }
   catch (e) { toast(e.message || "No se pudo crear la cuenta.", true); }
+  finally { S.creandoCuenta = false; }
+};
+/* cuentas del negocio (con servidor): quitar o devolver el acceso y cambiar la contraseña. Las reglas las aplica el servidor
+   (invite-user): solo cuentas de este negocio, nunca la propia ni la del propietario, y un administrador solo maneja empleados. */
+const ROL_TXT = {owner: "Propietario", admin: "Administrador", employee: "Empleado"};
+const cuentaManejable = m => m.user_id !== DS.uid && m.role !== "owner" && (m.role === "employee" || SB.role === "owner");
+function cuentasHTML() {
+  if (!DS.isAdmin) return ""; nombresServidor();
+  const xs = NOMBRES_SB.lista; if (!xs) return conRed() ? '<p class="small muted" style="margin:10px 0 0">Cargando las cuentas…</p>' : "";
+  return `<div style="margin-top:10px"><div class="small muted" style="margin-bottom:4px">Cuentas que pueden entrar a OLI</div>${xs.slice().sort((a, b) => (b.active !== false) - (a.active !== false) || String(a.display_name || "").localeCompare(String(b.display_name || ""), "es")).map(m => {
+    const nom = String(m.display_name || "").trim() || "Sin nombre", on = m.active !== false, yo = m.user_id === DS.uid;
+    return `<div class="row" style="align-items:flex-start;padding:9px 0"><div class="l" style="flex:1"><b>${esc(nom)}</b>${yo ? ' <span class="pill">Tú</span>' : ""}${on ? "" : ' <span class="pill bad">Sin acceso</span>'}<div class="small muted">${esc(ROL_TXT[m.role] || m.role || "")}</div></div>${cuentaManejable(m) ? `<div style="text-align:right;display:flex;flex-direction:column;gap:4px">${on ? `<button class="btn ghost sm" data-act="cuentaClave" data-id="${esc(m.user_id)}">Cambiar contraseña</button><button class="btn ghost sm" data-act="cuentaAcceso" data-id="${esc(m.user_id)}" data-v="0">Quitar acceso</button>` : `<button class="btn ghost sm" data-act="cuentaAcceso" data-id="${esc(m.user_id)}" data-v="1">Devolver acceso</button>`}</div>` : ""}</div>`; }).join("")}</div>`;
+}
+const cuentaDe = uid => (NOMBRES_SB.lista || []).find(m => m.user_id === uid) || null;
+const nombreCuenta = m => String((m && m.display_name) || "").trim() || "esa cuenta";
+ACT.cuentaAcceso = async (el, d) => {
+  const m = cuentaDe(d.id), activo = d.v === "1"; if (!m || !cuentaManejable(m)) return;
+  if (!conRed()) { toast("Para cambiar el acceso de una cuenta se necesita Internet.", true); return; }
+  if (!activo && !(await confirmar({titulo: "¿Quitarle el acceso a " + nombreCuenta(m) + "?", texto: "Desde ese momento el servidor no le muestra ni le acepta nada, aunque tenga OLI abierto, y no puede volver a ingresar. Lo que ese equipo tenga sin enviar no llega. No se borra nada: sus ventas y registros quedan. Puedes devolverle el acceso cuando quieras.", si: "Sí, quitar acceso", no: "No", peligro: true}))) return;
+  if (S.cambiandoCuenta) return; S.cambiandoCuenta = true;
+  try { const r = await sbCuenta({accion: "acceso", user_id: m.user_id, activo}); audit(activo ? "CUENTA_ACTIVADA" : "CUENTA_DESACTIVADA", m.user_id, nombreCuenta(m)); NOMBRES_SB.t = 0; nombresServidor();
+    toast(r && r.aviso ? r.aviso : activo ? "Acceso devuelto a " + nombreCuenta(m) + "." : nombreCuenta(m) + " ya no tiene acceso.", !!(r && r.aviso)); }
+  catch (e) { toast(e.message || "No se pudo cambiar el acceso.", true); }
+  finally { S.cambiandoCuenta = false; draw(); }
+};
+ACT.cuentaClave = (el, d) => { const m = cuentaDe(d.id); if (!m || !cuentaManejable(m)) return;
+  abrir(() => head("Contraseña nueva") + `<p class="muted" style="margin-top:0">Para <b>${esc(nombreCuenta(m))}</b>. Dísela en persona: OLI no la envía por correo. Las sesiones que ya tiene abiertas siguen abiertas.</p>
+    <label class="f" for="cc-p">Contraseña nueva (mínimo 8 caracteres)</label><input class="in plain" id="cc-p" type="text" autocomplete="new-password">
+    <button class="btn pri xl wide" style="margin-top:14px" data-act="doCuentaClave" data-id="${esc(m.user_id)}">GUARDAR CONTRASEÑA</button>`); };
+ACT.doCuentaClave = async (el, d) => {
+  const m = cuentaDe(d.id), pw = ($("#cc-p") || {}).value || ""; if (!m) return;
+  if (pw.length < 8) { toast("La contraseña debe tener al menos 8 caracteres.", true); return; }
+  if (!conRed()) { toast("Para cambiar una contraseña se necesita Internet.", true); return; }
+  if (S.cambiandoCuenta) return; S.cambiandoCuenta = true;
+  try { await sbCuenta({accion: "clave", user_id: m.user_id, password: pw}); audit("CLAVE_CAMBIADA", m.user_id, nombreCuenta(m)); cerrar(); toast("Contraseña cambiada. Ya puede entrar con la nueva."); }
+  catch (e) { toast(e.message || "No se pudo cambiar la contraseña.", true); }
+  finally { S.cambiandoCuenta = false; }
 };
 /* ============ 73 · equipo, auditoría y ajustes (administrador) ============ */
 S.audFiltro = "todo";
@@ -3586,7 +3659,7 @@ VIEWS.equipo = () => {
     ${aud.length ? aud.map(a => { pedirNombres([a.u]); return `<div class="row" style="align-items:flex-start;padding:8px 0"><div class="l"><b>${esc(audTxt(a.a))}</b><div class="small muted">${esc(a.d || "")}</div></div><div style="text-align:right" class="xs muted">${diaCorto(ymd(new Date(a.t)))} ${hora(a.t)}<br>${esc(nombreDe(a.u) || "")}</div></div>`; }).join("") : '<p class="muted">No hay registros.</p>'}</div>
   ${rechazadas().length ? `<div class="card"><h3>Cambios de este equipo que el servidor no aceptó</h3>${rechazadasHTML()}<p class="small muted">No borres los datos del navegador: se perderían.</p></div>` : ""}`;
 };
-const AUD_TXT = {LUZ_AFUERA: "Prendió la luz de afuera", PLATA_CONTADA: "Anotó la plata que tienen", PLATA_CONTADA_QUITADA: "Quitó la plata anotada", APERTURA_CAJA: "Caja abierta", CIERRE_CAJA: "Caja cerrada", REABRIR_CAJA: "Caja reabierta", CAJA_RETIRO: "Salió dinero de caja", CAJA_INGRESO: "Entró dinero a caja", CAJA_GASTO: "Pago desde caja", ANULACION: "Venta anulada", DESCUENTO: "Descuento aplicado", MERMA: "Pérdida anotada", AJUSTE_INVENTARIO: "Inventario ajustado", CAMBIO_PRECIO: "Cambio de precio", CAMBIO_COSTO: "Cambio de costo", PRODUCTO_CREADO: "Producto creado", PRODUCTO_EDITADO: "Producto editado", PRODUCTO_DESACTIVADO: "Producto desactivado", PRODUCTO_REACTIVADO: "Producto reactivado", GASTO: "Gasto registrado", GASTO_BORRADO: "Gasto borrado", COMPRA_PEDIDO: "Compra creada", COMPRA_RECIBIDA: "Compra recibida", PRODUCCION: "Producción registrada", RECETA: "Receta guardada", CONFIG: "Configuración", TERCERO: "Tercero guardado", CONFLICTO_INVENTARIO: "Venta que necesita revisión", SYNC_RECHAZADA: "Envío rechazado", NOTIS_ACTIVADAS: "Activó las notificaciones", NOTIS_DESACTIVADAS: "Desactivó las notificaciones", CAMBIO_DESCARTADO: "Cambio rechazado descartado", REINTENTO_ADMIN: "Envió con su cuenta un cambio de otra persona", AVISO_EQUIPO_QUITADO: "Quitó el aviso de un equipo que ya no existe"};
+const AUD_TXT = {LUZ_AFUERA: "Prendió la luz de afuera", PLATA_CONTADA: "Anotó la plata que tienen", PLATA_CONTADA_QUITADA: "Quitó la plata anotada", APERTURA_CAJA: "Caja abierta", CIERRE_CAJA: "Caja cerrada", REABRIR_CAJA: "Caja reabierta", CAJA_RETIRO: "Salió dinero de caja", CAJA_INGRESO: "Entró dinero a caja", CAJA_GASTO: "Pago desde caja", ANULACION: "Venta anulada", DESCUENTO: "Descuento aplicado", MERMA: "Pérdida anotada", AJUSTE_INVENTARIO: "Inventario ajustado", CAMBIO_PRECIO: "Cambio de precio", CAMBIO_COSTO: "Cambio de costo", PRODUCTO_CREADO: "Producto creado", PRODUCTO_EDITADO: "Producto editado", PRODUCTO_DESACTIVADO: "Producto desactivado", PRODUCTO_REACTIVADO: "Producto reactivado", GASTO: "Gasto registrado", GASTO_BORRADO: "Gasto borrado", COMPRA_PEDIDO: "Compra creada", COMPRA_RECIBIDA: "Compra recibida", PRODUCCION: "Producción registrada", RECETA: "Receta guardada", CONFIG: "Configuración", TERCERO: "Tercero guardado", CONFLICTO_INVENTARIO: "Venta que necesita revisión", SYNC_RECHAZADA: "Envío rechazado", NOTIS_ACTIVADAS: "Activó las notificaciones", NOTIS_DESACTIVADAS: "Desactivó las notificaciones", CAMBIO_DESCARTADO: "Cambio rechazado descartado", REINTENTO_ADMIN: "Envió con su cuenta un cambio de otra persona", AVISO_EQUIPO_QUITADO: "Quitó el aviso de un equipo que ya no existe", CUENTA_CREADA: "Creó una cuenta", CUENTA_DESACTIVADA: "Quitó el acceso a una cuenta", CUENTA_ACTIVADA: "Devolvió el acceso a una cuenta", CLAVE_CAMBIADA: "Cambió la contraseña de una cuenta"};
 const audTxt = a => AUD_TXT[a] || a;
 /* un equipo que se borró o se cambió deja para siempre su último aviso de cambios rechazados: el administrador lo puede quitar
    (no borra el equipo, para que las ventas viejas sigan mostrando su nombre; si ese equipo vuelve a conectarse, el aviso vuelve) */
@@ -4865,7 +4938,7 @@ function orgHTML() {
     <button class="btn pri xl wide" data-act="crearNegocio">CREAR MI NEGOCIO</button><button class="btn ghost wide" style="margin-top:10px" data-act="logout">Salir</button></div></div>`;
 }
 ACT.login = async () => { const b = $("#lg-err"); b.textContent = ""; const m = $("#lg-mail").value.trim(), p = $("#lg-pass").value; if (!m || !p) { b.textContent = "Escribe tu correo y tu contraseña."; return; }
-  try { await sbLogin(m, p); } catch (e) { b.textContent = navigator.onLine === false ? "No hay conexión a Internet. Para ingresar hace falta Internet." : (e.message || "No pudimos ingresar."); } };
+  try { await sbLogin(m, p); if (DS.needsLogin && DS.loginMsg && $("#lg-err")) $("#lg-err").textContent = DS.loginMsg; } catch (e) { b.textContent = navigator.onLine === false ? "No hay conexión a Internet. Para ingresar hace falta Internet." : (e.message || "No pudimos ingresar."); } };
 ACT.crearNegocio = async () => { const n = $("#og-n").value.trim(); if (!n) return; try { await sbCrearNegocio(n); } catch (e) { $("#lg-err").textContent = e.message; } };
 ACT.logout = async () => {
   if (pendientes().length && conRed()) { toast("Enviando lo pendiente…"); try { await withTimeout(syncNow(), 8000); } catch (e) {} }   // antes de salir, se intenta enviar todo

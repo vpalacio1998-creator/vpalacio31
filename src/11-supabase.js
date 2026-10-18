@@ -32,6 +32,7 @@ function revocarSesion(s) { if (!s || !s.access_token || SB.revocadas.has(s.acce
 /* la sesión se cerró o el servidor la rechazó: este equipo olvida la identidad y lo que solo ve el administrador (las ventas por enviar se conservan) */
 async function olvidarIdentidad() {
   limpiarNotisEquipo(false);                                                                          // los avisos del administrador no se quedan en el equipo
+  olvidarNombres();                                                                                   // ni los nombres de las personas del negocio
   await IDB.tx([["kv", "del", "ident"]]).catch(() => {});
   const soloAdmin = new Set(SB_ADMIN_COLS); for (const c of soloAdmin) { delete DS.c[c]; delete DS.ready[c]; }   // al volver a ingresar se espera a que lleguen de nuevo
   try { const all = await IDB.getAll("docs"), ops = []; for (const [p, x] of Object.entries(all || {})) if (x && soloAdmin.has(x.col)) ops.push(["docs", "del", p]); if (ops.length) await IDB.tx(ops); } catch (e) {}
@@ -105,12 +106,21 @@ async function sbCompletarSesion(session) {
   try { const cur = await withTimeout(SB.client.auth.getSession(), 3000), cs = cur && cur.data && cur.data.session; if (cs && cs.user && cs.user.id !== session.user.id) { SB.gen++; await sesionPerdida("Por seguridad, ingresa de nuevo."); return; } } catch (e) {}
   if (!me && fallo && ident && ident.sb && ident.uid === session.user.id) usarIdent(ident);                           // servidor sin respuesta: identidad guardada
   else if (!me && fallo) { DS.needsLogin = true; DS.loginMsg = "Ingresaste, pero el servidor de OLI no está respondiendo. Intenta de nuevo en unos minutos."; changed(); return; }
+  else if (!me && (await cuentaEstado()) === "sin_acceso") { if (gen !== SB.gen) return; SB.gen++; await sesionPerdida(MSG_SIN_ACCESO); return; }   // el administrador le quitó el acceso
   else if (!me) { DS.needsLogin = false; DS.needsOrg = true; DS.uid = session.user.id; SB.email = session.user.email || ""; changed(); return; }
   else { SB.org = me.org_id; SB.store = me.store_id; SB.role = me.role; DS.uid = session.user.id; DS.isAdmin = !!me.is_admin; if (!DS.isAdmin) limpiarNotisEquipo(false); DS.nombre = me.name || (session.user.email || "").split("@")[0]; SB.email = session.user.email || "";
     if (gen !== SB.gen) return; await IDB.kvSet("ident", {uid: DS.uid, isAdmin: DS.isAdmin, org: SB.org, store: SB.store, role: SB.role, nombre: DS.nombre, sb: true}); }
   DS.needsLogin = false; DS.needsOrg = false; DS.loginMsg = ""; await purgarNoPermitido();
   if (DS.isAdmin && S.tab === "vender" && !leerHash()) S.tab = "hoy";                                       // el administrador empieza en Inicio (al arrancar aún no se sabía quién entraba)
   sbIniciar();
+}
+/* cuenta a la que el administrador le quitó el acceso: el servidor ya no le muestra ni le acepta nada; aquí solo se le explica y se cierra la sesión */
+const MSG_SIN_ACCESO = "Tu cuenta ya no tiene acceso a OLI. Si es un error, habla con el administrador del negocio.";
+async function cuentaEstado() { try { const r = await withTimeout(SB.client.rpc("oli_cuenta_estado"), 9000); return r && !r.error ? r.data : null; } catch (e) { return null; } }
+let revisandoAcceso = 0;
+async function revisarAcceso() {
+  if (Date.now() - revisandoAcceso < 60000) return; revisandoAcceso = Date.now(); const gen = SB.gen;
+  if ((await cuentaEstado()) === "sin_acceso" && gen === SB.gen && !DS.needsLogin) { SB.gen++; await sesionPerdida(MSG_SIN_ACCESO); }
 }
 function usarIdent(i) { DS.uid = i.uid; DS.isAdmin = i.isAdmin; SB.org = i.org; SB.store = i.store; SB.role = i.role; DS.nombre = i.nombre || ""; DS.needsLogin = false; }
 /* lo que este rol no puede leer no debe quedarse en el dispositivo (p. ej. costos en la tablet del empleado) */
@@ -174,7 +184,8 @@ async function sbApply(op) {
     const m = String(r.error.message || ""), st = r.error.status || r.status || 0;
     if (r.error.code === "28000" || /not_authenticated|JWT|expired/i.test(m) || st === 401) { SB.authError = true; throw {code: "unavailable", message: "sesión vencida"}; }
     if (st === 409 || r.error.code === "23505" || r.error.code === "40001" || r.error.code === "40P01") throw {code: "unavailable", message: "reintentar"};   // carrera momentánea, no es rechazo
-    if (r.error.code === "42501" || /no_membership/.test(m) || (st >= 400 && st < 500 && st !== 408 && st !== 429)) throw {code: "invalid_argument", message: m};
+    if (/no_membership/.test(m)) { revisarAcceso(); throw {code: "unavailable", message: "esta cuenta no tiene acceso al negocio"}; }   // no es un rechazo del cambio: se guarda hasta que se aclare
+    if (r.error.code === "42501" || (st >= 400 && st < 500 && st !== 408 && st !== 429)) throw {code: "invalid_argument", message: m};
     throw {code: "unavailable", message: m};
   }
   SB.authError = false; const x = r.data && r.data[0]; if (x && x.status === "rejected") throw {code: "invalid_argument", message: x.detail || "rechazada"};
@@ -212,7 +223,14 @@ async function sbSalir() {
   DS.needsLogin = true; DS.loginMsg = ""; DS.isAdmin = false; DS.uid = null; changed();
 }
 function borrarSesionGuardada() { try { for (let i = localStorage.length - 1; i >= 0; i--) { const k = localStorage.key(i); if (k && /^sb-.*-auth-token/.test(k)) localStorage.removeItem(k); } } catch (e) {} }
-async function sbInvitar(d) { const r = await SB.client.functions.invoke("invite-user", {body: d}); if (r.error) throw new Error((r.data && r.data.error) || "No se pudo crear la cuenta."); return r.data; }
+// si la función responde con error, el motivo viene en el cuerpo de la respuesta (r.error.context), no en r.data
+async function sbCuenta(d, msg) {
+  const r = await SB.client.functions.invoke("invite-user", {body: d});
+  if (r.error) { let m = ""; try { const b = r.error.context && typeof r.error.context.json === "function" ? await r.error.context.json() : null; m = b && b.error ? String(b.error) : ""; } catch (e) {}
+    throw new Error(m || (errRed(r.error) || r.error.name === "FunctionsFetchError" ? MSG_SIN_RED : msg || "No se pudo hacer el cambio en la cuenta.")); }
+  return r.data;
+}
+const sbInvitar = d => sbCuenta(d, "No se pudo crear la cuenta.");
 /* fotos: la imagen completa va a Storage; en el documento queda la ruta y una miniatura para verla sin conexión */
 async function sbSubirFoto(blob, pid) { const path = SB.org + "/products/" + pid + ".jpg"; const r = await SB.client.storage.from("product-images").upload(path, blob, {upsert: true, contentType: "image/jpeg"}); if (r.error) throw r.error; return path; }
 /* errores no controlados -> auditoría (monitoreo) */

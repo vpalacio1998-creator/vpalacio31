@@ -1,6 +1,6 @@
 /* cómo dar acceso depende de dónde corre OLI: servidor propio (cuentas con correo), Claude (botón Compartir) o un solo equipo */
 const accesoHTML = () => DS.backend === "supabase"
-  ? `<div class="notice" style="margin-top:10px"><b>Dar acceso</b><br>Crea una cuenta con correo y contraseña. <b>Empleado</b>: vende, abre y cierra caja y consulta inventario. <b>Administrador</b>: ve todo. Los permisos los valida el servidor.</div><button class="btn pri sm" style="margin-top:10px" data-act="nuevaCuenta">${ic("plus", 16)} Crear cuenta</button>`
+  ? cuentasHTML() + `<div class="notice" style="margin-top:10px"><b>Dar acceso</b><br>Crea una cuenta con correo y contraseña. <b>Empleado</b>: vende, abre y cierra caja y consulta inventario. <b>Administrador</b>: ve todo. Los permisos los valida el servidor.</div><button class="btn pri sm" style="margin-top:10px" data-act="nuevaCuenta">${ic("plus", 16)} Crear cuenta</button>`
   : DS.mode === "local" ? `<div class="notice" style="margin-top:10px"><b>Un solo equipo</b><br>En este modo OLI guarda todo en este equipo. Para que cada persona entre con su propia cuenta, conecta OLI al servidor.</div>`
   : `<div class="notice" style="margin-top:10px"><b>Cómo dar acceso</b><br>Usa el botón <b>Compartir</b> de Claude: <b>Colaborador</b> = Empleado (vende, abre y cierra caja, consulta inventario). <b>Editor</b> = Administrador. Cada persona entra con su propia cuenta de Claude, y los permisos los valida el servidor.</div>`;
 ACT.nuevaCuenta = () => abrir(() => head("Crear cuenta") + `<p class="muted" style="margin-top:0">La persona entra a OLI con este correo y esta contraseña.</p>
@@ -14,8 +14,46 @@ ACT.doNuevaCuenta = async () => {
   if (!email || !/@/.test(email)) { toast("Escribe un correo válido.", true); return; }
   if (password.length < 8) { toast("La contraseña debe tener al menos 8 caracteres.", true); return; }
   if (!conRed()) { toast("Para crear una cuenta se necesita Internet.", true); return; }
-  try { await sbInvitar({email, password, rol, nombre: nombre || null}); audit("CUENTA_CREADA", email, rol === "admin" ? "Administrador" : "Empleado"); cerrar(); toast("Cuenta creada. Ya puede entrar con " + email); }
+  if (S.creandoCuenta) return; S.creandoCuenta = true;                                              // un doble toque no crea dos veces
+  try { await sbInvitar({email, password, rol, nombre: nombre || null}); audit("CUENTA_CREADA", email, rol === "admin" ? "Administrador" : "Empleado"); NOMBRES_SB.t = 0; cerrar(); toast("Cuenta creada. Ya puede entrar con " + email); }
   catch (e) { toast(e.message || "No se pudo crear la cuenta.", true); }
+  finally { S.creandoCuenta = false; }
+};
+/* cuentas del negocio (con servidor): quitar o devolver el acceso y cambiar la contraseña. Las reglas las aplica el servidor
+   (invite-user): solo cuentas de este negocio, nunca la propia ni la del propietario, y un administrador solo maneja empleados. */
+const ROL_TXT = {owner: "Propietario", admin: "Administrador", employee: "Empleado"};
+const cuentaManejable = m => m.user_id !== DS.uid && m.role !== "owner" && (m.role === "employee" || SB.role === "owner");
+function cuentasHTML() {
+  if (!DS.isAdmin) return ""; nombresServidor();
+  const xs = NOMBRES_SB.lista; if (!xs) return conRed() ? '<p class="small muted" style="margin:10px 0 0">Cargando las cuentas…</p>' : "";
+  return `<div style="margin-top:10px"><div class="small muted" style="margin-bottom:4px">Cuentas que pueden entrar a OLI</div>${xs.slice().sort((a, b) => (b.active !== false) - (a.active !== false) || String(a.display_name || "").localeCompare(String(b.display_name || ""), "es")).map(m => {
+    const nom = String(m.display_name || "").trim() || "Sin nombre", on = m.active !== false, yo = m.user_id === DS.uid;
+    return `<div class="row" style="align-items:flex-start;padding:9px 0"><div class="l" style="flex:1"><b>${esc(nom)}</b>${yo ? ' <span class="pill">Tú</span>' : ""}${on ? "" : ' <span class="pill bad">Sin acceso</span>'}<div class="small muted">${esc(ROL_TXT[m.role] || m.role || "")}</div></div>${cuentaManejable(m) ? `<div style="text-align:right;display:flex;flex-direction:column;gap:4px">${on ? `<button class="btn ghost sm" data-act="cuentaClave" data-id="${esc(m.user_id)}">Cambiar contraseña</button><button class="btn ghost sm" data-act="cuentaAcceso" data-id="${esc(m.user_id)}" data-v="0">Quitar acceso</button>` : `<button class="btn ghost sm" data-act="cuentaAcceso" data-id="${esc(m.user_id)}" data-v="1">Devolver acceso</button>`}</div>` : ""}</div>`; }).join("")}</div>`;
+}
+const cuentaDe = uid => (NOMBRES_SB.lista || []).find(m => m.user_id === uid) || null;
+const nombreCuenta = m => String((m && m.display_name) || "").trim() || "esa cuenta";
+ACT.cuentaAcceso = async (el, d) => {
+  const m = cuentaDe(d.id), activo = d.v === "1"; if (!m || !cuentaManejable(m)) return;
+  if (!conRed()) { toast("Para cambiar el acceso de una cuenta se necesita Internet.", true); return; }
+  if (!activo && !(await confirmar({titulo: "¿Quitarle el acceso a " + nombreCuenta(m) + "?", texto: "Desde ese momento el servidor no le muestra ni le acepta nada, aunque tenga OLI abierto, y no puede volver a ingresar. Lo que ese equipo tenga sin enviar no llega. No se borra nada: sus ventas y registros quedan. Puedes devolverle el acceso cuando quieras.", si: "Sí, quitar acceso", no: "No", peligro: true}))) return;
+  if (S.cambiandoCuenta) return; S.cambiandoCuenta = true;
+  try { const r = await sbCuenta({accion: "acceso", user_id: m.user_id, activo}); audit(activo ? "CUENTA_ACTIVADA" : "CUENTA_DESACTIVADA", m.user_id, nombreCuenta(m)); NOMBRES_SB.t = 0; nombresServidor();
+    toast(r && r.aviso ? r.aviso : activo ? "Acceso devuelto a " + nombreCuenta(m) + "." : nombreCuenta(m) + " ya no tiene acceso.", !!(r && r.aviso)); }
+  catch (e) { toast(e.message || "No se pudo cambiar el acceso.", true); }
+  finally { S.cambiandoCuenta = false; draw(); }
+};
+ACT.cuentaClave = (el, d) => { const m = cuentaDe(d.id); if (!m || !cuentaManejable(m)) return;
+  abrir(() => head("Contraseña nueva") + `<p class="muted" style="margin-top:0">Para <b>${esc(nombreCuenta(m))}</b>. Dísela en persona: OLI no la envía por correo. Las sesiones que ya tiene abiertas siguen abiertas.</p>
+    <label class="f" for="cc-p">Contraseña nueva (mínimo 8 caracteres)</label><input class="in plain" id="cc-p" type="text" autocomplete="new-password">
+    <button class="btn pri xl wide" style="margin-top:14px" data-act="doCuentaClave" data-id="${esc(m.user_id)}">GUARDAR CONTRASEÑA</button>`); };
+ACT.doCuentaClave = async (el, d) => {
+  const m = cuentaDe(d.id), pw = ($("#cc-p") || {}).value || ""; if (!m) return;
+  if (pw.length < 8) { toast("La contraseña debe tener al menos 8 caracteres.", true); return; }
+  if (!conRed()) { toast("Para cambiar una contraseña se necesita Internet.", true); return; }
+  if (S.cambiandoCuenta) return; S.cambiandoCuenta = true;
+  try { await sbCuenta({accion: "clave", user_id: m.user_id, password: pw}); audit("CLAVE_CAMBIADA", m.user_id, nombreCuenta(m)); cerrar(); toast("Contraseña cambiada. Ya puede entrar con la nueva."); }
+  catch (e) { toast(e.message || "No se pudo cambiar la contraseña.", true); }
+  finally { S.cambiandoCuenta = false; }
 };
 /* ============ 73 · equipo, auditoría y ajustes (administrador) ============ */
 S.audFiltro = "todo";
@@ -36,7 +74,7 @@ VIEWS.equipo = () => {
     ${aud.length ? aud.map(a => { pedirNombres([a.u]); return `<div class="row" style="align-items:flex-start;padding:8px 0"><div class="l"><b>${esc(audTxt(a.a))}</b><div class="small muted">${esc(a.d || "")}</div></div><div style="text-align:right" class="xs muted">${diaCorto(ymd(new Date(a.t)))} ${hora(a.t)}<br>${esc(nombreDe(a.u) || "")}</div></div>`; }).join("") : '<p class="muted">No hay registros.</p>'}</div>
   ${rechazadas().length ? `<div class="card"><h3>Cambios de este equipo que el servidor no aceptó</h3>${rechazadasHTML()}<p class="small muted">No borres los datos del navegador: se perderían.</p></div>` : ""}`;
 };
-const AUD_TXT = {LUZ_AFUERA: "Prendió la luz de afuera", PLATA_CONTADA: "Anotó la plata que tienen", PLATA_CONTADA_QUITADA: "Quitó la plata anotada", APERTURA_CAJA: "Caja abierta", CIERRE_CAJA: "Caja cerrada", REABRIR_CAJA: "Caja reabierta", CAJA_RETIRO: "Salió dinero de caja", CAJA_INGRESO: "Entró dinero a caja", CAJA_GASTO: "Pago desde caja", ANULACION: "Venta anulada", DESCUENTO: "Descuento aplicado", MERMA: "Pérdida anotada", AJUSTE_INVENTARIO: "Inventario ajustado", CAMBIO_PRECIO: "Cambio de precio", CAMBIO_COSTO: "Cambio de costo", PRODUCTO_CREADO: "Producto creado", PRODUCTO_EDITADO: "Producto editado", PRODUCTO_DESACTIVADO: "Producto desactivado", PRODUCTO_REACTIVADO: "Producto reactivado", GASTO: "Gasto registrado", GASTO_BORRADO: "Gasto borrado", COMPRA_PEDIDO: "Compra creada", COMPRA_RECIBIDA: "Compra recibida", PRODUCCION: "Producción registrada", RECETA: "Receta guardada", CONFIG: "Configuración", TERCERO: "Tercero guardado", CONFLICTO_INVENTARIO: "Venta que necesita revisión", SYNC_RECHAZADA: "Envío rechazado", NOTIS_ACTIVADAS: "Activó las notificaciones", NOTIS_DESACTIVADAS: "Desactivó las notificaciones", CAMBIO_DESCARTADO: "Cambio rechazado descartado", REINTENTO_ADMIN: "Envió con su cuenta un cambio de otra persona", AVISO_EQUIPO_QUITADO: "Quitó el aviso de un equipo que ya no existe"};
+const AUD_TXT = {LUZ_AFUERA: "Prendió la luz de afuera", PLATA_CONTADA: "Anotó la plata que tienen", PLATA_CONTADA_QUITADA: "Quitó la plata anotada", APERTURA_CAJA: "Caja abierta", CIERRE_CAJA: "Caja cerrada", REABRIR_CAJA: "Caja reabierta", CAJA_RETIRO: "Salió dinero de caja", CAJA_INGRESO: "Entró dinero a caja", CAJA_GASTO: "Pago desde caja", ANULACION: "Venta anulada", DESCUENTO: "Descuento aplicado", MERMA: "Pérdida anotada", AJUSTE_INVENTARIO: "Inventario ajustado", CAMBIO_PRECIO: "Cambio de precio", CAMBIO_COSTO: "Cambio de costo", PRODUCTO_CREADO: "Producto creado", PRODUCTO_EDITADO: "Producto editado", PRODUCTO_DESACTIVADO: "Producto desactivado", PRODUCTO_REACTIVADO: "Producto reactivado", GASTO: "Gasto registrado", GASTO_BORRADO: "Gasto borrado", COMPRA_PEDIDO: "Compra creada", COMPRA_RECIBIDA: "Compra recibida", PRODUCCION: "Producción registrada", RECETA: "Receta guardada", CONFIG: "Configuración", TERCERO: "Tercero guardado", CONFLICTO_INVENTARIO: "Venta que necesita revisión", SYNC_RECHAZADA: "Envío rechazado", NOTIS_ACTIVADAS: "Activó las notificaciones", NOTIS_DESACTIVADAS: "Desactivó las notificaciones", CAMBIO_DESCARTADO: "Cambio rechazado descartado", REINTENTO_ADMIN: "Envió con su cuenta un cambio de otra persona", AVISO_EQUIPO_QUITADO: "Quitó el aviso de un equipo que ya no existe", CUENTA_CREADA: "Creó una cuenta", CUENTA_DESACTIVADA: "Quitó el acceso a una cuenta", CUENTA_ACTIVADA: "Devolvió el acceso a una cuenta", CLAVE_CAMBIADA: "Cambió la contraseña de una cuenta"};
 const audTxt = a => AUD_TXT[a] || a;
 /* un equipo que se borró o se cambió deja para siempre su último aviso de cambios rechazados: el administrador lo puede quitar
    (no borra el equipo, para que las ventas viejas sigan mostrando su nombre; si ese equipo vuelve a conectarse, el aviso vuelve) */
