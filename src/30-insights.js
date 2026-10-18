@@ -84,7 +84,7 @@ const esSemanal = p => { const c = pedidoSemanalCfg(); return !!(c && p && c.cat
 // la próxima llegada que todavía se alcanza a pedir: {llega, cierre (día límite), lim (ms), sig (la llegada siguiente)}
 function proximaLlegada(ahora = Date.now()) {
   const c = pedidoSemanalCfg(); if (!c) return null;
-  for (let i = 1; i <= 14; i++) {
+  for (let i = 0; i <= 14; i++) {                                                            // hoy también, si el límite es hoy y todavía no pasó
     const f = addDays(S.today, i); if (dowOf(f) !== Number(c.llega)) continue;
     let dc = f; for (let k = 0; k < 7 && dowOf(dc) !== Number(c.cierreDia); k++) dc = addDays(dc, -1);
     const lim = parse(dc).getTime() + (Number(c.cierreHora) || 0) * 3600000;
@@ -93,22 +93,25 @@ function proximaLlegada(ahora = Date.now()) {
   return null;
 }
 const horaTxt = h => { h = Number(h) || 0; return h === 12 ? "12 m." : (h % 12 || 12) + (h < 12 ? " a. m." : " p. m."); };
-function planSemanal(p, st, pend) {
-  const L = proximaLlegada(); if (!L) return null; const c = pedidoSemanalCfg();
+// lo ya pedido de un producto: lo que llega antes de esa llegada (o sin día) cuenta para los días de antes; lo que llega ese mismo día, para su semana
+function pendPorLlegada(pid, llega) { const o = {antes: 0, ese: 0}; for (const c of Object.values(col("compras"))) if (c && c.estado === "pedido" && !(c.llega && c.llega > llega)) for (const l of (c.lineas || [])) if (l.pid === pid) o[c.llega === llega ? "ese" : "antes"] += Number(l.q) || 0; return o; }
+function planSemanal(p, st) {
+  const L = proximaLlegada(); if (!L) return null; const c = pedidoSemanalCfg(), pp = pendPorLlegada(p.id, L.llega);
   const antes = []; for (let d = S.today; d < L.llega; d = addDays(d, 1)) antes.push(d);
   const semana = Array.from({length: 7}, (_, i) => addDays(L.llega, i)), demAntes = demanda(p.id, antes), demSem = demanda(p.id, semana);
   const pack = (p.pack || 1) > 1 ? p.pack : Math.max(1, Number(c.paquete) || 1);
-  const alLlegar = st == null || demAntes == null ? null : st + pend - demAntes;          // negativo: se acaba antes de que llegue el pedido
-  const need = demSem == null ? null : demSem + (p.seg || 0) - Math.max(alLlegar == null ? 0 : alLlegar, 0);
+  const alLlegar = st == null || demAntes == null ? null : st + pp.antes - demAntes;      // negativo: se acaba antes de que llegue el pedido
+  const need = demSem == null ? null : demSem + (p.seg || 0) - Math.max(alLlegar == null ? 0 : alLlegar, 0) - pp.ese;
   const comprar = need == null ? null : Math.ceil(Math.max(0, Math.ceil(need - 1e-9)) / pack) * pack;
-  return {L, antes, semana, demAntes, demSem, pack, alLlegar, need, comprar, paquetes: comprar == null ? null : comprar / pack};
+  return {L, antes, semana, demAntes, demSem, pack, alLlegar, need, comprar, paquetes: comprar == null ? null : comprar / pack, yaPedido: pp.ese};
 }
 
 // para Inicio y los recordatorios: cuánto pedir en el próximo pedido semanal y si ya se hizo
 function pedidoSemanalResumen() {
   const c = pedidoSemanalCfg(), L = c && proximaLlegada(); if (!L) return null;
-  const todas = recomendarCompra([S.today]).filter(r => r.semanal), rows = todas.filter(r => r.comprar > 0), hecho = Object.values(col("compras")).some(x => x && x.estado === "pedido" && x.llega === L.llega);
-  return {L, cats: c.cats.join(", "), cierreHora: c.cierreHora, rows, hecho, paquetes: sum(rows, r => r.semanal.paquetes || 0), unidades: sum(rows, r => r.comprar), horas: (L.lim - Date.now()) / 3600000, agotan: todas.filter(r => r.semanal.alLlegar != null && r.semanal.alLlegar < 0)};
+  // ya está hecho cuando hay pedido para esa llegada y no falta nada más (lo pedido ya cuenta en cada producto)
+  const todas = recomendarCompra([S.today]).filter(r => r.semanal), rows = todas.filter(r => r.comprar > 0), yaPedido = Object.values(col("compras")).some(x => x && x.estado === "pedido" && x.llega === L.llega);
+  return {L, cats: c.cats.join(", "), cierreHora: c.cierreHora, rows, yaPedido, hecho: yaPedido && !rows.length, sinDatos: todas.length > 0 && todas.every(r => r.comprar == null), paquetes: sum(rows, r => r.semanal.paquetes || 0), unidades: sum(rows, r => r.comprar), horas: (L.lim - Date.now()) / 3600000, agotan: todas.filter(r => r.semanal.alLlegar != null && r.semanal.alLlegar < 0)};
 }
 
 /* ---- cuándo se agota ---- */
@@ -124,12 +127,12 @@ function recomendarCompra(fechas) {
   return terminados().filter(p => p.activo !== false && p.controla !== false && !p.combo).map(p => {
     const st = stockDe(p.id), avg = avgDaily(p.id), dem = demanda(p.id, fechas), seg = p.seg || 0, pend = comprasPend()[p.id] || 0, cov = cobertura(p.id), tp = tendencia(p.id);
     const u7 = unidadesVent(p.id, 7);
-    const sem = esSemanal(p) ? planSemanal(p, st, pend) : null;   // llega un solo día de la semana: se calcula para esa semana, sin importar el periodo elegido
+    const sem = esSemanal(p) ? planSemanal(p, st) : null;   // llega un solo día de la semana: se pide para esa semana, sin importar el periodo elegido
     const need = sem ? sem.need : dem == null ? null : dem + seg - Math.max(st == null ? 0 : st, 0) - pend;
     let comprar = sem ? sem.comprar : need == null ? null : Math.max(0, Math.ceil(need)); const pack = sem ? sem.pack : p.pack || 1; if (!sem && comprar && pack > 1) comprar = Math.ceil(comprar / pack) * pack;
     const ag = agotaEn(p.id), riesgo = st != null && st <= 0 ? "bad" : (ag && ag.dias <= 2) ? "bad" : (ag && ag.dias <= 5) ? "warn" : st != null && st <= (p.min || 0) ? "warn" : "ok";
-    const ds = sem ? sem.demSem : dem, fs = sem ? sem.semana : fechas;
-    return {pid: p.id, p, st, avg, dem: ds, seg, pend, cov, comprar, riesgo, ag, semanal: sem, why: {avg, u7: u7.u, dias7: u7.dias, tend: tp, st, cov, dem: ds, seg, pend, comprar, fechas: fs, pack, fac: fs.map(f => factorDia(f).fac), esp: fs.map(f => ({f, x: factorDia(f)})).filter(o => o.x.esp)}};
+    const ds = sem ? sem.demSem : dem, fs = sem ? sem.semana : fechas;   // dem sigue siendo la del periodo pedido (fin de semana, proyección…); la explicación usa la semana del pedido
+    return {pid: p.id, p, st, avg, dem, seg, pend, cov, comprar, riesgo, ag, semanal: sem, why: {avg, u7: u7.u, dias7: u7.dias, tend: tp, st, cov, dem: ds, seg, pend, comprar, fechas: fs, pack, fac: fs.map(f => factorDia(f).fac), esp: fs.map(f => ({f, x: factorDia(f)})).filter(o => o.x.esp)}};
   }).sort((a, b) => ({bad: 0, warn: 1, ok: 2}[a.riesgo] - {bad: 0, warn: 1, ok: 2}[b.riesgo]) || (b.comprar || 0) - (a.comprar || 0));
 }
 function explicarCompra(r) {

@@ -84,13 +84,15 @@ document.addEventListener("change", e => {
 // el pedido semanal (data-v="semanal") va aparte: es de otro proveedor y tiene día de llegada
 const filasPedido = sem => recomendarCompra(fechasHorizonte(S.horiz)).filter(r => S.sel.has(r.pid) && r.comprar > 0 && !!r.semanal === !!sem);
 ACT.generarPedido = (el, d) => {
-  S.pedSem = !!(d && d.v === "semanal"); const rows = filasPedido(S.pedSem); if (!rows.length) return;
+  S.pedSem = !!(d && d.v === "semanal"); const rows = filasPedido(S.pedSem); if (!rows.length) return; S.pedL = S.pedSem ? rows[0].semanal.L.llega : "";
   abrir(() => head(S.pedSem ? "Pedido del " + DOW[dowOf(rows[0].semanal.L.llega)] : "Generar pedido") + `<p style="margin-top:0">${rows.length} productos · ${sum(rows, r => r.comprar)} unidades${S.pedSem ? " (" + sum(rows, r => r.semanal.paquetes || 0) + " paquetes)" : ""}. Quedará como pedido pendiente${S.pedSem ? " para el " + esc(diaLargo(rows[0].semanal.L.llega)) : ""}. Cuando llegue, lo registras y el inventario se actualiza.</p>
     <label class="f" for="gp-prov">Proveedor (opcional)</label><input class="in plain" id="gp-prov" value="${esc(S.ultimoProv)}" placeholder="Ej: Distribuidora de paletas">
     <button class="btn pri xl wide" style="margin-top:14px" data-act="doPedido">CREAR PEDIDO</button>`);
 };
 ACT.doPedido = async () => {
   const rows = filasPedido(S.pedSem), prov = $("#gp-prov").value.trim(), L = S.pedSem ? proximaLlegada() : null; S.ultimoProv = prov; if (!rows.length) return;
+  // si la hora límite pasó mientras se revisaba, las cantidades ya son de otra semana: se avisa en vez de guardar otra cosa
+  if (S.pedSem && (!L || L.llega !== S.pedL)) { cerrar(); draw(); toast("Ya pasó la hora límite de ese pedido. Revisa las cantidades del siguiente.", true); return; }
   await guardar(async () => { await crearCompra(Object.assign({proveedor: prov, lineas: rows.map(r => ({pid: r.pid, q: r.comprar, costo: costoActual(r.pid), ok: false})), motivo: L ? "Pedido semanal (llega el " + diaCorto(L.llega) + ")" : "Recomendación OLI (" + (HORIZONTES.find(h => h[0] === S.horiz) || ["", ""])[1] + ")"}, L ? {llega: L.llega} : {})); cerrar(); S.comprasTab = "lista"; S.sel = null; draw(); }, "Pedido creado");
 };
 function vFinde() {

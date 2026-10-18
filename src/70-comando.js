@@ -132,7 +132,7 @@ function bInventario() {
 function bSemanal() {
   const ps = pedidoSemanalResumen(); if (!ps) return "";
   return `<div class="${ps.horas <= 24 && !ps.hecho && ps.paquetes ? "notice warn" : "card flat"}" style="margin:0 0 10px"><b>Pedido de ${esc(ps.cats)} · llega el ${esc(diaCorto(ps.L.llega))}</b>
-    <div class="small">${ps.hecho ? "Ya está pedido." : ps.paquetes ? ps.paquetes + (ps.paquetes === 1 ? " paquete" : " paquetes") + " (" + ps.unidades + " unidades) · pídelo hasta el " + esc(diaCorto(ps.L.cierre)) + ", " + horaTxt(ps.cierreHora) : "Con lo que hay alcanza hasta la llegada siguiente."}</div>
+    <div class="small">${ps.hecho ? "Ya está pedido." : ps.paquetes ? (ps.yaPedido ? "Ya hay un pedido, pero faltan " : "") + ps.paquetes + (ps.paquetes === 1 ? " paquete" : " paquetes") + " (" + ps.unidades + " unidades) · pídelo hasta el " + esc(diaCorto(ps.L.cierre)) + ", " + horaTxt(ps.cierreHora) : ps.sinDatos ? "Todavía no hay suficientes ventas para calcular el pedido." : "Con lo que hay alcanza hasta la llegada siguiente."}</div>
     ${ps.agotan.length ? `<div class="small" style="color:var(--danger)">Se pueden acabar antes de que llegue: ${esc(ps.agotan.slice(0, 3).map(r => r.p.nombre).join(", "))}${ps.agotan.length > 3 ? " y " + (ps.agotan.length - 3) + " más" : ""}.</div>` : ""}</div>`;
 }
 function bCompra() {

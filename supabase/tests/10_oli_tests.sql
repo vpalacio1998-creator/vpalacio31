@@ -546,6 +546,40 @@ begin
   perform t_assert(not has_function_privilege('authenticated', 'oli_push_claves()', 'execute') and not has_function_privilege('anon', 'oli_push_claves()', 'execute')
     and not has_table_privilege('authenticated', 'oli_push_conf', 'select') and not has_table_privilege('anon', 'oli_push_conf', 'select'), 'ni un usuario ni alguien sin sesión pueden leer esa llave');
   perform t_assert(position('x-oli-llave' in pg_get_functiondef('oli.push_ping()'::regprocedure)) > 0, 'la base de datos la manda al avisar a la función');
+  -- T39: arreglos de la revisión (datos del cliente en ventas viejas, confirmación que no se pierde, corrección antes que la venta, pérdida sin cantidad)
+  reset role; set role authenticated; perform t_as(e1);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','rv1','col','ventas','id','2026-10-12_d1','t',1,'data', jsonb_build_object('fecha','2026-10-12','dev','d1','uid','u1','ventas', jsonb_build_array(
+         '{"id":"d1-rv-1","n":1,"num":"Caja 1 #1","t":1000,"fecha":"2026-10-12","uid":"u1","dev":"d1","m":"Efectivo","total":8000,"sub":8000,"desc":0,"cliente":{"doc":"900111222","nombre":"Cliente Viejo","correo":"v@ejemplo.co"},"items":[{"pid":"p-mango","n":"Paleta Mango","q":1,"p":8000,"d":0}]}'::jsonb,
+         '{"id":"d1-rv-2","n":2,"num":"Caja 1 #2","t":2000,"fecha":"2026-10-12","uid":"u1","dev":"d1","m":"Nequi","total":8000,"sub":8000,"desc":0,"items":[{"pid":"p-mango","n":"Paleta Mango","q":1,"p":8000,"d":0}]}'::jsonb)))), 'd1', '1.0');
+  perform t_assert(r->0->>'status' = 'applied', 'una versión vieja manda una venta con los datos del cliente adentro');
+  perform t_assert(position('900111222' in (select data::text from oli_docs where collection = 'ventas' and doc_id = '2026-10-12_d1')) = 0
+    and (select vv->'cliente' from oli_docs o, jsonb_array_elements(o.data->'ventas') vv where o.collection = 'ventas' and o.doc_id = '2026-10-12_d1' and vv->>'id' = 'd1-rv-1') = 'true'::jsonb,
+    'el servidor no deja esos datos en la venta (que leen todos los equipos): queda cliente: true');
+  perform t_assert((select count(*) from oli_docs where collection = 'facturas' and doc_id = '2026-10-12_d1') = 0, '…y la empleada no los puede leer');
+  reset role;
+  perform t_assert((select i->>'doc' from oli_docs o, jsonb_array_elements(o.data->'items') i where o.collection = 'facturas' and o.doc_id = '2026-10-12_d1' and i->>'ventaId' = 'd1-rv-1') = '900111222'
+    and (select customer from sales where id = 'd1-rv-1') = 'true'::jsonb, 'quedan en «facturas» para el administrador, y tampoco en sales.customer');
+  set role authenticated; perform t_as(a);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','rv2','col','ajustescaja','id','2026-10-12_d1','t',10,'data','{"fecha":"2026-10-12","dev":"d1","items":[{"id":"rva1","t":10,"tipo":"medio","ventas":["d1-rv-1"],"de":"Efectivo","a":"Nequi","monto":8000,"conf":false}]}'::jsonb)), 'dA', '1.0');
+  reset role; set role authenticated; perform t_as(e1);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','rv3','col','confirmaciones','id','2026-10-12_d1','t',20,'data','{"fecha":"2026-10-12","dev":"d1","items":[{"id":"cf-rv-1","ventaId":"d1-rv-1","t":20}]}'::jsonb)), 'd1', '1.0');
+  reset role;
+  perform t_assert((select method from payments where sale_id = 'd1-rv-1') = 'Nequi' and (select confirmed from payments where sale_id = 'd1-rv-1'), 'corregida a Nequi y después confirmada');
+  set role authenticated; perform t_as(a);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','rv4','col','ajustescaja','id','2026-10-12_d1','t',30,'data','{"fecha":"2026-10-12","dev":"d1","items":[{"id":"rva2","t":30,"tipo":"aceptada","monto":1000,"nota":"x"}]}'::jsonb)), 'dA', '1.0');
+  reset role;
+  perform t_assert((select confirmed from payments where sale_id = 'd1-rv-1'), 'otro ajuste en la misma caja no la vuelve a dejar por confirmar');
+  set role authenticated; perform t_as(a);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','rv5','col','ajustescaja','id','2026-10-13_d1','t',40,'data','{"fecha":"2026-10-13","dev":"d1","items":[{"id":"rva3","t":40,"tipo":"medio","ventas":["d1-rv-9"],"de":"Efectivo","a":"QR Bancolombia","monto":8000,"conf":true}]}'::jsonb)), 'dA', '1.0');
+  reset role; set role authenticated; perform t_as(e1);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','rv6','col','ventas','id','2026-10-13_d1','t',50,'data', jsonb_build_object('fecha','2026-10-13','dev','d1','uid','u1','ventas', jsonb_build_array(
+         '{"id":"d1-rv-9","n":9,"num":"Caja 1 #9","t":5000,"fecha":"2026-10-13","uid":"u1","dev":"d1","m":"Efectivo","total":8000,"sub":8000,"desc":0,"items":[{"pid":"p-mango","n":"Paleta Mango","q":1,"p":8000,"d":0}]}'::jsonb)))), 'd1', '1.0');
+  reset role;
+  perform t_assert((select method from payments where sale_id = 'd1-rv-9') = 'QR Bancolombia' and (select confirmed from payments where sale_id = 'd1-rv-9'), 'una corrección que llegó antes que la venta se aplica cuando llega la venta');
+  set role authenticated; perform t_as(e1);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','rv7','col','mermas','id','2026-10-13_d1','t',60,'data','{"fecha":"2026-10-13","dev":"d1","items":[{"id":"mmq","t":60,"pid":"p-mango","motivo":"Daño"}]}'::jsonb),
+         jsonb_build_object('op_id','rv8','col','confirmaciones','id','2026-10-13_d1','t',61,'data','{"fecha":"2026-10-13","dev":"d1","items":[]}'::jsonb)), 'd1', '1.0');
+  perform t_assert(r->0->>'status' = 'rejected' and r->1->>'status' = 'applied', 'una pérdida sin cantidad se rechaza con un motivo y lo demás del envío sí se guarda');
   -- T16: coherencia de totales
   reset role;
   perform t_assert((select sum(total) from sales) = (select sum(amount) from payments), 'total de ventas = total de pagos');

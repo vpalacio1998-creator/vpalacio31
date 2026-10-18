@@ -145,21 +145,32 @@ const sbCols = () => SHARED_COLS.concat(DS.isAdmin ? SB_ADMIN_COLS : []);
    (y si es anterior a un borrado de datos de prueba, el servidor las descartaría): no se deja abrir caja ni vender hasta corregirla.
    Cuando alguien corrige la fecha en el equipo, OLI lo nota solo (el reloj del equipo salta y el cronómetro del navegador no) y vuelve a
    preguntar la hora al servidor: se desbloquea sin cerrar la app. Mientras la fecha esté mal, pregunta cada 30 s. */
-const RELOJ_EQ = {dif: 0, t: 0, w: Date.now(), p: performance.now()};
+const RELOJ_EQ = {dif: 0, t: 0, w: Date.now(), p: performance.now(), n: 0, dudoso: false};
+// pregunta la hora al servidor; devuelve true si la pudo comprobar. Una respuesta que tardó mucho, que llegó después de otra consulta más
+// nueva o durante la cual cambió el reloj del equipo no sirve para comparar: se descarta y se vuelve a preguntar.
 async function revisarReloj(ya) {
   const espera = Math.abs(RELOJ_EQ.dif) > 15 * 60000 ? 30000 : 5 * 60000;
-  if (!SB.client || SB.sinVerificar || !conRed() || (!ya && RELOJ_EQ.t && Math.abs(Date.now() - RELOJ_EQ.t) < espera)) return; RELOJ_EQ.t = Date.now();
-  try { const t0 = Date.now(), r = await withTimeout(Promise.resolve(SB.client.rpc("oli_ping")), 8000), t1 = Date.now();
-    const srv = r && !r.error && r.data ? new Date(r.data).getTime() : NaN; if (isFinite(srv)) { const d = Math.round((t0 + t1) / 2 - srv); if (Math.abs(d - RELOJ_EQ.dif) > 60000) { RELOJ_EQ.dif = d; changed(); } } } catch (e) {}
+  if (!SB.client || SB.sinVerificar || !conRed() || (!ya && RELOJ_EQ.t && Math.abs(Date.now() - RELOJ_EQ.t) < espera)) return false; RELOJ_EQ.t = Date.now();
+  const n = ++RELOJ_EQ.n;
+  try {
+    const t0 = Date.now(), p0 = performance.now(), r = await withTimeout(Promise.resolve(SB.client.rpc("oli_ping")), 8000), t1 = Date.now(), p1 = performance.now();
+    if (n !== RELOJ_EQ.n) return false;
+    const srv = r && !r.error && r.data ? new Date(r.data).getTime() : NaN;
+    if (!isFinite(srv) || p1 - p0 > 10000 || Math.abs((t1 - t0) - (p1 - p0)) > 60000) { RELOJ_EQ.t = 0; return false; }
+    const d = Math.round((t0 + t1) / 2 - srv); RELOJ_EQ.dudoso = false; if (Math.abs(d - RELOJ_EQ.dif) > 60000) RELOJ_EQ.dif = d; changed(); return true;
+  } catch (e) { if (n === RELOJ_EQ.n) RELOJ_EQ.t = 0; return false; }                     // sin respuesta: se vuelve a intentar
 }
 function vigilarReloj() {
   const w = Date.now(), p = performance.now(), salto = (w - RELOJ_EQ.w) - (p - RELOJ_EQ.p); RELOJ_EQ.w = w; RELOJ_EQ.p = p; hoyAlDia();
-  if (Math.abs(RELOJ_EQ.dif) > 15 * 60000 && conRed()) revisarReloj();                       // fecha mal: se vuelve a preguntar (cada 30 s)
-  if (Math.abs(salto) < 2 * 60000) return;                                                    // el reloj del equipo cambió (o el equipo estuvo dormido)
-  if (SB.client && !SB.sinVerificar && conRed()) { revisarReloj(true); return; }
-  // sin Internet, con la fecha marcada mal: el salto es alguien cambiando la fecha (se desbloquea si la deja bien). Con la fecha bien no se toca:
-  // un equipo que estuvo dormido también "salta" y no se debe bloquear por eso
-  if (Math.abs(RELOJ_EQ.dif) > 15 * 60000) { RELOJ_EQ.dif += salto; changed(); }
+  const mal = Math.abs(RELOJ_EQ.dif) > 15 * 60000;
+  if (Math.abs(salto) >= 2 * 60000) {                                                         // el reloj del equipo cambió (o el equipo estuvo dormido)
+    // mientras responde el servidor (o si no hay Internet): con la fecha marcada mal, se desbloquea solo si el cambio deshizo justo la
+    // diferencia; si no, queda "sin comprobar". Con la fecha bien no se toca: un equipo dormido también salta y no se bloquea por eso.
+    if (mal) { if (Math.abs(RELOJ_EQ.dif + salto) < 15 * 60000) { RELOJ_EQ.dif += salto; RELOJ_EQ.dudoso = false; } else RELOJ_EQ.dudoso = true; changed(); }
+    if (SB.client && !SB.sinVerificar && conRed()) revisarReloj(true);
+    return;
+  }
+  if (mal && conRed()) revisarReloj();                                                        // fecha mal: se vuelve a preguntar (cada 30 s)
 }
 setInterval(vigilarReloj, 5000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) vigilarReloj(); });

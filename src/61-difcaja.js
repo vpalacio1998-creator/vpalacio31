@@ -104,16 +104,17 @@ ACT.difGuardar = (el, d) => unaVez("act:difGuardar", () => guardar(async () => {
   Object.assign(S.dif, DIF_VACIO, {paso: "inicio", sel: []}); redrawSheet(true);
 }, "Guardado"));
 // gastos en efectivo de ese día ya anotados en Dinero que todavía no explican ninguna diferencia
-const gastosLigables = c => { const usados = new Set(ajustesCajaAll().filter(x => x.gasto).map(x => x.gasto));
-  return Object.entries(col("gastos")).filter(([id, g]) => g && g.fecha === c.fecha && (g.m || "Efectivo") === "Efectivo" && !g.cajaAjuste && !usados.has(id)).map(([id, g]) => Object.assign({id}, g)); };
+// (también el que se registró al revisar un cierre anterior de esta misma caja, si la reabrieron y la volvieron a cerrar)
+const gastosLigables = c => { const r = difCierre(c), aqui = new Set(((r && r.items) || []).filter(x => x.gasto).map(x => x.gasto)), otras = new Set(ajustesCajaAll().filter(x => x.gasto && x.caja !== c.id).map(x => x.gasto));
+  return Object.entries(col("gastos")).filter(([id, g]) => g && g.fecha === c.fecha && (g.m || "Efectivo") === "Efectivo" && (!g.cajaAjuste || g.cajaAjuste === c.id) && !aqui.has(id) && !otras.has(id)).map(([id, g]) => Object.assign({}, g, {id})); };
 ACT.difLigarGasto = (el, d) => unaVez("act:difLigar", () => guardar(async () => {
   const c = difCajaActual(), g = gastosLigables(c).find(x => x.id === d.id); if (!g) throw new Error("Ese gasto ya no está o ya explica otra diferencia.");
-  await ajustarCaja(c, {tipo: "gasto", monto: Number(g.valor) || 0, gasto: g.id, vinculado: true, nota: (g.cat || "Gasto") + (g.desc ? " · " + g.desc : "") + " (ya estaba anotado)"});
+  await ajustarCaja(c, {tipo: "gasto", monto: Number(g.valor) || 0, gasto: g.id, vinculado: true, nota: "ya estaba anotado"});
   Object.assign(S.dif, DIF_VACIO, {paso: "inicio", sel: []}); redrawSheet(true);
 }, "Listo"));
 ACT.difDeshacer = async (el, d) => {
   const c = cajaPorId(S.dif.id), x = ajustesCajaAll().find(y => y.id === d.id); if (!c || !x) return;
-  if (!(await confirmar({titulo: "¿Deshacer esto?", texto: "<b>" + esc(ajusteTxt(x)) + "</b>" + (x.tipo === "gasto" && !x.vinculado ? "<br>También se borra el gasto que se registró." : "") + (x.tipo === "medio" && x.ventas ? "<br>Las ventas vuelven a quedar como " + esc(x.de) + "." : "") + "<br>Queda en el historial.", si: "Sí, deshacer", no: "No"}))) { abrir(difSheet, {live: true}); return; }
+  if (!(await confirmar({titulo: "¿Deshacer esto?", texto: "<b>" + esc(ajusteTxt(x)) + "</b>" + (x.tipo === "gasto" && !x.vinculado ? "<br>También se borra el gasto que se registró." : "") + (x.tipo === "medio" && x.ventas ? "<br>Esas ventas dejan de tener esta corrección (si después se corrigieron otra vez, queda la última)." : "") + "<br>Queda en el historial.", si: "Sí, deshacer", no: "No"}))) { abrir(difSheet, {live: true}); return; }
   await guardar(() => deshacerAjuste(c, x.id), "Deshecho"); abrir(difSheet, {live: true});
 };
 /* corregir cómo pagaron una venta, desde su detalle (si su caja ya cerró, también explica la diferencia de ese cierre) */

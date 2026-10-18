@@ -132,7 +132,8 @@ function resumenInteligente() {
   const cmp = e.cmp; if (!ventasDiaTot(S.today)) parts.push("Todavía no hay ventas registradas hoy."); else if (cmp.delta != null) parts.push(Math.abs(cmp.delta) < 0.05 ? "Hoy OLI vende en línea con lo habitual." : `Hoy OLI está vendiendo ${cmp.delta > 0 ? "por encima" : "por debajo"} del promedio.`);
   if (est.length >= 2) parts.push(`${est[0].n.replace(/^Paleta /, "")} y ${est[1].n.replace(/^Paleta /, "")} lideran las ventas.`); else if (est.length === 1) parts.push(`${est[0].n.replace(/^Paleta /, "")} lidera las ventas.`);
   if (e.rh) parts.push(`${e.rh.p.nombre.replace(/^Paleta /, "")} presenta riesgo de agotamiento antes del cierre.`); else { const r = riesgosStock()[0]; if (r) parts.push(r.t); }
-  const cajas = cajasAll().filter(x => x.fecha === S.today); if (cajas.some(x => { if (cajaEstado(x) !== "cerrada") return false; const r = difCierre(x); return r && Math.abs(r.final) >= 1 && !r.revisada; })) parts.push("Hay una diferencia de caja por revisar."); else if (cajas.length) parts.push("La caja está cuadrada.");
+  const cajas = cajasAll().filter(x => x.fecha === S.today), rs = cajas.filter(x => cajaEstado(x) === "cerrada").map(difCierre).filter(Boolean), acept = sum(rs.filter(r => r.revisada && Math.abs(r.final) >= 1), r => r.final);
+  if (rs.some(r => Math.abs(r.final) >= 1 && !r.revisada)) parts.push("Hay una diferencia de caja por revisar."); else if (Math.abs(acept) >= 1) parts.push("La caja quedó revisada con " + (acept < 0 ? "un faltante" : "un sobrante") + " aceptado de " + fmt(Math.abs(acept)) + "."); else if (cajas.length) parts.push("La caja está cuadrada.");
   const pri = e.rh ? `reponer ${e.rh.p.nombre.replace(/^Paleta /, "")}` : (decisionesHoy().urgente[0] ? decisionesHoy().urgente[0].t.replace(/\.$/, "").toLowerCase() : null);
   parts.push(pri ? `La prioridad es ${pri}.` : "No hay prioridades urgentes.");
   return parts.join(" ");

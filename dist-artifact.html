@@ -333,7 +333,7 @@ details.help span{display:block;font-weight:500;font-size:13px;line-height:1.35;
 <div class="sheet hidden" id="sheet"><div class="bg"></div><div class="panel" role="dialog" aria-modal="true" id="panel"></div></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script>window.OLI_BUILD="aa109e77";</script>
+<script>window.OLI_BUILD="a2af2320";</script>
 <script>
 (function(){
 "use strict";
@@ -615,7 +615,9 @@ async function remove(colName, id) {
   if (DS.mode === "db") kickSync(); else { delete OUT[path]; IDB.tx([["outbox", "del", path]]).catch(() => {}); }
 }
 const idsDe = d => { const o = []; for (const k of ["ventas", "items", "movs", "cierres"]) for (const x of (d && d[k]) || []) if (x && x.id) o.push(x.id); return o; };
-function appendTo(colName, id, field, item, base) { const cur = (DS.c[colName] || {})[id] || Object.assign({}, base, {[field]: []}); return put(colName, id, Object.assign({}, cur, {[field]: (cur[field] || []).concat([item])})); }
+// lo que esta persona puede escribir pero no leer (datos de factura) no queda en el equipo: la base es lo que sigue en la cola sin enviar,
+// para que lo nuevo no pise lo pendiente (también después de reiniciar la app)
+function appendTo(colName, id, field, item, base) { const q = puede(colName, "read") ? null : OUT[pathOf(colName, id)], cur = (q && !q.del && q.data) || (DS.c[colName] || {})[id] || Object.assign({}, base, {[field]: []}); return put(colName, id, Object.assign({}, cur, {[field]: (cur[field] || []).concat([item])})); }
 function patchItem(colName, id, field, itemId, patch) { const cur = (DS.c[colName] || {})[id]; if (!cur) return Promise.reject(new Error("no existe")); return put(colName, id, Object.assign({}, cur, {[field]: (cur[field] || []).map(x => x.id === itemId ? Object.assign({}, x, patch) : x)})); }
 
 /* ---------- auditoría ---------- */
@@ -756,6 +758,7 @@ function avisarPurgado(op, res) {
 // (todo lo de esas fechas el servidor lo descarta). Devuelve el texto para la persona, o "".
 function relojMalo() {
   const hoy = ymd(), dif = typeof RELOJ_EQ !== "undefined" ? RELOJ_EQ.dif : 0, real = Math.abs(dif) > 15 * 60000 ? ymd(new Date(Date.now() - dif)) : hoy;
+  if (real !== hoy && typeof RELOJ_EQ !== "undefined" && RELOJ_EQ.dudoso) return "La fecha de este equipo estaba mal y se cambió sin poder comprobarla con el servidor. Revisa que la tablet diga la fecha de hoy (Fecha y hora → «Fecha y hora automáticas») y conéctala a Internet un momento: apenas OLI la compruebe, deja vender solo.";
   if (real !== hoy) return "La fecha de este equipo está mal: dice " + diaCorto(hoy) + " y hoy es " + diaCorto(real) + ". Corrígela en los ajustes de la tablet (Fecha y hora → activar «Fecha y hora automáticas»). Apenas quede bien, OLI deja vender solo.";
   const cv = cortesPurga().ventas; if (DS.mode === "db" && typeof cv === "string" && cv && hoy < cv) return "La fecha de este equipo está mal: dice " + diaCorto(hoy) + ", antes del " + diaCorto(cv) + ". Corrígela en los ajustes de la tablet (Fecha y hora → activar «Fecha y hora automáticas»). Apenas quede bien, OLI deja vender solo.";
   return "";
@@ -855,14 +858,21 @@ function heartbeat(force) {
 }
 
 /* ---------- conflictos: inventario negativo tras sincronizar ---------- */
+// avisos de conflicto de inventario ya hechos hoy en este equipo (sobreviven al reinicio; si el almacenamiento falla, al menos en memoria)
+const CONF_AV = {f: "", s: new Set()};
+function confCargar() { if (CONF_AV.f === S.today) return; CONF_AV.f = S.today; CONF_AV.s = new Set(); try { const o = JSON.parse(localStorage.getItem("oli_conf_avisados") || "{}"); if (o.f === S.today && Array.isArray(o.p)) o.p.forEach(x => CONF_AV.s.add(x)); } catch (e) {} }
+const confAvisado = pid => { confCargar(); return CONF_AV.s.has((DS.uid || "local") + ":" + pid); };
+function marcarConfAvisado(pid) { confCargar(); CONF_AV.s.add((DS.uid || "local") + ":" + pid); try { localStorage.setItem("oli_conf_avisados", JSON.stringify({f: S.today, p: [...CONF_AV.s]})); } catch (e) {} }
 function detectarConflictos() {
   if (!window.stockMap) return;
   try {
     const sm = window.stockMap();
     for (const [pid, st] of Object.entries(sm)) if (st != null && st < 0) {
       const p = typeof prod === "function" ? prod(pid) : null; if (p && (p.combo || p.activo === false)) continue;   // un combo o un producto desactivado no se cuenta: el aviso va en su insumo
-      const key = "conf_" + pid + "_" + S.today, ya = (DS.c.audit || {})[(DS.uid || "local") + "__audit_" + S.today];
-      if (ya && (ya.items || []).some(i => i.a === "CONFLICTO_INVENTARIO" && i.r === pid)) continue;
+      // ¿ya se avisó hoy? Un empleado no lee el historial (se borra del equipo al enviarse): se recuerda aparte, si no se avisaría en cada sincronización
+      const id = (DS.uid || "local") + "__audit_" + S.today, q = OUT[pathOf("audit", id)], ya = [(DS.c.audit || {})[id], q && !q.del && q.data].filter(Boolean);
+      if (confAvisado(pid) || ya.some(d => (d.items || []).some(i => i.a === "CONFLICTO_INVENTARIO" && i.r === pid))) continue;
+      marcarConfAvisado(pid);
       audit("CONFLICTO_INVENTARIO", pid, "Inventario quedó en " + st + " al sincronizar ventas de varios dispositivos. Revisar y hacer un conteo.");
     }
   } catch (e) {}
@@ -1029,21 +1039,32 @@ const sbCols = () => SHARED_COLS.concat(DS.isAdmin ? SB_ADMIN_COLS : []);
    (y si es anterior a un borrado de datos de prueba, el servidor las descartaría): no se deja abrir caja ni vender hasta corregirla.
    Cuando alguien corrige la fecha en el equipo, OLI lo nota solo (el reloj del equipo salta y el cronómetro del navegador no) y vuelve a
    preguntar la hora al servidor: se desbloquea sin cerrar la app. Mientras la fecha esté mal, pregunta cada 30 s. */
-const RELOJ_EQ = {dif: 0, t: 0, w: Date.now(), p: performance.now()};
+const RELOJ_EQ = {dif: 0, t: 0, w: Date.now(), p: performance.now(), n: 0, dudoso: false};
+// pregunta la hora al servidor; devuelve true si la pudo comprobar. Una respuesta que tardó mucho, que llegó después de otra consulta más
+// nueva o durante la cual cambió el reloj del equipo no sirve para comparar: se descarta y se vuelve a preguntar.
 async function revisarReloj(ya) {
   const espera = Math.abs(RELOJ_EQ.dif) > 15 * 60000 ? 30000 : 5 * 60000;
-  if (!SB.client || SB.sinVerificar || !conRed() || (!ya && RELOJ_EQ.t && Math.abs(Date.now() - RELOJ_EQ.t) < espera)) return; RELOJ_EQ.t = Date.now();
-  try { const t0 = Date.now(), r = await withTimeout(Promise.resolve(SB.client.rpc("oli_ping")), 8000), t1 = Date.now();
-    const srv = r && !r.error && r.data ? new Date(r.data).getTime() : NaN; if (isFinite(srv)) { const d = Math.round((t0 + t1) / 2 - srv); if (Math.abs(d - RELOJ_EQ.dif) > 60000) { RELOJ_EQ.dif = d; changed(); } } } catch (e) {}
+  if (!SB.client || SB.sinVerificar || !conRed() || (!ya && RELOJ_EQ.t && Math.abs(Date.now() - RELOJ_EQ.t) < espera)) return false; RELOJ_EQ.t = Date.now();
+  const n = ++RELOJ_EQ.n;
+  try {
+    const t0 = Date.now(), p0 = performance.now(), r = await withTimeout(Promise.resolve(SB.client.rpc("oli_ping")), 8000), t1 = Date.now(), p1 = performance.now();
+    if (n !== RELOJ_EQ.n) return false;
+    const srv = r && !r.error && r.data ? new Date(r.data).getTime() : NaN;
+    if (!isFinite(srv) || p1 - p0 > 10000 || Math.abs((t1 - t0) - (p1 - p0)) > 60000) { RELOJ_EQ.t = 0; return false; }
+    const d = Math.round((t0 + t1) / 2 - srv); RELOJ_EQ.dudoso = false; if (Math.abs(d - RELOJ_EQ.dif) > 60000) RELOJ_EQ.dif = d; changed(); return true;
+  } catch (e) { if (n === RELOJ_EQ.n) RELOJ_EQ.t = 0; return false; }                     // sin respuesta: se vuelve a intentar
 }
 function vigilarReloj() {
   const w = Date.now(), p = performance.now(), salto = (w - RELOJ_EQ.w) - (p - RELOJ_EQ.p); RELOJ_EQ.w = w; RELOJ_EQ.p = p; hoyAlDia();
-  if (Math.abs(RELOJ_EQ.dif) > 15 * 60000 && conRed()) revisarReloj();                       // fecha mal: se vuelve a preguntar (cada 30 s)
-  if (Math.abs(salto) < 2 * 60000) return;                                                    // el reloj del equipo cambió (o el equipo estuvo dormido)
-  if (SB.client && !SB.sinVerificar && conRed()) { revisarReloj(true); return; }
-  // sin Internet, con la fecha marcada mal: el salto es alguien cambiando la fecha (se desbloquea si la deja bien). Con la fecha bien no se toca:
-  // un equipo que estuvo dormido también "salta" y no se debe bloquear por eso
-  if (Math.abs(RELOJ_EQ.dif) > 15 * 60000) { RELOJ_EQ.dif += salto; changed(); }
+  const mal = Math.abs(RELOJ_EQ.dif) > 15 * 60000;
+  if (Math.abs(salto) >= 2 * 60000) {                                                         // el reloj del equipo cambió (o el equipo estuvo dormido)
+    // mientras responde el servidor (o si no hay Internet): con la fecha marcada mal, se desbloquea solo si el cambio deshizo justo la
+    // diferencia; si no, queda "sin comprobar". Con la fecha bien no se toca: un equipo dormido también salta y no se bloquea por eso.
+    if (mal) { if (Math.abs(RELOJ_EQ.dif + salto) < 15 * 60000) { RELOJ_EQ.dif += salto; RELOJ_EQ.dudoso = false; } else RELOJ_EQ.dudoso = true; changed(); }
+    if (SB.client && !SB.sinVerificar && conRed()) revisarReloj(true);
+    return;
+  }
+  if (mal && conRed()) revisarReloj();                                                        // fecha mal: se vuelve a preguntar (cada 30 s)
 }
 setInterval(vigilarReloj, 5000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) vigilarReloj(); });
@@ -1245,11 +1266,11 @@ const ventasAll = () => memo("ventasAll", () => {
          "aceptada" no se sabe: se acepta la diferencia como está (queda revisada)
    La diferencia FINAL de un cierre = la del cierre − lo que explican sus ajustes. Todas las pantallas usan difCierre(). */
 const TIPOS_AJUSTE = {medio: "Se cobró por otro medio", gasto: "Pago desde la caja sin anotar", retiro: "Retiro sin anotar", ingreso: "Entrada de plata sin anotar", conteo: "Se contó mal", aceptada: "Se aceptó la diferencia"};
-const ajustesCajaAll = () => memo("ajCaja", () => {
-  const out = []; for (const [docId, d] of Object.entries(col("ajustescaja"))) for (const x of ((d && d.items) || [])) if (x && x.id) out.push(Object.assign({caja: docId}, x));
-  const anul = new Set(out.filter(x => x.anula).map(x => x.anula));
-  return out.filter(x => !x.anula && !anul.has(x.id)).sort((a, b) => (a.t || 0) - (b.t || 0));
-});
+// todos los ajustes (también los que después se deshicieron) y los vigentes
+const ajustesCajaTodos = () => memo("ajCajaT", () => { const out = []; for (const [docId, d] of Object.entries(col("ajustescaja"))) for (const x of ((d && d.items) || [])) if (x && x.id) out.push(Object.assign({caja: docId}, x)); return out.sort((a, b) => (a.t || 0) - (b.t || 0)); });
+const ajustesCajaAll = () => memo("ajCaja", () => { const out = ajustesCajaTodos(), anul = new Set(out.filter(x => x.anula).map(x => x.anula)); return out.filter(x => !x.anula && !anul.has(x.id)); });
+const ventaPorId = id => memo("vPorId", () => { const m = {}; for (const v of ventasAll()) m[v.id] = v; return m; })[id];
+const conVentas = x => x.tipo === "medio" && Array.isArray(x.ventas) && x.ventas.length > 0;
 // la corrección de medio vigente de cada venta (la más reciente que no se deshizo)
 const correccionesMedio = () => memo("corrM", () => { const m = {}; for (const x of ajustesCajaAll()) if (x.tipo === "medio" && Array.isArray(x.ventas) && x.a) for (const id of x.ventas) m[id] = x; return m; });
 // cuánto de la diferencia explica un ajuste (con el signo de la diferencia: un faltante se explica con montos negativos)
@@ -1262,16 +1283,30 @@ function explicaAjuste(x) {
   if (x.tipo === "conteo") return -(Number(x.monto) || 0);   // había más de lo contado (+): explica un faltante; había menos (−): explica un sobrante
   return 0;
 }
+/* Las correcciones de medio cambian lo esperado de la caja (ventasAll ya usa el medio corregido). Las que el equipo ya tenía al cerrar
+   están dentro de lo esperado de ese cierre (el cierre guarda cuáles: ci.ajustes); las demás (hechas después, o con la caja abierta pero
+   sin llegar a tiempo a ese equipo) explican la diferencia. Se cuenta por venta: de cómo estaba al cerrar a cómo está ahora, así
+   deshacer una corrección que no es la última también cuadra. */
 function difCierre(c) {
   const ci = c && (c.cierres || []).slice(-1)[0]; if (!ci) return null;
-  const id = c.id || cajaId(c.fecha, c.dev), items = ajustesCajaAll().filter(x => x.caja === id && x.cierre === ci.id);
-  const orig = Math.round(Number(ci.dif) || 0), explicado = Math.round(sum(items, explicaAjuste)), final = orig - explicado;
+  const id = c.id || cajaId(c.fecha, c.dev), vig = ajustesCajaAll().filter(x => x.caja === id), todos = ajustesCajaTodos().filter(x => x.caja === id && !x.anula);
+  const sabia = new Set(Array.isArray(ci.ajustes) ? ci.ajustes : []);   // un cierre sin esa lista lo hizo una versión que no conocía las correcciones
+  const items = vig.filter(x => conVentas(x) ? !sabia.has(x.id) : (x.cierre === ci.id || x.cierre == null));
+  let expMedio = 0; const sids = new Set(); for (const x of todos) if (conVentas(x)) x.ventas.forEach(v => sids.add(v));
+  for (const sid of sids) {
+    const v = ventaPorId(sid); if (!v) continue;
+    const conocidas = todos.filter(x => conVentas(x) && sabia.has(x.id) && x.ventas.includes(sid)), alCerrar = conocidas.length ? conocidas[conocidas.length - 1].a : (v.mOrig || v.m), t = Number(v.total) || 0;
+    expMedio += alCerrar === "Efectivo" && v.m !== "Efectivo" ? -t : alCerrar !== "Efectivo" && v.m === "Efectivo" ? t : 0;
+  }
+  const orig = Math.round(Number(ci.dif) || 0), explicado = Math.round(sum(items.filter(x => !conVentas(x)), explicaAjuste) + expMedio), final = orig - explicado;
   const contado = (Number(ci.contado) || 0) + sum(items.filter(x => x.tipo === "conteo"), x => Number(x.monto) || 0);
   return {ci, orig, explicado, final, items, conAjustes: items.length > 0, contado, esperado: contado - final, revisada: Math.abs(final) < 1 || items.some(x => x.tipo === "aceptada")};
 }
 // diferencia que cuenta (para plata y alertas): la final si el administrador ya la revisó con ajustes; si no, la del cierre
 const difFinal = c => { const r = difCierre(c); return r ? r.final : 0; };
-const ajusteTxt = x => (TIPOS_AJUSTE[x.tipo] || x.tipo) + (x.tipo === "medio" ? ": " + (x.de || "?") + " → " + (x.a || "?") : "") + (x.monto && x.tipo !== "aceptada" ? " · " + fmt(Math.abs(Number(x.monto))) : "") + (x.mot ? " · " + x.mot : "") + (x.nota ? " · " + x.nota : "");
+// el detalle de un gasto (en qué, qué se pagó) no se copia al ajuste, que leen los equipos de caja: lo ve el administrador desde el gasto
+const ajusteTxt = x => { const g = x.tipo === "gasto" && x.gasto ? col("gastos")[x.gasto] : null;
+  return (TIPOS_AJUSTE[x.tipo] || x.tipo) + (x.tipo === "medio" ? ": " + (x.de || "?") + " → " + (x.a || "?") : "") + (x.monto && x.tipo !== "aceptada" ? " · " + fmt(Math.abs(Number(x.monto))) : "") + (g ? " · " + (g.cat || "Gasto") + (g.desc ? " · " + g.desc : "") : "") + (x.mot ? " · " + x.mot : "") + (x.nota ? " · " + x.nota : ""); };
 const ventasOk = () => memo("ventasOk", () => ventasAll().filter(v => !v.anulada));
 /* datos del cliente que pidió factura (solo administrador). Las ventas viejas los traían adentro (v.cliente con doc y nombre). */
 const facturasMap = () => memo("facts", () => { const m = {}; for (const d of Object.values(col("facturas"))) for (const x of (d.items || [])) if (x && x.ventaId) m[x.ventaId] = x; return m; });
@@ -1349,6 +1384,12 @@ function cajaCalc(c) {
   const ap = c.apertura ? c.apertura.monto : 0, ef = por["Efectivo"] || 0;
   return {ventas: sum(vs, v => v.total), n: vs.length, por, apertura: ap, efectivo: ef, ingresos: ing, retiros: ret, gastos: gas, esperado: ap + ef + ing - ret - gas};
 }
+// las cuentas de una caja tal como quedaron al cerrarla (si el cierre las guardó); si no, las de ahora
+function cajaAlCerrar(c, ci) {
+  const k = cajaCalc(c), r = ci && ci.resumen; if (!r || !r.por) return k;
+  const ef = Number(r.por.Efectivo) || 0, n = v => v == null ? 0 : Number(v) || 0;
+  return {ventas: n(r.ventas), n: n(r.n), por: r.por, apertura: r.apertura != null ? n(r.apertura) : k.apertura, efectivo: ef, ingresos: n(r.ingresos), retiros: n(r.retiros), gastos: n(r.gastos), esperado: ci.esperado != null ? n(ci.esperado) : k.esperado};
+}
 const cajaHoy = () => cajaDe(S.today);
 function cajaBloqueada() { const c = cajaHoy(); return c && cajaEstado(c) === "cerrada"; }
 const checklistDe = (fecha, dev = DEV.id) => col("checklists")[cajaId(fecha, dev)] || {fecha, dev, apertura: {}, cierre: {}};
@@ -1360,7 +1401,7 @@ const esDevolucion = m => m && m.tipo === "retiro" && String(m.motivo || "").ind
 function devolucionesEn(a, b) { const out = []; for (const c of cajasAll()) if (c.fecha >= a && c.fecha <= b) for (const m of (c.movs || [])) if (esDevolucion(m)) out.push({fecha: c.fecha, monto: Number(m.monto) || 0}); return out; }
 function gastosEn(a, b) {
   const out = [];
-  for (const [id, g] of Object.entries(col("gastos"))) if (g.fecha >= a && g.fecha <= b) out.push(Object.assign({id, origen: "gasto"}, g));
+  for (const [id, g] of Object.entries(col("gastos"))) if (g.fecha >= a && g.fecha <= b) out.push(Object.assign({}, g, {id, origen: "gasto"}));
   for (const c of cajasAll()) if (c.fecha >= a && c.fecha <= b) for (const m of (c.movs || [])) if (m.tipo === "gasto") out.push({id: m.id, fecha: c.fecha, cat: m.cat || "Otros", desc: m.motivo, valor: m.monto, m: "Efectivo", uid: m.uid, origen: "caja"});
   return out.sort((x, y) => (y.fecha > x.fecha ? 1 : -1));
 }
@@ -1554,7 +1595,7 @@ const esSemanal = p => { const c = pedidoSemanalCfg(); return !!(c && p && c.cat
 // la próxima llegada que todavía se alcanza a pedir: {llega, cierre (día límite), lim (ms), sig (la llegada siguiente)}
 function proximaLlegada(ahora = Date.now()) {
   const c = pedidoSemanalCfg(); if (!c) return null;
-  for (let i = 1; i <= 14; i++) {
+  for (let i = 0; i <= 14; i++) {                                                            // hoy también, si el límite es hoy y todavía no pasó
     const f = addDays(S.today, i); if (dowOf(f) !== Number(c.llega)) continue;
     let dc = f; for (let k = 0; k < 7 && dowOf(dc) !== Number(c.cierreDia); k++) dc = addDays(dc, -1);
     const lim = parse(dc).getTime() + (Number(c.cierreHora) || 0) * 3600000;
@@ -1563,22 +1604,25 @@ function proximaLlegada(ahora = Date.now()) {
   return null;
 }
 const horaTxt = h => { h = Number(h) || 0; return h === 12 ? "12 m." : (h % 12 || 12) + (h < 12 ? " a. m." : " p. m."); };
-function planSemanal(p, st, pend) {
-  const L = proximaLlegada(); if (!L) return null; const c = pedidoSemanalCfg();
+// lo ya pedido de un producto: lo que llega antes de esa llegada (o sin día) cuenta para los días de antes; lo que llega ese mismo día, para su semana
+function pendPorLlegada(pid, llega) { const o = {antes: 0, ese: 0}; for (const c of Object.values(col("compras"))) if (c && c.estado === "pedido" && !(c.llega && c.llega > llega)) for (const l of (c.lineas || [])) if (l.pid === pid) o[c.llega === llega ? "ese" : "antes"] += Number(l.q) || 0; return o; }
+function planSemanal(p, st) {
+  const L = proximaLlegada(); if (!L) return null; const c = pedidoSemanalCfg(), pp = pendPorLlegada(p.id, L.llega);
   const antes = []; for (let d = S.today; d < L.llega; d = addDays(d, 1)) antes.push(d);
   const semana = Array.from({length: 7}, (_, i) => addDays(L.llega, i)), demAntes = demanda(p.id, antes), demSem = demanda(p.id, semana);
   const pack = (p.pack || 1) > 1 ? p.pack : Math.max(1, Number(c.paquete) || 1);
-  const alLlegar = st == null || demAntes == null ? null : st + pend - demAntes;          // negativo: se acaba antes de que llegue el pedido
-  const need = demSem == null ? null : demSem + (p.seg || 0) - Math.max(alLlegar == null ? 0 : alLlegar, 0);
+  const alLlegar = st == null || demAntes == null ? null : st + pp.antes - demAntes;      // negativo: se acaba antes de que llegue el pedido
+  const need = demSem == null ? null : demSem + (p.seg || 0) - Math.max(alLlegar == null ? 0 : alLlegar, 0) - pp.ese;
   const comprar = need == null ? null : Math.ceil(Math.max(0, Math.ceil(need - 1e-9)) / pack) * pack;
-  return {L, antes, semana, demAntes, demSem, pack, alLlegar, need, comprar, paquetes: comprar == null ? null : comprar / pack};
+  return {L, antes, semana, demAntes, demSem, pack, alLlegar, need, comprar, paquetes: comprar == null ? null : comprar / pack, yaPedido: pp.ese};
 }
 
 // para Inicio y los recordatorios: cuánto pedir en el próximo pedido semanal y si ya se hizo
 function pedidoSemanalResumen() {
   const c = pedidoSemanalCfg(), L = c && proximaLlegada(); if (!L) return null;
-  const todas = recomendarCompra([S.today]).filter(r => r.semanal), rows = todas.filter(r => r.comprar > 0), hecho = Object.values(col("compras")).some(x => x && x.estado === "pedido" && x.llega === L.llega);
-  return {L, cats: c.cats.join(", "), cierreHora: c.cierreHora, rows, hecho, paquetes: sum(rows, r => r.semanal.paquetes || 0), unidades: sum(rows, r => r.comprar), horas: (L.lim - Date.now()) / 3600000, agotan: todas.filter(r => r.semanal.alLlegar != null && r.semanal.alLlegar < 0)};
+  // ya está hecho cuando hay pedido para esa llegada y no falta nada más (lo pedido ya cuenta en cada producto)
+  const todas = recomendarCompra([S.today]).filter(r => r.semanal), rows = todas.filter(r => r.comprar > 0), yaPedido = Object.values(col("compras")).some(x => x && x.estado === "pedido" && x.llega === L.llega);
+  return {L, cats: c.cats.join(", "), cierreHora: c.cierreHora, rows, yaPedido, hecho: yaPedido && !rows.length, sinDatos: todas.length > 0 && todas.every(r => r.comprar == null), paquetes: sum(rows, r => r.semanal.paquetes || 0), unidades: sum(rows, r => r.comprar), horas: (L.lim - Date.now()) / 3600000, agotan: todas.filter(r => r.semanal.alLlegar != null && r.semanal.alLlegar < 0)};
 }
 
 /* ---- cuándo se agota ---- */
@@ -1594,12 +1638,12 @@ function recomendarCompra(fechas) {
   return terminados().filter(p => p.activo !== false && p.controla !== false && !p.combo).map(p => {
     const st = stockDe(p.id), avg = avgDaily(p.id), dem = demanda(p.id, fechas), seg = p.seg || 0, pend = comprasPend()[p.id] || 0, cov = cobertura(p.id), tp = tendencia(p.id);
     const u7 = unidadesVent(p.id, 7);
-    const sem = esSemanal(p) ? planSemanal(p, st, pend) : null;   // llega un solo día de la semana: se calcula para esa semana, sin importar el periodo elegido
+    const sem = esSemanal(p) ? planSemanal(p, st) : null;   // llega un solo día de la semana: se pide para esa semana, sin importar el periodo elegido
     const need = sem ? sem.need : dem == null ? null : dem + seg - Math.max(st == null ? 0 : st, 0) - pend;
     let comprar = sem ? sem.comprar : need == null ? null : Math.max(0, Math.ceil(need)); const pack = sem ? sem.pack : p.pack || 1; if (!sem && comprar && pack > 1) comprar = Math.ceil(comprar / pack) * pack;
     const ag = agotaEn(p.id), riesgo = st != null && st <= 0 ? "bad" : (ag && ag.dias <= 2) ? "bad" : (ag && ag.dias <= 5) ? "warn" : st != null && st <= (p.min || 0) ? "warn" : "ok";
-    const ds = sem ? sem.demSem : dem, fs = sem ? sem.semana : fechas;
-    return {pid: p.id, p, st, avg, dem: ds, seg, pend, cov, comprar, riesgo, ag, semanal: sem, why: {avg, u7: u7.u, dias7: u7.dias, tend: tp, st, cov, dem: ds, seg, pend, comprar, fechas: fs, pack, fac: fs.map(f => factorDia(f).fac), esp: fs.map(f => ({f, x: factorDia(f)})).filter(o => o.x.esp)}};
+    const ds = sem ? sem.demSem : dem, fs = sem ? sem.semana : fechas;   // dem sigue siendo la del periodo pedido (fin de semana, proyección…); la explicación usa la semana del pedido
+    return {pid: p.id, p, st, avg, dem, seg, pend, cov, comprar, riesgo, ag, semanal: sem, why: {avg, u7: u7.u, dias7: u7.dias, tend: tp, st, cov, dem: ds, seg, pend, comprar, fechas: fs, pack, fac: fs.map(f => factorDia(f).fac), esp: fs.map(f => ({f, x: factorDia(f)})).filter(o => o.x.esp)}};
   }).sort((a, b) => ({bad: 0, warn: 1, ok: 2}[a.riesgo] - {bad: 0, warn: 1, ok: 2}[b.riesgo]) || (b.comprar || 0) - (a.comprar || 0));
 }
 function explicarCompra(r) {
@@ -1999,7 +2043,8 @@ function resumenInteligente() {
   const cmp = e.cmp; if (!ventasDiaTot(S.today)) parts.push("Todavía no hay ventas registradas hoy."); else if (cmp.delta != null) parts.push(Math.abs(cmp.delta) < 0.05 ? "Hoy OLI vende en línea con lo habitual." : `Hoy OLI está vendiendo ${cmp.delta > 0 ? "por encima" : "por debajo"} del promedio.`);
   if (est.length >= 2) parts.push(`${est[0].n.replace(/^Paleta /, "")} y ${est[1].n.replace(/^Paleta /, "")} lideran las ventas.`); else if (est.length === 1) parts.push(`${est[0].n.replace(/^Paleta /, "")} lidera las ventas.`);
   if (e.rh) parts.push(`${e.rh.p.nombre.replace(/^Paleta /, "")} presenta riesgo de agotamiento antes del cierre.`); else { const r = riesgosStock()[0]; if (r) parts.push(r.t); }
-  const cajas = cajasAll().filter(x => x.fecha === S.today); if (cajas.some(x => { if (cajaEstado(x) !== "cerrada") return false; const r = difCierre(x); return r && Math.abs(r.final) >= 1 && !r.revisada; })) parts.push("Hay una diferencia de caja por revisar."); else if (cajas.length) parts.push("La caja está cuadrada.");
+  const cajas = cajasAll().filter(x => x.fecha === S.today), rs = cajas.filter(x => cajaEstado(x) === "cerrada").map(difCierre).filter(Boolean), acept = sum(rs.filter(r => r.revisada && Math.abs(r.final) >= 1), r => r.final);
+  if (rs.some(r => Math.abs(r.final) >= 1 && !r.revisada)) parts.push("Hay una diferencia de caja por revisar."); else if (Math.abs(acept) >= 1) parts.push("La caja quedó revisada con " + (acept < 0 ? "un faltante" : "un sobrante") + " aceptado de " + fmt(Math.abs(acept)) + "."); else if (cajas.length) parts.push("La caja está cuadrada.");
   const pri = e.rh ? `reponer ${e.rh.p.nombre.replace(/^Paleta /, "")}` : (decisionesHoy().urgente[0] ? decisionesHoy().urgente[0].t.replace(/\.$/, "").toLowerCase() : null);
   parts.push(pri ? `La prioridad es ${pri}.` : "No hay prioridades urgentes.");
   return parts.join(" ");
@@ -2074,7 +2119,9 @@ async function registrarVenta(opts) {
   venta.items = items;
   await appendTo("ventas", cajaId(fecha), "ventas", venta, {fecha, dev: DEV.id, uid: uidActual(), devNombre: DEV.nombre});
   // los datos personales del cliente que pide factura no van en la venta (la leen todos los equipos): van aparte, solo para el administrador
-  if (opts.cliente) await appendTo("facturas", cajaId(fecha), "items", {id: "f-" + venta.id, ventaId: venta.id, t, uid: uidActual(), doc: opts.cliente.doc || "", nombre: opts.cliente.nombre || "", correo: opts.cliente.correo || ""}, {fecha, dev: DEV.id});
+  // la venta ya quedó guardada: si fallan los datos de la factura, se avisa (no se marca la venta como fallida, que al reintentar se duplicaría)
+  if (opts.cliente) try { await appendTo("facturas", cajaId(fecha), "items", {id: "f-" + venta.id, ventaId: venta.id, t, uid: uidActual(), doc: opts.cliente.doc || "", nombre: opts.cliente.nombre || "", correo: opts.cliente.correo || ""}, {fecha, dev: DEV.id}); }
+    catch (e) { toast("La venta quedó guardada, pero los datos de la factura no. Anótalos aparte: " + (opts.cliente.doc || "") + " " + (opts.cliente.nombre || ""), true); }
   if (desc > 0) audit("DESCUENTO", venta.id, fmt(desc) + " sobre " + fmt(sub));
   return venta;
 }
@@ -2112,7 +2159,9 @@ async function cerrarCaja(contado, obs, caja) {
   const c = caja || cajaHoy(); if (!c || cajaEstado(c) !== "abierta") throw new Error("No hay una caja abierta para cerrar.");
   const k = cajaCalc(c), dif = contado - k.esperado;
   if (dif !== 0 && !(obs || "").trim()) throw new Error("Hay diferencia: escribe una observación.");
-  const ci = {id: newId(), t: Date.now(), uid: uidActual(), esperado: k.esperado, contado, dif, obs: (obs || "").trim(), resumen: {ventas: k.ventas, n: k.n, por: k.por, apertura: k.apertura, ingresos: k.ingresos, retiros: k.retiros, gastos: k.gastos}};
+  // ajustes: las correcciones de medio que este equipo ya tenía (están dentro de lo esperado); las que lleguen después explican la diferencia
+  const ci = {id: newId(), t: Date.now(), uid: uidActual(), esperado: k.esperado, contado, dif, obs: (obs || "").trim(), resumen: {ventas: k.ventas, n: k.n, por: k.por, apertura: k.apertura, ingresos: k.ingresos, retiros: k.retiros, gastos: k.gastos},
+    ajustes: ajustesCajaAll().filter(x => x.caja === c.id && conVentas(x)).map(x => x.id)};
   await put("cajas", c.id, Object.assign({}, col("cajas")[c.id], {cierres: (c.cierres || []).concat([ci])}));
   audit("CIERRE_CAJA", c.id, "Esperado " + fmt(k.esperado) + " · contado " + fmt(contado) + " · dif " + fmt(dif));
   return ci;
@@ -2168,7 +2217,7 @@ async function contarStock(pid, cantidad, motivo) {
 }
 async function entradaStock(pid, q, o = {}) {
   exigirAdmin(); if (!(q > 0)) throw new Error("Escribe cuántas llegaron."); const st = stockDe(pid), p = prod(pid);
-  await sumarStock(pid, q, {tipo: "entrada", motivo: o.motivo || "Llegó mercancía", ref: o.proveedor || ""});
+  await sumarStock(pid, q, {tipo: "entrada", motivo: o.motivo || "Llegó mercancía"});   // el proveedor no va al kardex (lo leen los equipos de empleados)
   if (o.costo > 0 && (costos()[pid] || {}).costo !== o.costo) await fijarCosto(pid, o.costo, "entrada de mercancía");
   audit("ENTRADA_INVENTARIO", pid, (p ? p.nombre : pid) + ": +" + q + (o.proveedor ? " · " + o.proveedor : ""));
 }
@@ -2221,16 +2270,16 @@ async function corregirMedio(ventas, a, conf, nota) {
   if (ventas.some(v => v.anulada)) throw new Error("Una venta anulada no se corrige.");
   if (ventas.some(v => v.m !== de)) throw new Error("Esas ventas quedaron con medios distintos: corrígelas por separado.");
   if (!a || a === de) throw new Error("Elige el medio con el que de verdad pagaron.");
-  const c = cajaDe(v0.fecha, v0.dev) || {id: cajaId(v0.fecha, v0.dev), fecha: v0.fecha, dev: v0.dev, cierres: []};
+  const c = cajasAll().find(x => x.fecha === v0.fecha && x.dev === v0.dev) || {id: cajaId(v0.fecha, v0.dev), fecha: v0.fecha, dev: v0.dev, cierres: []};   // la caja de esas ventas (también las de la demostración, con otro id)
   return ajustarCaja(c, {tipo: "medio", ventas: ventas.map(v => v.id), de, a, monto: sum(ventas, v => Number(v.total) || 0), conf: !!conf, nota: nota || ""});
 }
 // un pago desde la caja que no se anotó: se registra el gasto (en efectivo, con la fecha de esa caja) y explica la diferencia
 async function gastoDeCaja(c, monto, cat, desc) {
   exigirAdmin(); if (!(monto > 0)) throw new Error("Escribe cuánto se pagó."); if (!cat) throw new Error("Elige en qué fue.");
   const gid = await guardarGasto({fecha: c.fecha, cat, desc: desc || "Pagado con plata de la caja (anotado al revisar el cierre)", valor: monto, m: "Efectivo", cajaAjuste: c.id});
-  return ajustarCaja(c, {tipo: "gasto", monto, gasto: gid, nota: cat + (desc ? " · " + desc : "")});
+  return ajustarCaja(c, {tipo: "gasto", monto, gasto: gid});
 }
-async function guardarGasto(g) { exigirAdmin(); const id = g.id || "g" + newId(); await put("gastos", id, Object.assign({estado: "registrado", uid: uidActual(), t: Date.now()}, g, {id: undefined})); audit("GASTO", id, g.cat + " · " + fmt(g.valor)); return id; }
+async function guardarGasto(g) { exigirAdmin(); const id = g.id || "g" + newId(), data = Object.assign({estado: "registrado", uid: uidActual(), t: Date.now()}, g); delete data.id; await put("gastos", id, data); audit("GASTO", id, g.cat + " · " + fmt(g.valor)); return id; }   // sin "id: undefined": en este equipo taparía el id del gasto
 async function borrarGasto(id) {
   exigirAdmin(); await remove("gastos", id); audit("GASTO_BORRADO", id, "");
   // si ese gasto explicaba una diferencia de caja, ese ajuste se deshace (así lo ven también los equipos de caja, que no leen los gastos)
@@ -2610,7 +2659,7 @@ ACT.confirmarVenta = async () => {
 
 /* ---------- caja ---------- */
 function cajaCardHTML(c, mia) {
-  const k = cajaCalc(c), st = cajaEstado(c), ci = (c.cierres || []).slice(-1)[0], adm = esAdmin();
+  const st = cajaEstado(c), ci = (c.cierres || []).slice(-1)[0], adm = esAdmin(), k = st === "cerrada" && ci ? cajaAlCerrar(c, ci) : cajaCalc(c);   // cerrada: tal como se cerró (lo revisado después va abajo)
   return `<div class="card"><div class="row" style="padding-top:0"><div class="l"><h3 style="margin:0">${esc(c.devNombre || (col("dispositivos")[c.dev] || {}).nombre || "Caja")}</h3><div class="small muted">${st === "abierta" ? "Abierta " + hora(c.apertura.t) : st === "cerrada" ? "Cerrada " + (ci ? hora(ci.t) : "") : "Sin abrir"}</div></div>
     <span class="pill ${st === "abierta" ? "ok" : st === "cerrada" ? "" : "warn"}">${st === "abierta" ? "Abierta" : st === "cerrada" ? "Cerrada" : "Sin abrir"}</span></div>
     ${c.apertura ? `<div class="row"><div class="l">Empezó con</div><div class="r">${fmt(k.apertura)}</div></div>
@@ -2802,16 +2851,17 @@ ACT.difGuardar = (el, d) => unaVez("act:difGuardar", () => guardar(async () => {
   Object.assign(S.dif, DIF_VACIO, {paso: "inicio", sel: []}); redrawSheet(true);
 }, "Guardado"));
 // gastos en efectivo de ese día ya anotados en Dinero que todavía no explican ninguna diferencia
-const gastosLigables = c => { const usados = new Set(ajustesCajaAll().filter(x => x.gasto).map(x => x.gasto));
-  return Object.entries(col("gastos")).filter(([id, g]) => g && g.fecha === c.fecha && (g.m || "Efectivo") === "Efectivo" && !g.cajaAjuste && !usados.has(id)).map(([id, g]) => Object.assign({id}, g)); };
+// (también el que se registró al revisar un cierre anterior de esta misma caja, si la reabrieron y la volvieron a cerrar)
+const gastosLigables = c => { const r = difCierre(c), aqui = new Set(((r && r.items) || []).filter(x => x.gasto).map(x => x.gasto)), otras = new Set(ajustesCajaAll().filter(x => x.gasto && x.caja !== c.id).map(x => x.gasto));
+  return Object.entries(col("gastos")).filter(([id, g]) => g && g.fecha === c.fecha && (g.m || "Efectivo") === "Efectivo" && (!g.cajaAjuste || g.cajaAjuste === c.id) && !aqui.has(id) && !otras.has(id)).map(([id, g]) => Object.assign({}, g, {id})); };
 ACT.difLigarGasto = (el, d) => unaVez("act:difLigar", () => guardar(async () => {
   const c = difCajaActual(), g = gastosLigables(c).find(x => x.id === d.id); if (!g) throw new Error("Ese gasto ya no está o ya explica otra diferencia.");
-  await ajustarCaja(c, {tipo: "gasto", monto: Number(g.valor) || 0, gasto: g.id, vinculado: true, nota: (g.cat || "Gasto") + (g.desc ? " · " + g.desc : "") + " (ya estaba anotado)"});
+  await ajustarCaja(c, {tipo: "gasto", monto: Number(g.valor) || 0, gasto: g.id, vinculado: true, nota: "ya estaba anotado"});
   Object.assign(S.dif, DIF_VACIO, {paso: "inicio", sel: []}); redrawSheet(true);
 }, "Listo"));
 ACT.difDeshacer = async (el, d) => {
   const c = cajaPorId(S.dif.id), x = ajustesCajaAll().find(y => y.id === d.id); if (!c || !x) return;
-  if (!(await confirmar({titulo: "¿Deshacer esto?", texto: "<b>" + esc(ajusteTxt(x)) + "</b>" + (x.tipo === "gasto" && !x.vinculado ? "<br>También se borra el gasto que se registró." : "") + (x.tipo === "medio" && x.ventas ? "<br>Las ventas vuelven a quedar como " + esc(x.de) + "." : "") + "<br>Queda en el historial.", si: "Sí, deshacer", no: "No"}))) { abrir(difSheet, {live: true}); return; }
+  if (!(await confirmar({titulo: "¿Deshacer esto?", texto: "<b>" + esc(ajusteTxt(x)) + "</b>" + (x.tipo === "gasto" && !x.vinculado ? "<br>También se borra el gasto que se registró." : "") + (x.tipo === "medio" && x.ventas ? "<br>Esas ventas dejan de tener esta corrección (si después se corrigieron otra vez, queda la última)." : "") + "<br>Queda en el historial.", si: "Sí, deshacer", no: "No"}))) { abrir(difSheet, {live: true}); return; }
   await guardar(() => deshacerAjuste(c, x.id), "Deshecho"); abrir(difSheet, {live: true});
 };
 /* corregir cómo pagaron una venta, desde su detalle (si su caja ya cerró, también explica la diferencia de ese cierre) */
@@ -3622,7 +3672,7 @@ function bInventario() {
 function bSemanal() {
   const ps = pedidoSemanalResumen(); if (!ps) return "";
   return `<div class="${ps.horas <= 24 && !ps.hecho && ps.paquetes ? "notice warn" : "card flat"}" style="margin:0 0 10px"><b>Pedido de ${esc(ps.cats)} · llega el ${esc(diaCorto(ps.L.llega))}</b>
-    <div class="small">${ps.hecho ? "Ya está pedido." : ps.paquetes ? ps.paquetes + (ps.paquetes === 1 ? " paquete" : " paquetes") + " (" + ps.unidades + " unidades) · pídelo hasta el " + esc(diaCorto(ps.L.cierre)) + ", " + horaTxt(ps.cierreHora) : "Con lo que hay alcanza hasta la llegada siguiente."}</div>
+    <div class="small">${ps.hecho ? "Ya está pedido." : ps.paquetes ? (ps.yaPedido ? "Ya hay un pedido, pero faltan " : "") + ps.paquetes + (ps.paquetes === 1 ? " paquete" : " paquetes") + " (" + ps.unidades + " unidades) · pídelo hasta el " + esc(diaCorto(ps.L.cierre)) + ", " + horaTxt(ps.cierreHora) : ps.sinDatos ? "Todavía no hay suficientes ventas para calcular el pedido." : "Con lo que hay alcanza hasta la llegada siguiente."}</div>
     ${ps.agotan.length ? `<div class="small" style="color:var(--danger)">Se pueden acabar antes de que llegue: ${esc(ps.agotan.slice(0, 3).map(r => r.p.nombre).join(", "))}${ps.agotan.length > 3 ? " y " + (ps.agotan.length - 3) + " más" : ""}.</div>` : ""}</div>`;
 }
 function bCompra() {
@@ -3800,13 +3850,15 @@ document.addEventListener("change", e => {
 // el pedido semanal (data-v="semanal") va aparte: es de otro proveedor y tiene día de llegada
 const filasPedido = sem => recomendarCompra(fechasHorizonte(S.horiz)).filter(r => S.sel.has(r.pid) && r.comprar > 0 && !!r.semanal === !!sem);
 ACT.generarPedido = (el, d) => {
-  S.pedSem = !!(d && d.v === "semanal"); const rows = filasPedido(S.pedSem); if (!rows.length) return;
+  S.pedSem = !!(d && d.v === "semanal"); const rows = filasPedido(S.pedSem); if (!rows.length) return; S.pedL = S.pedSem ? rows[0].semanal.L.llega : "";
   abrir(() => head(S.pedSem ? "Pedido del " + DOW[dowOf(rows[0].semanal.L.llega)] : "Generar pedido") + `<p style="margin-top:0">${rows.length} productos · ${sum(rows, r => r.comprar)} unidades${S.pedSem ? " (" + sum(rows, r => r.semanal.paquetes || 0) + " paquetes)" : ""}. Quedará como pedido pendiente${S.pedSem ? " para el " + esc(diaLargo(rows[0].semanal.L.llega)) : ""}. Cuando llegue, lo registras y el inventario se actualiza.</p>
     <label class="f" for="gp-prov">Proveedor (opcional)</label><input class="in plain" id="gp-prov" value="${esc(S.ultimoProv)}" placeholder="Ej: Distribuidora de paletas">
     <button class="btn pri xl wide" style="margin-top:14px" data-act="doPedido">CREAR PEDIDO</button>`);
 };
 ACT.doPedido = async () => {
   const rows = filasPedido(S.pedSem), prov = $("#gp-prov").value.trim(), L = S.pedSem ? proximaLlegada() : null; S.ultimoProv = prov; if (!rows.length) return;
+  // si la hora límite pasó mientras se revisaba, las cantidades ya son de otra semana: se avisa en vez de guardar otra cosa
+  if (S.pedSem && (!L || L.llega !== S.pedL)) { cerrar(); draw(); toast("Ya pasó la hora límite de ese pedido. Revisa las cantidades del siguiente.", true); return; }
   await guardar(async () => { await crearCompra(Object.assign({proveedor: prov, lineas: rows.map(r => ({pid: r.pid, q: r.comprar, costo: costoActual(r.pid), ok: false})), motivo: L ? "Pedido semanal (llega el " + diaCorto(L.llega) + ")" : "Recomendación OLI (" + (HORIZONTES.find(h => h[0] === S.horiz) || ["", ""])[1] + ")"}, L ? {llega: L.llega} : {})); cerrar(); S.comprasTab = "lista"; S.sel = null; draw(); }, "Pedido creado");
 };
 function vFinde() {
@@ -4394,7 +4446,7 @@ function filasRecomendacion() {
   return recomendarCompra(fechasHorizonte("7")).filter(r => r.comprar > 0).map(r => ({producto: r.p.nombre, inventario: r.st == null ? null : Math.max(0, r.st), consumo: r.avg == null ? null : Math.round(r.avg * 10) / 10, demanda: r.dem == null ? null : Math.round(r.dem), seguridad: r.seg, cantidad: r.comprar, proveedor: proveedorDe(r.pid), costo: costoActual(r.pid), costoTotal: costoActual(r.pid) == null ? null : costoActual(r.pid) * r.comprar, fecha: r.ag ? r.ag.fecha : S.today, motivo: r.riesgo === "bad" ? "Se agota pronto" : r.riesgo === "warn" ? "Inventario ajustado para la demanda" : "Reposición normal"}));
 }
 function filasCajas(a, b) {
-  return cajasAll().filter(c => c.fecha >= a && c.fecha <= b && c.apertura).sort((x, y) => (x.fecha + x.dev).localeCompare(y.fecha + y.dev)).map(c => { const k = cajaCalc(c), ci = (c.cierres || []).slice(-1)[0], cerr = !!ci && cajaEstado(c) === "cerrada", r = cerr ? difCierre(c) : null;   // lo cerrado se informa tal como se cerró, y aparte cómo quedó al revisarlo (61-difcaja)
+  return cajasAll().filter(c => c.fecha >= a && c.fecha <= b && c.apertura).sort((x, y) => (x.fecha + x.dev).localeCompare(y.fecha + y.dev)).map(c => { const ci = (c.cierres || []).slice(-1)[0], cerr = !!ci && cajaEstado(c) === "cerrada", k = cerr ? cajaAlCerrar(c, ci) : cajaCalc(c), r = cerr ? difCierre(c) : null;   // lo cerrado se informa tal como se cerró, y aparte cómo quedó al revisarlo (61-difcaja)
     return {fecha: c.fecha, caja: devNombre(c.dev), empleado: empNombre(c.apertura.uid), apertura: k.apertura, efectivo: k.efectivo, digitales: k.ventas - k.efectivo, ingresos: k.ingresos, retiros: k.retiros, gastos: k.gastos, esperado: cerr ? (ci.esperado != null ? ci.esperado : k.esperado) : null, contado: cerr ? ci.contado : null, diferencia: cerr ? (ci.dif != null ? ci.dif : ci.contado - k.esperado) : null,
       explicado: cerr ? r.explicado : null, difFinal: cerr ? r.final : null, esperadoRev: cerr ? r.esperado : null, contadoRev: cerr ? r.contado : null, revisada: cerr ? r.revisada : null,
       revision: !cerr ? "" : r.conAjustes ? r.items.map(ajusteTxt).join(" | ") : Math.abs(r.orig) >= 1 ? "Sin revisar" : "", hAp: hora(c.apertura.t), hCi: cerr ? hora(ci.t) : "", estado: cerr ? "Cerrada" : "Abierta", obs: cerr ? ci.obs || "" : "Caja abierta · efectivo esperado ahora " + fmt(k.esperado), id: c.id}; });
@@ -5419,7 +5471,8 @@ function banners() {
 // después de corregir la fecha en la tablet: se comprueba ya con el servidor (OLI también lo hace solo)
 ACT.revisarFecha = async () => {
   if (!conRed()) { toast("Sin Internet no se puede comprobar la fecha. Conéctate y vuelve a tocar.", true); return; }
-  await revisarReloj(true); hoyAlDia(); toast(relojMalo() ? "La fecha sigue mal: revísala en los ajustes de la tablet." : "Listo: la fecha está bien. Ya puedes vender.", !!relojMalo()); draw();
+  const ok = await revisarReloj(true); hoyAlDia();
+  toast(!ok ? "No se pudo comprobar con el servidor. Revisa la conexión y vuelve a tocar." : relojMalo() ? "La fecha sigue mal: revísala en los ajustes de la tablet." : "Listo: la fecha está bien. Ya puedes vender.", !ok || !!relojMalo()); draw();
 };
 function loginHTML() {
   return `<div class="gate"><div class="box"><div class="logo">OLI</div><h2>Bienvenido</h2><p>Ingresa para empezar.</p>

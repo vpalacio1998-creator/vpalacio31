@@ -39,11 +39,11 @@ const ventasAll = () => memo("ventasAll", () => {
          "aceptada" no se sabe: se acepta la diferencia como está (queda revisada)
    La diferencia FINAL de un cierre = la del cierre − lo que explican sus ajustes. Todas las pantallas usan difCierre(). */
 const TIPOS_AJUSTE = {medio: "Se cobró por otro medio", gasto: "Pago desde la caja sin anotar", retiro: "Retiro sin anotar", ingreso: "Entrada de plata sin anotar", conteo: "Se contó mal", aceptada: "Se aceptó la diferencia"};
-const ajustesCajaAll = () => memo("ajCaja", () => {
-  const out = []; for (const [docId, d] of Object.entries(col("ajustescaja"))) for (const x of ((d && d.items) || [])) if (x && x.id) out.push(Object.assign({caja: docId}, x));
-  const anul = new Set(out.filter(x => x.anula).map(x => x.anula));
-  return out.filter(x => !x.anula && !anul.has(x.id)).sort((a, b) => (a.t || 0) - (b.t || 0));
-});
+// todos los ajustes (también los que después se deshicieron) y los vigentes
+const ajustesCajaTodos = () => memo("ajCajaT", () => { const out = []; for (const [docId, d] of Object.entries(col("ajustescaja"))) for (const x of ((d && d.items) || [])) if (x && x.id) out.push(Object.assign({caja: docId}, x)); return out.sort((a, b) => (a.t || 0) - (b.t || 0)); });
+const ajustesCajaAll = () => memo("ajCaja", () => { const out = ajustesCajaTodos(), anul = new Set(out.filter(x => x.anula).map(x => x.anula)); return out.filter(x => !x.anula && !anul.has(x.id)); });
+const ventaPorId = id => memo("vPorId", () => { const m = {}; for (const v of ventasAll()) m[v.id] = v; return m; })[id];
+const conVentas = x => x.tipo === "medio" && Array.isArray(x.ventas) && x.ventas.length > 0;
 // la corrección de medio vigente de cada venta (la más reciente que no se deshizo)
 const correccionesMedio = () => memo("corrM", () => { const m = {}; for (const x of ajustesCajaAll()) if (x.tipo === "medio" && Array.isArray(x.ventas) && x.a) for (const id of x.ventas) m[id] = x; return m; });
 // cuánto de la diferencia explica un ajuste (con el signo de la diferencia: un faltante se explica con montos negativos)
@@ -56,16 +56,30 @@ function explicaAjuste(x) {
   if (x.tipo === "conteo") return -(Number(x.monto) || 0);   // había más de lo contado (+): explica un faltante; había menos (−): explica un sobrante
   return 0;
 }
+/* Las correcciones de medio cambian lo esperado de la caja (ventasAll ya usa el medio corregido). Las que el equipo ya tenía al cerrar
+   están dentro de lo esperado de ese cierre (el cierre guarda cuáles: ci.ajustes); las demás (hechas después, o con la caja abierta pero
+   sin llegar a tiempo a ese equipo) explican la diferencia. Se cuenta por venta: de cómo estaba al cerrar a cómo está ahora, así
+   deshacer una corrección que no es la última también cuadra. */
 function difCierre(c) {
   const ci = c && (c.cierres || []).slice(-1)[0]; if (!ci) return null;
-  const id = c.id || cajaId(c.fecha, c.dev), items = ajustesCajaAll().filter(x => x.caja === id && x.cierre === ci.id);
-  const orig = Math.round(Number(ci.dif) || 0), explicado = Math.round(sum(items, explicaAjuste)), final = orig - explicado;
+  const id = c.id || cajaId(c.fecha, c.dev), vig = ajustesCajaAll().filter(x => x.caja === id), todos = ajustesCajaTodos().filter(x => x.caja === id && !x.anula);
+  const sabia = new Set(Array.isArray(ci.ajustes) ? ci.ajustes : []);   // un cierre sin esa lista lo hizo una versión que no conocía las correcciones
+  const items = vig.filter(x => conVentas(x) ? !sabia.has(x.id) : (x.cierre === ci.id || x.cierre == null));
+  let expMedio = 0; const sids = new Set(); for (const x of todos) if (conVentas(x)) x.ventas.forEach(v => sids.add(v));
+  for (const sid of sids) {
+    const v = ventaPorId(sid); if (!v) continue;
+    const conocidas = todos.filter(x => conVentas(x) && sabia.has(x.id) && x.ventas.includes(sid)), alCerrar = conocidas.length ? conocidas[conocidas.length - 1].a : (v.mOrig || v.m), t = Number(v.total) || 0;
+    expMedio += alCerrar === "Efectivo" && v.m !== "Efectivo" ? -t : alCerrar !== "Efectivo" && v.m === "Efectivo" ? t : 0;
+  }
+  const orig = Math.round(Number(ci.dif) || 0), explicado = Math.round(sum(items.filter(x => !conVentas(x)), explicaAjuste) + expMedio), final = orig - explicado;
   const contado = (Number(ci.contado) || 0) + sum(items.filter(x => x.tipo === "conteo"), x => Number(x.monto) || 0);
   return {ci, orig, explicado, final, items, conAjustes: items.length > 0, contado, esperado: contado - final, revisada: Math.abs(final) < 1 || items.some(x => x.tipo === "aceptada")};
 }
 // diferencia que cuenta (para plata y alertas): la final si el administrador ya la revisó con ajustes; si no, la del cierre
 const difFinal = c => { const r = difCierre(c); return r ? r.final : 0; };
-const ajusteTxt = x => (TIPOS_AJUSTE[x.tipo] || x.tipo) + (x.tipo === "medio" ? ": " + (x.de || "?") + " → " + (x.a || "?") : "") + (x.monto && x.tipo !== "aceptada" ? " · " + fmt(Math.abs(Number(x.monto))) : "") + (x.mot ? " · " + x.mot : "") + (x.nota ? " · " + x.nota : "");
+// el detalle de un gasto (en qué, qué se pagó) no se copia al ajuste, que leen los equipos de caja: lo ve el administrador desde el gasto
+const ajusteTxt = x => { const g = x.tipo === "gasto" && x.gasto ? col("gastos")[x.gasto] : null;
+  return (TIPOS_AJUSTE[x.tipo] || x.tipo) + (x.tipo === "medio" ? ": " + (x.de || "?") + " → " + (x.a || "?") : "") + (x.monto && x.tipo !== "aceptada" ? " · " + fmt(Math.abs(Number(x.monto))) : "") + (g ? " · " + (g.cat || "Gasto") + (g.desc ? " · " + g.desc : "") : "") + (x.mot ? " · " + x.mot : "") + (x.nota ? " · " + x.nota : ""); };
 const ventasOk = () => memo("ventasOk", () => ventasAll().filter(v => !v.anulada));
 /* datos del cliente que pidió factura (solo administrador). Las ventas viejas los traían adentro (v.cliente con doc y nombre). */
 const facturasMap = () => memo("facts", () => { const m = {}; for (const d of Object.values(col("facturas"))) for (const x of (d.items || [])) if (x && x.ventaId) m[x.ventaId] = x; return m; });
@@ -143,6 +157,12 @@ function cajaCalc(c) {
   const ap = c.apertura ? c.apertura.monto : 0, ef = por["Efectivo"] || 0;
   return {ventas: sum(vs, v => v.total), n: vs.length, por, apertura: ap, efectivo: ef, ingresos: ing, retiros: ret, gastos: gas, esperado: ap + ef + ing - ret - gas};
 }
+// las cuentas de una caja tal como quedaron al cerrarla (si el cierre las guardó); si no, las de ahora
+function cajaAlCerrar(c, ci) {
+  const k = cajaCalc(c), r = ci && ci.resumen; if (!r || !r.por) return k;
+  const ef = Number(r.por.Efectivo) || 0, n = v => v == null ? 0 : Number(v) || 0;
+  return {ventas: n(r.ventas), n: n(r.n), por: r.por, apertura: r.apertura != null ? n(r.apertura) : k.apertura, efectivo: ef, ingresos: n(r.ingresos), retiros: n(r.retiros), gastos: n(r.gastos), esperado: ci.esperado != null ? n(ci.esperado) : k.esperado};
+}
 const cajaHoy = () => cajaDe(S.today);
 function cajaBloqueada() { const c = cajaHoy(); return c && cajaEstado(c) === "cerrada"; }
 const checklistDe = (fecha, dev = DEV.id) => col("checklists")[cajaId(fecha, dev)] || {fecha, dev, apertura: {}, cierre: {}};
@@ -154,7 +174,7 @@ const esDevolucion = m => m && m.tipo === "retiro" && String(m.motivo || "").ind
 function devolucionesEn(a, b) { const out = []; for (const c of cajasAll()) if (c.fecha >= a && c.fecha <= b) for (const m of (c.movs || [])) if (esDevolucion(m)) out.push({fecha: c.fecha, monto: Number(m.monto) || 0}); return out; }
 function gastosEn(a, b) {
   const out = [];
-  for (const [id, g] of Object.entries(col("gastos"))) if (g.fecha >= a && g.fecha <= b) out.push(Object.assign({id, origen: "gasto"}, g));
+  for (const [id, g] of Object.entries(col("gastos"))) if (g.fecha >= a && g.fecha <= b) out.push(Object.assign({}, g, {id, origen: "gasto"}));
   for (const c of cajasAll()) if (c.fecha >= a && c.fecha <= b) for (const m of (c.movs || [])) if (m.tipo === "gasto") out.push({id: m.id, fecha: c.fecha, cat: m.cat || "Otros", desc: m.motivo, valor: m.monto, m: "Efectivo", uid: m.uid, origen: "caja"});
   return out.sort((x, y) => (y.fecha > x.fecha ? 1 : -1));
 }

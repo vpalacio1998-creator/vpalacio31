@@ -39,7 +39,8 @@ function banners() {
 // después de corregir la fecha en la tablet: se comprueba ya con el servidor (OLI también lo hace solo)
 ACT.revisarFecha = async () => {
   if (!conRed()) { toast("Sin Internet no se puede comprobar la fecha. Conéctate y vuelve a tocar.", true); return; }
-  await revisarReloj(true); hoyAlDia(); toast(relojMalo() ? "La fecha sigue mal: revísala en los ajustes de la tablet." : "Listo: la fecha está bien. Ya puedes vender.", !!relojMalo()); draw();
+  const ok = await revisarReloj(true); hoyAlDia();
+  toast(!ok ? "No se pudo comprobar con el servidor. Revisa la conexión y vuelve a tocar." : relojMalo() ? "La fecha sigue mal: revísala en los ajustes de la tablet." : "Listo: la fecha está bien. Ya puedes vender.", !ok || !!relojMalo()); draw();
 };
 function loginHTML() {
   return `<div class="gate"><div class="box"><div class="logo">OLI</div><h2>Bienvenido</h2><p>Ingresa para empezar.</p>

@@ -130,7 +130,9 @@ async function remove(colName, id) {
   if (DS.mode === "db") kickSync(); else { delete OUT[path]; IDB.tx([["outbox", "del", path]]).catch(() => {}); }
 }
 const idsDe = d => { const o = []; for (const k of ["ventas", "items", "movs", "cierres"]) for (const x of (d && d[k]) || []) if (x && x.id) o.push(x.id); return o; };
-function appendTo(colName, id, field, item, base) { const cur = (DS.c[colName] || {})[id] || Object.assign({}, base, {[field]: []}); return put(colName, id, Object.assign({}, cur, {[field]: (cur[field] || []).concat([item])})); }
+// lo que esta persona puede escribir pero no leer (datos de factura) no queda en el equipo: la base es lo que sigue en la cola sin enviar,
+// para que lo nuevo no pise lo pendiente (también después de reiniciar la app)
+function appendTo(colName, id, field, item, base) { const q = puede(colName, "read") ? null : OUT[pathOf(colName, id)], cur = (q && !q.del && q.data) || (DS.c[colName] || {})[id] || Object.assign({}, base, {[field]: []}); return put(colName, id, Object.assign({}, cur, {[field]: (cur[field] || []).concat([item])})); }
 function patchItem(colName, id, field, itemId, patch) { const cur = (DS.c[colName] || {})[id]; if (!cur) return Promise.reject(new Error("no existe")); return put(colName, id, Object.assign({}, cur, {[field]: (cur[field] || []).map(x => x.id === itemId ? Object.assign({}, x, patch) : x)})); }
 
 /* ---------- auditoría ---------- */
@@ -271,6 +273,7 @@ function avisarPurgado(op, res) {
 // (todo lo de esas fechas el servidor lo descarta). Devuelve el texto para la persona, o "".
 function relojMalo() {
   const hoy = ymd(), dif = typeof RELOJ_EQ !== "undefined" ? RELOJ_EQ.dif : 0, real = Math.abs(dif) > 15 * 60000 ? ymd(new Date(Date.now() - dif)) : hoy;
+  if (real !== hoy && typeof RELOJ_EQ !== "undefined" && RELOJ_EQ.dudoso) return "La fecha de este equipo estaba mal y se cambió sin poder comprobarla con el servidor. Revisa que la tablet diga la fecha de hoy (Fecha y hora → «Fecha y hora automáticas») y conéctala a Internet un momento: apenas OLI la compruebe, deja vender solo.";
   if (real !== hoy) return "La fecha de este equipo está mal: dice " + diaCorto(hoy) + " y hoy es " + diaCorto(real) + ". Corrígela en los ajustes de la tablet (Fecha y hora → activar «Fecha y hora automáticas»). Apenas quede bien, OLI deja vender solo.";
   const cv = cortesPurga().ventas; if (DS.mode === "db" && typeof cv === "string" && cv && hoy < cv) return "La fecha de este equipo está mal: dice " + diaCorto(hoy) + ", antes del " + diaCorto(cv) + ". Corrígela en los ajustes de la tablet (Fecha y hora → activar «Fecha y hora automáticas»). Apenas quede bien, OLI deja vender solo.";
   return "";
@@ -370,14 +373,21 @@ function heartbeat(force) {
 }
 
 /* ---------- conflictos: inventario negativo tras sincronizar ---------- */
+// avisos de conflicto de inventario ya hechos hoy en este equipo (sobreviven al reinicio; si el almacenamiento falla, al menos en memoria)
+const CONF_AV = {f: "", s: new Set()};
+function confCargar() { if (CONF_AV.f === S.today) return; CONF_AV.f = S.today; CONF_AV.s = new Set(); try { const o = JSON.parse(localStorage.getItem("oli_conf_avisados") || "{}"); if (o.f === S.today && Array.isArray(o.p)) o.p.forEach(x => CONF_AV.s.add(x)); } catch (e) {} }
+const confAvisado = pid => { confCargar(); return CONF_AV.s.has((DS.uid || "local") + ":" + pid); };
+function marcarConfAvisado(pid) { confCargar(); CONF_AV.s.add((DS.uid || "local") + ":" + pid); try { localStorage.setItem("oli_conf_avisados", JSON.stringify({f: S.today, p: [...CONF_AV.s]})); } catch (e) {} }
 function detectarConflictos() {
   if (!window.stockMap) return;
   try {
     const sm = window.stockMap();
     for (const [pid, st] of Object.entries(sm)) if (st != null && st < 0) {
       const p = typeof prod === "function" ? prod(pid) : null; if (p && (p.combo || p.activo === false)) continue;   // un combo o un producto desactivado no se cuenta: el aviso va en su insumo
-      const key = "conf_" + pid + "_" + S.today, ya = (DS.c.audit || {})[(DS.uid || "local") + "__audit_" + S.today];
-      if (ya && (ya.items || []).some(i => i.a === "CONFLICTO_INVENTARIO" && i.r === pid)) continue;
+      // ¿ya se avisó hoy? Un empleado no lee el historial (se borra del equipo al enviarse): se recuerda aparte, si no se avisaría en cada sincronización
+      const id = (DS.uid || "local") + "__audit_" + S.today, q = OUT[pathOf("audit", id)], ya = [(DS.c.audit || {})[id], q && !q.del && q.data].filter(Boolean);
+      if (confAvisado(pid) || ya.some(d => (d.items || []).some(i => i.a === "CONFLICTO_INVENTARIO" && i.r === pid))) continue;
+      marcarConfAvisado(pid);
       audit("CONFLICTO_INVENTARIO", pid, "Inventario quedó en " + st + " al sincronizar ventas de varios dispositivos. Revisar y hacer un conteo.");
     }
   } catch (e) {}

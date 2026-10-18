@@ -56,7 +56,9 @@ async function registrarVenta(opts) {
   venta.items = items;
   await appendTo("ventas", cajaId(fecha), "ventas", venta, {fecha, dev: DEV.id, uid: uidActual(), devNombre: DEV.nombre});
   // los datos personales del cliente que pide factura no van en la venta (la leen todos los equipos): van aparte, solo para el administrador
-  if (opts.cliente) await appendTo("facturas", cajaId(fecha), "items", {id: "f-" + venta.id, ventaId: venta.id, t, uid: uidActual(), doc: opts.cliente.doc || "", nombre: opts.cliente.nombre || "", correo: opts.cliente.correo || ""}, {fecha, dev: DEV.id});
+  // la venta ya quedó guardada: si fallan los datos de la factura, se avisa (no se marca la venta como fallida, que al reintentar se duplicaría)
+  if (opts.cliente) try { await appendTo("facturas", cajaId(fecha), "items", {id: "f-" + venta.id, ventaId: venta.id, t, uid: uidActual(), doc: opts.cliente.doc || "", nombre: opts.cliente.nombre || "", correo: opts.cliente.correo || ""}, {fecha, dev: DEV.id}); }
+    catch (e) { toast("La venta quedó guardada, pero los datos de la factura no. Anótalos aparte: " + (opts.cliente.doc || "") + " " + (opts.cliente.nombre || ""), true); }
   if (desc > 0) audit("DESCUENTO", venta.id, fmt(desc) + " sobre " + fmt(sub));
   return venta;
 }
@@ -94,7 +96,9 @@ async function cerrarCaja(contado, obs, caja) {
   const c = caja || cajaHoy(); if (!c || cajaEstado(c) !== "abierta") throw new Error("No hay una caja abierta para cerrar.");
   const k = cajaCalc(c), dif = contado - k.esperado;
   if (dif !== 0 && !(obs || "").trim()) throw new Error("Hay diferencia: escribe una observación.");
-  const ci = {id: newId(), t: Date.now(), uid: uidActual(), esperado: k.esperado, contado, dif, obs: (obs || "").trim(), resumen: {ventas: k.ventas, n: k.n, por: k.por, apertura: k.apertura, ingresos: k.ingresos, retiros: k.retiros, gastos: k.gastos}};
+  // ajustes: las correcciones de medio que este equipo ya tenía (están dentro de lo esperado); las que lleguen después explican la diferencia
+  const ci = {id: newId(), t: Date.now(), uid: uidActual(), esperado: k.esperado, contado, dif, obs: (obs || "").trim(), resumen: {ventas: k.ventas, n: k.n, por: k.por, apertura: k.apertura, ingresos: k.ingresos, retiros: k.retiros, gastos: k.gastos},
+    ajustes: ajustesCajaAll().filter(x => x.caja === c.id && conVentas(x)).map(x => x.id)};
   await put("cajas", c.id, Object.assign({}, col("cajas")[c.id], {cierres: (c.cierres || []).concat([ci])}));
   audit("CIERRE_CAJA", c.id, "Esperado " + fmt(k.esperado) + " · contado " + fmt(contado) + " · dif " + fmt(dif));
   return ci;
@@ -150,7 +154,7 @@ async function contarStock(pid, cantidad, motivo) {
 }
 async function entradaStock(pid, q, o = {}) {
   exigirAdmin(); if (!(q > 0)) throw new Error("Escribe cuántas llegaron."); const st = stockDe(pid), p = prod(pid);
-  await sumarStock(pid, q, {tipo: "entrada", motivo: o.motivo || "Llegó mercancía", ref: o.proveedor || ""});
+  await sumarStock(pid, q, {tipo: "entrada", motivo: o.motivo || "Llegó mercancía"});   // el proveedor no va al kardex (lo leen los equipos de empleados)
   if (o.costo > 0 && (costos()[pid] || {}).costo !== o.costo) await fijarCosto(pid, o.costo, "entrada de mercancía");
   audit("ENTRADA_INVENTARIO", pid, (p ? p.nombre : pid) + ": +" + q + (o.proveedor ? " · " + o.proveedor : ""));
 }
@@ -203,16 +207,16 @@ async function corregirMedio(ventas, a, conf, nota) {
   if (ventas.some(v => v.anulada)) throw new Error("Una venta anulada no se corrige.");
   if (ventas.some(v => v.m !== de)) throw new Error("Esas ventas quedaron con medios distintos: corrígelas por separado.");
   if (!a || a === de) throw new Error("Elige el medio con el que de verdad pagaron.");
-  const c = cajaDe(v0.fecha, v0.dev) || {id: cajaId(v0.fecha, v0.dev), fecha: v0.fecha, dev: v0.dev, cierres: []};
+  const c = cajasAll().find(x => x.fecha === v0.fecha && x.dev === v0.dev) || {id: cajaId(v0.fecha, v0.dev), fecha: v0.fecha, dev: v0.dev, cierres: []};   // la caja de esas ventas (también las de la demostración, con otro id)
   return ajustarCaja(c, {tipo: "medio", ventas: ventas.map(v => v.id), de, a, monto: sum(ventas, v => Number(v.total) || 0), conf: !!conf, nota: nota || ""});
 }
 // un pago desde la caja que no se anotó: se registra el gasto (en efectivo, con la fecha de esa caja) y explica la diferencia
 async function gastoDeCaja(c, monto, cat, desc) {
   exigirAdmin(); if (!(monto > 0)) throw new Error("Escribe cuánto se pagó."); if (!cat) throw new Error("Elige en qué fue.");
   const gid = await guardarGasto({fecha: c.fecha, cat, desc: desc || "Pagado con plata de la caja (anotado al revisar el cierre)", valor: monto, m: "Efectivo", cajaAjuste: c.id});
-  return ajustarCaja(c, {tipo: "gasto", monto, gasto: gid, nota: cat + (desc ? " · " + desc : "")});
+  return ajustarCaja(c, {tipo: "gasto", monto, gasto: gid});
 }
-async function guardarGasto(g) { exigirAdmin(); const id = g.id || "g" + newId(); await put("gastos", id, Object.assign({estado: "registrado", uid: uidActual(), t: Date.now()}, g, {id: undefined})); audit("GASTO", id, g.cat + " · " + fmt(g.valor)); return id; }
+async function guardarGasto(g) { exigirAdmin(); const id = g.id || "g" + newId(), data = Object.assign({estado: "registrado", uid: uidActual(), t: Date.now()}, g); delete data.id; await put("gastos", id, data); audit("GASTO", id, g.cat + " · " + fmt(g.valor)); return id; }   // sin "id: undefined": en este equipo taparía el id del gasto
 async function borrarGasto(id) {
   exigirAdmin(); await remove("gastos", id); audit("GASTO_BORRADO", id, "");
   // si ese gasto explicaba una diferencia de caja, ese ajuste se deshace (así lo ven también los equipos de caja, que no leen los gastos)

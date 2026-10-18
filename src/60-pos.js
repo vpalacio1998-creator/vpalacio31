@@ -121,7 +121,7 @@ ACT.confirmarVenta = async () => {
 
 /* ---------- caja ---------- */
 function cajaCardHTML(c, mia) {
-  const k = cajaCalc(c), st = cajaEstado(c), ci = (c.cierres || []).slice(-1)[0], adm = esAdmin();
+  const st = cajaEstado(c), ci = (c.cierres || []).slice(-1)[0], adm = esAdmin(), k = st === "cerrada" && ci ? cajaAlCerrar(c, ci) : cajaCalc(c);   // cerrada: tal como se cerró (lo revisado después va abajo)
   return `<div class="card"><div class="row" style="padding-top:0"><div class="l"><h3 style="margin:0">${esc(c.devNombre || (col("dispositivos")[c.dev] || {}).nombre || "Caja")}</h3><div class="small muted">${st === "abierta" ? "Abierta " + hora(c.apertura.t) : st === "cerrada" ? "Cerrada " + (ci ? hora(ci.t) : "") : "Sin abrir"}</div></div>
     <span class="pill ${st === "abierta" ? "ok" : st === "cerrada" ? "" : "warn"}">${st === "abierta" ? "Abierta" : st === "cerrada" ? "Cerrada" : "Sin abrir"}</span></div>
     ${c.apertura ? `<div class="row"><div class="l">Empezó con</div><div class="r">${fmt(k.apertura)}</div></div>
