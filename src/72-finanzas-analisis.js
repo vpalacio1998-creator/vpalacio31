@@ -1,6 +1,8 @@
 /* ============ 72 · dinero (finanzas) y análisis (administrador) ============ */
 S.anTab = "patrones"; S.sim = {pid: "*", precio: null, costo: null, vol: null, gastos: null}; S.rentOrden = "util";
 const periodoTxt = (a, b) => a === b ? diaLargo(a) : diaCorto(a) + " – " + diaCorto(b);
+// con servidor, este equipo guarda solo los últimos HIST_DIAS días: si el periodo empieza antes, las cifras salen incompletas
+const avisoHistoria = a => DS.mode === "db" && a < addDays(S.today, -HIST_DIAS) ? `<div class="notice bad" style="margin-bottom:12px">Este equipo guarda los últimos ${HIST_DIAS} días: lo de antes del ${esc(diaCorto(addDays(S.today, -HIST_DIAS)))} no está en estas cifras.</div>` : "";
 
 /* ---------- dinero ---------- */
 VIEWS.finanzas = () => {
@@ -8,7 +10,7 @@ VIEWS.finanzas = () => {
   const rent = rentabilidad(a, b), orden = {util: (x, y) => y.util - x.util, uds: (x, y) => y.uds - x.uds, margen: (x, y) => (y.margen || 0) - (x.margen || 0), bajo: (x, y) => (x.margen || 9) - (y.margen || 9)}[S.rentOrden];
   const pts = serie.length > 45 ? serie.filter((_, i) => i % Math.ceil(serie.length / 45) === 0) : serie;
   const mes = finanzas(firstOfMonth(S.today), S.today), fijos = totalFijos(), diaN = parse(S.today).getDate(), dMes = parse(lastOfMonth(S.today)).getDate(), uds = mes.uds, gU = uds ? mes.bruta / uds : 0, falta = Math.max(0, fijos - mes.bruta);
-  return cabecera("Dinero", "Cuánta plata hay y cómo te fue", `<button class="btn pri xl" data-act="nuevoGasto">${ic("plus", 20)} REGISTRAR GASTO</button>`) + liquidezHTML() + `<h3 class="liq-sep">Cómo te fue · ${esc(periodoTxt(a, b))}</h3><div style="margin-bottom:14px">${rangoControles()}</div>
+  return cabecera("Dinero", "Cuánta plata hay y cómo te fue", `<button class="btn pri xl" data-act="nuevoGasto">${ic("plus", 20)} REGISTRAR GASTO</button>`) + liquidezHTML() + `<h3 class="liq-sep">Cómo te fue · ${esc(periodoTxt(a, b))}</h3><div style="margin-bottom:14px">${rangoControles()}</div>${avisoHistoria(a)}
   <div class="card"><h3>Cómo te fue</h3>
     <div class="row"><div class="l"><b>Ventas</b><div class="small muted">Lo que entró por vender · ${f.n} ventas</div></div><div class="r big" style="font-size:24px">${fmt(f.ventas)}</div></div>
     <div class="row"><div class="l">− Costo de lo vendido<div class="small muted">Lo que te costó lo que vendiste${f.sinCosto ? " · " + fmtN(f.sinCosto, 0) + " uds sin costo" : ""}${f.sinCostoHelado ? " · falta el costo de algún sabor de helado" : ""}</div></div><div class="r">${fmt(f.cogs)}</div></div>

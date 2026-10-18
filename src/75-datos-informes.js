@@ -81,6 +81,9 @@ const TIPO_IMP = {validar: "Por validar", iva: "IVA", exento: "Exento", excluido
 /* ---------- control de integridad ---------- */
 function integridad(a, b) {
   const out = [], add = (sev, t, n, d) => { if (n) out.push({sev, t, n, d}); }, vs = ventasAll().filter(v => v.fecha >= a && v.fecha <= b);
+  // con servidor, cada equipo guarda solo los últimos HIST_DIAS días: un periodo que empieza antes sale incompleto (no se dice "completa")
+  const guarda = addDays(S.today, -HIST_DIAS); if (DS.mode === "db" && a < guarda) add("bad", "Periodo más viejo de lo que guarda este equipo", 1, "Este equipo guarda los últimos " + HIST_DIAS + " días: lo de antes del " + diaCorto(guarda) + " no está en este informe.");
+  const cv = cortesPurga().ventas; if (typeof cv === "string" && cv && a < cv) add("warn", "Ventas borradas por el administrador", 1, "Las ventas antes del " + diaCorto(cv) + " se borraron (eran de prueba): no están en este informe.");
   add("bad", "Ventas sin detalle", vs.filter(v => !(v.items || []).length).length, "Ventas sin productos.");
   const ids = {}; vs.forEach(v => ids[v.id] = (ids[v.id] || 0) + 1); add("bad", "Ventas duplicadas", Object.values(ids).filter(n => n > 1).length, "El mismo identificador aparece más de una vez.");
   add("bad", "Ventas con total inconsistente", vs.filter(v => Math.abs(v.total - sum(v.items || [], lineaNeta)) > 1).length, "El total no coincide con la suma de sus productos.");

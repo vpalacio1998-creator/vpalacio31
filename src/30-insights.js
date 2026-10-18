@@ -241,7 +241,9 @@ function anomalias() {
     }
     const difs = cajasAll().filter(c => c.fecha >= addDays(t, -29) && (c.cierres || []).length && Math.abs((c.cierres.slice(-1)[0] || {}).dif || 0) >= 1000);
     if (difs.length >= 3) out.push({sev: "warn", t: `Se registraron ${difs.length} cierres con diferencias en 30 días.`, d: "Conviene revisar los cierres y el conteo de efectivo.", ir: "cierres"});
-    for (const [pid, st] of Object.entries(stockMap())) if (st != null && st < 0) out.push({sev: "bad", t: `El inventario de ${(prod(pid) || {}).nombre || pid} quedó negativo (${st}).`, d: "Puede ser un conflicto entre dispositivos o un conteo desactualizado. Haz un conteo.", ir: "inventario"});
+    for (const [pid, st] of Object.entries(stockMap())) { const p = prod(pid); if (st != null && st < 0 && (!p || (p.activo !== false && !p.combo))) out.push({sev: "bad", t: `El inventario de ${(p || {}).nombre || pid} quedó negativo (${st}).`, d: "Puede ser un conflicto entre dispositivos o un conteo desactualizado. Haz un conteo.", ir: "inventario"}); }   // un combo o un producto desactivado no se cuenta: su alerta sale en el insumo
+    // el servidor marca "sinPermiso" un retiro o pago de un empleado que llegó con el permiso apagado (la plata sí salió: se guarda y se avisa)
+    for (const c of cajasAll()) if (c.fecha >= addDays(t, -6)) for (const m of (c.movs || [])) if (m.sinPermiso) out.push({sev: "warn", t: `${nombreDe(m.uid) || "Un empleado"} ${m.tipo === "gasto" ? "pagó" : "sacó"} ${fmt(m.monto)} de la caja aunque los empleados no tienen permiso.`, d: diaCorto(c.fecha) + " " + hora(m.t) + " · " + ((col("dispositivos")[c.dev] || {}).nombre || c.devNombre || "") + (m.motivo ? " · " + m.motivo : "") + ". La plata sí salió de la caja: quedó registrada.", ir: "caja"});
     return out;
   });
 }

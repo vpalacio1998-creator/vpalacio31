@@ -1,4 +1,4 @@
-// Prueba real contra producción (Supabase + Vercel). Uso: EMP_PASS=... ADM_PASS=... node tests/e2e/produccion.mjs
+// Prueba real contra producción (Supabase + Vercel). Uso: EMP_MAIL=... EMP_PASS=... ADM_MAIL=... ADM_PASS=... node tests/e2e/produccion.mjs (los correos y contraseñas reales no se guardan en el repositorio)
 // Crea ventas reales de prueba: bórralas después (ver OLI_Final_Audit.md). Las contraseñas NUNCA van en este archivo.
 import { chromium } from 'playwright';
 const URL = 'https://oli-pos.vercel.app/';
@@ -30,7 +30,7 @@ async function vender(E, items, metodo, recibido) {
 try {
   // 1. empleado en tablet
   const e = await device(1180, 820), E = e.pg;
-  await login(E, 'empleado@oli.app', process.env.EMP_PASS);
+  await login(E, process.env.EMP_MAIL, process.env.EMP_PASS);
   const okE = await waitFor(async () => (await E.locator('[data-act="tile"]').count()) > 0 || (await E.locator('[data-act="abrirCaja"]').count()) > 0, 30);
   const rail = (await E.locator('#rail').count()) ? await E.innerText('#rail') : '';
   paso(1, 'Empleado inicia sesión en la tablet y ve el catálogo', okE, `${await E.locator('[data-act="tile"]').count()} productos`);
@@ -46,7 +46,7 @@ try {
   await E.screenshot({ path: '02_venta.png' });
   // 4. admin en celular ve la venta
   const a = await device(390, 844), A = a.pg;
-  await login(A, 'admin@oli.app', process.env.ADM_PASS);
+  await login(A, process.env.ADM_MAIL, process.env.ADM_PASS);
   const vio = await waitFor(async () => /22\.000/.test(await A.innerText('#view')), 30);
   paso(6, 'Administrador (celular) ve la venta de la tablet', vio);
   await A.screenshot({ path: '03_admin_celular.png' });

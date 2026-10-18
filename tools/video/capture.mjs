@@ -21,7 +21,7 @@ try {
   const i = await dev(1180, 820, 2, IPAD); await i.pg.goto(URL); await i.pg.waitForSelector('#lg-mail'); await i.pg.waitForTimeout(1500);
   await shot(i.pg, '01_ingreso'); await i.pg.click('[data-act="instalar"]'); await shot(i.pg, '02_instalar'); await i.ctx.close();
   // empleada en tablet
-  const e = await dev(1180, 820, 2), E = e.pg; const entrar = await login(E, 'empleado@oli.app', E_PASS); await shot(E, '03_ingreso_lleno'); await entrar();
+  const e = await dev(1180, 820, 2), E = e.pg; const entrar = await login(E, process.env.EMP_MAIL, E_PASS); await shot(E, '03_ingreso_lleno'); await entrar();
   await shot(E, '04_vender');
   await E.click('[data-act="abrirCaja"]'); await E.waitForTimeout(500); await E.click('[data-act="aperturaMonto"][data-v="50000"]'); await shot(E, '05_abrir_caja');
   await E.click('[data-act="doAbrir"]'); await E.waitForTimeout(1500);
@@ -38,7 +38,7 @@ try {
   await E.click('#panel [data-act="cerrar"]').catch(() => {}); await shot(E, '09_sin_internet');
   await e.ctx.setOffline(false); await E.waitForTimeout(6000);
   // administrador en celular
-  const a = await dev(390, 844, 3), A = a.pg; const entrarA = await login(A, 'admin@oli.app', A_PASS); await entrarA();
+  const a = await dev(390, 844, 3), A = a.pg; const entrarA = await login(A, process.env.ADM_MAIL, A_PASS); await entrarA();
   await waitFor(async () => /32\.000/.test(await A.innerText('#view')), 40); await shot(A, '10_admin_inicio');
   const eq = A.locator('text=PUNTO DE EQUILIBRIO').first(); if (await eq.count()) { await eq.scrollIntoViewIfNeeded(); await A.evaluate(() => window.scrollBy(0, -90)); } await shot(A, '11_equilibrio');
   await go(A, 'inventario'); await shot(A, '12_inventario');
@@ -48,7 +48,7 @@ try {
   await E.click('[data-act="cerrarCaja"]'); await E.waitForTimeout(600); await E.fill('#ci-monto', '75500').catch(() => {}); await E.dispatchEvent('#ci-monto', 'input').catch(() => {}); await shot(E, '15_cerrar_caja');
   await E.click('[data-act="doCerrar"]').catch(() => {}); await E.waitForTimeout(1500); await shot(E, '16_caja_cerrada');
   // computador: informes
-  const c = await dev(1440, 900, 1.5), C = c.pg; const entrarC = await login(C, 'admin@oli.app', A_PASS); await entrarC();
+  const c = await dev(1440, 900, 1.5), C = c.pg; const entrarC = await login(C, process.env.ADM_MAIL, A_PASS); await entrarC();
   await go(C, 'hoy'); await shot(C, '17_pc_inicio'); await go(C, 'reportes'); await shot(C, '18_informes');
 } catch (err) { console.log('EXCEPCION', String(err.message).split('\n')[0]); }
 await b.close(); console.log('FIN_CAPTURA');

@@ -55,7 +55,9 @@ ACT.logout = async () => {
   if (pendientes().length && conRed()) { toast("Enviando lo pendiente…"); try { await withTimeout(syncNow(), 8000); } catch (e) {} }   // antes de salir, se intenta enviar todo
   const vp = ventasPendientes(), otros = pendientes().filter(o => o.col !== "ventas" && o.col !== "dispositivos" && o.col !== "audit" && (!o.uid || o.uid === DS.uid)).length;
   if (vp && !(await confirmar({titulo: vp === 1 ? "Hay 1 venta sin enviar" : "Hay " + vp + " ventas sin enviar", texto: "Quedan guardadas en este equipo y se enviarán cuando esta misma cuenta vuelva a ingresar aquí. ¿Salir de todos modos?", si: "Sí, salir", no: "No"}))) return;
-  if (!vp && otros && !(await confirmar({titulo: "Hay cambios sin enviar", texto: "Quedan guardados en este equipo y se enviarán cuando esta misma cuenta vuelva a ingresar aquí. ¿Salir de todos modos?", si: "Sí, salir", no: "No"}))) return;
+  // lo del administrador sin enviar (costos, gastos, configuración…) queda en el almacenamiento de este equipo hasta que él vuelva a ingresar aquí
+  const deAdmin = DS.isAdmin && pendientes().some(o => SB_ADMIN_COLS.includes(o.col) && o.col !== "audit" && (!o.uid || o.uid === DS.uid));
+  if (!vp && otros && !(await confirmar({titulo: "Hay cambios sin enviar", texto: "Quedan guardados en este equipo y se enviarán cuando esta misma cuenta vuelva a ingresar aquí." + (deAdmin ? " <b>Incluyen datos de administrador</b> (costos, gastos o configuración) que quedan guardados en este equipo hasta entonces: si otras personas usan este equipo, mejor espera a tener Internet para que se envíen antes de salir." : "") + " ¿Salir de todos modos?", si: "Sí, salir", no: "No"}))) return;
   await sbSalir();
 };
 function renderView() {

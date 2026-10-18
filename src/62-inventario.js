@@ -10,7 +10,7 @@ function movsCalc(pid) {
   for (const e of eventosHelado()) if (!pid || e.sabor === pid) out.push({t: e.t, fecha: e.fecha, pid: e.sabor, tipo: e.motivo === "inicio" ? "inicioCaja" : "aperturaCaja", q: e.motivo === "inicio" ? 0 : -1, det: e.motivo === "danada" ? "la anterior se dañó" + (e.obs ? " · " + e.obs : "") : "", uid: e.uid});
   for (const m of mermasAll()) if (!pid || m.pid === pid) out.push({t: m.t, fecha: m.fecha, pid: m.pid, tipo: "perdida", q: -m.q, det: m.motivo || "", uid: m.uid});
   const conMov = new Set();
-  for (const d of Object.values(col("movinv"))) for (const x of (d.items || [])) { if (x.compra) conMov.add(x.compra); if (!pid || x.pid === pid) out.push({t: x.t, fecha: ymd(new Date(x.t)), pid: x.pid, tipo: x.tipo, q: x.q, delta: !!x.delta, antes: x.antes, despues: x.despues, det: (x.motivo || "") + (x.ref ? " · " + x.ref : ""), uid: x.uid}); }
+  for (const d of Object.values(col("movinv"))) for (const x of (d.items || [])) { if (x.compra) conMov.add(x.compra); if (!pid || x.pid === pid) out.push({t: x.t, fecha: ymd(new Date(x.t)), pid: x.pid, tipo: x.tipo, q: x.q, delta: !!x.delta, antes: x.antes, despues: x.despues, det: (x.motivo || "") + (x.ref ? " · " + x.ref : "") + (x.compra && esAdmin() && (col("compras")[x.compra] || {}).proveedor ? " · " + col("compras")[x.compra].proveedor : ""), uid: x.uid}); }
   // compras recibidas antes de existir el kardex (o importadas): entran como movimiento de compra
   for (const [id, c] of Object.entries(col("compras"))) if (c.estado === "recibido" && !conMov.has(id)) for (const l of (c.lineas || [])) if ((!pid || l.pid === pid) && l.q > 0) { const t = c.recT || parse(c.recFecha || c.fecha).getTime() + 12 * 3600000; out.push({t, fecha: c.recFecha || c.fecha, pid: l.pid, tipo: "compra", q: l.q, det: "Compra recibida" + (c.proveedor ? " · " + c.proveedor : ""), uid: c.uid}); }
   out.sort((x, y) => x.t - y.t);
@@ -114,7 +114,7 @@ ACT.entrada = (el, d) => {
     <button class="btn pri xl wide" data-act="doEntrada">GUARDAR Y SUMAR</button>`; });
 };
 document.addEventListener("change", e => { if (e.target.dataset && e.target.dataset.actChange === "entPid") S.entPid = e.target.value; });
-ACT.doEntrada = async () => { const pid = S.entPid || ($("#en-p") || {}).value; if (!pid) { toast("Elige el producto que llegó.", true); return; } const q = numDec($("#en-q").value), c = num(($("#en-c") || {}).value), prov = (($("#en-prov") || {}).value || "").trim(); if (prov) S.ultimoProv = prov;
+ACT.doEntrada = async () => { const pid = S.entPid || ($("#en-p") || {}).value; if (!pid) { toast("Elige el producto que llegó.", true); return; } const q = numCant($("#en-q").value), c = num(($("#en-c") || {}).value), prov = (($("#en-prov") || {}).value || "").trim(); if (prov) S.ultimoProv = prov;
   await guardar(async () => { await entradaStock(pid, q, {costo: c || null, proveedor: prov}); cerrar(); }, "Inventario actualizado: +" + q); };
 
 /* ---------- contar ---------- */
@@ -124,8 +124,8 @@ ACT.contar = (el, d) => { const p = prod(d.id), st = stockDe(d.id);
     <div id="ct-dif" class="small" style="margin-top:8px;min-height:20px"></div>
     <label class="f">Motivo</label>${sel("ct-mot", ["Conteo de rutina", "Inventario inicial", "Corrección", "Diferencia encontrada"], st == null ? "Inventario inicial" : "Conteo de rutina")}
     <button class="btn pri xl wide" style="margin-top:14px" data-act="doContar" data-id="${esc(d.id)}">GUARDAR CONTEO</button>`); };
-document.addEventListener("input", e => { if (e.target.id === "ct-q") { const d = $("#panel [data-act='doContar']"); if (!d) return; const st = stockDe(d.dataset.id), v = numDec(e.target.value), el = $("#ct-dif"); el.innerHTML = e.target.value.trim() && st != null && v !== st ? `Diferencia: <b style="color:${v < st ? "var(--danger)" : "var(--marca-d)"}">${v > st ? "+" : ""}${fmtN(v - st, 2)}</b>` : ""; } });
-ACT.doContar = async (el, d) => { const raw = $("#ct-q").value; if (!raw.trim()) { toast("Escribe cuántos hay.", true); return; } await guardar(async () => { await contarStock(d.id, numDec(raw), selVal("ct-mot")); cerrar(); }, "Conteo guardado"); };
+document.addEventListener("input", e => { if (e.target.id === "ct-q") { const d = $("#panel [data-act='doContar']"); if (!d) return; const st = stockDe(d.dataset.id), v = numCant(e.target.value), el = $("#ct-dif"); el.innerHTML = e.target.value.trim() && st != null && v !== st ? `Diferencia: <b style="color:${v < st ? "var(--danger)" : "var(--marca-d)"}">${v > st ? "+" : ""}${fmtN(v - st, 2)}</b>` : ""; } });
+ACT.doContar = async (el, d) => { const raw = $("#ct-q").value; if (!raw.trim()) { toast("Escribe cuántos hay.", true); return; } await guardar(async () => { await contarStock(d.id, numCant(raw), selVal("ct-mot")); cerrar(); }, "Conteo guardado"); };
 
 /* ---------- pérdidas ---------- */
 ACT.merma = (el, d) => { S.mermaPid = (d && d.id) || ""; abrir(() => {
@@ -136,4 +136,6 @@ ACT.merma = (el, d) => { S.mermaPid = (d && d.id) || ""; abrir(() => {
   <button class="btn pri xl wide" style="margin-top:14px" data-act="doMerma">GUARDAR</button>`; }); };
 ACT.mermaProd = (el, d) => { S.mermaPid = d.id; document.querySelectorAll("#panel .tile").forEach(t => t.classList.toggle("inc", t.dataset.id === d.id)); };
 ACT.doMerma = async () => { if (!S.mermaPid) { toast("Elige el producto.", true); return; } const mot = selVal("mm-mot"); if (!mot) { toast("Elige por qué fue.", true); return; }
-  await guardar(async () => { await registrarMerma(S.mermaPid, numDec($("#mm-q").value), mot, ($("#mm-obs") || {value: ""}).value.trim()); cerrar(); }, "Pérdida anotada"); };
+  await guardar(async () => { await registrarMerma(S.mermaPid, numCant($("#mm-q").value), mot, ($("#mm-obs") || {value: ""}).value.trim()); cerrar(); }, "Pérdida anotada"); };
+// un doble toque mientras se guarda no suma ni resta dos veces (cada movimiento lleva un id nuevo: nadie lo junta después)
+for (const k of ["doEntrada", "doContar", "doMerma"]) { const f = ACT[k]; ACT[k] = (el, d) => unaVez("act:" + k, () => f(el, d)); }

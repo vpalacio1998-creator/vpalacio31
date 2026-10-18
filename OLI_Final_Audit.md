@@ -17,8 +17,8 @@ Este documento separa lo **probado de verdad** de lo **no probado**. Si algo no 
 | Versión de prueba en Claude | https://claude.ai/artifact/W852rvnhT965q34HqyoAWV (otra base de datos, independiente de Supabase) |
 
 **Cuentas creadas** (las contraseñas se entregaron por chat; no están en el repositorio):
-- Administrador (propietario): `admin@oli.app`
-- Empleado: `empleado@oli.app`
+- Administrador (propietario): (correo guardado aparte: no se publica)
+- Empleado: (correo guardado aparte: no se publica)
 
 Recomendación: cambiar ambas contraseñas desde Supabase → Authentication en cuanto se empiece a usar.
 

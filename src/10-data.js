@@ -351,6 +351,7 @@ function detectarConflictos() {
   try {
     const sm = window.stockMap();
     for (const [pid, st] of Object.entries(sm)) if (st != null && st < 0) {
+      const p = typeof prod === "function" ? prod(pid) : null; if (p && (p.combo || p.activo === false)) continue;   // un combo o un producto desactivado no se cuenta: el aviso va en su insumo
       const key = "conf_" + pid + "_" + S.today, ya = (DS.c.audit || {})[(DS.uid || "local") + "__audit_" + S.today];
       if (ya && (ya.items || []).some(i => i.a === "CONFLICTO_INVENTARIO" && i.r === pid)) continue;
       audit("CONFLICTO_INVENTARIO", pid, "Inventario quedó en " + st + " al sincronizar ventas de varios dispositivos. Revisar y hacer un conteo.");

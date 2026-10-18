@@ -40,9 +40,9 @@ try {
 // producción real: ingreso del administrador y "Crear cuenta" (se llena, NO se guarda)
 if (process.env.ADM_PASS) try {
   const P = await dev(390, 844, 3); await P.goto(PROD); await P.waitForSelector('#lg-mail', { timeout: 30000 });
-  await P.type('#lg-mail', 'admin@oli.app', { delay: 25 }); await P.type('#lg-pass', process.env.ADM_PASS, { delay: 25 }); await shot(P, 'a00_ingreso');
+  await P.type('#lg-mail', process.env.ADM_MAIL, { delay: 25 }); await P.type('#lg-pass', process.env.ADM_PASS, { delay: 25 }); await shot(P, 'a00_ingreso');
   const C2 = await dev(1440, 900, 1.5); await C2.goto(PROD); await C2.waitForSelector('#lg-mail', { timeout: 30000 });
-  await C2.fill('#lg-mail', 'admin@oli.app'); await C2.fill('#lg-pass', process.env.ADM_PASS); await C2.click('[data-act="login"]');
+  await C2.fill('#lg-mail', process.env.ADM_MAIL); await C2.fill('#lg-pass', process.env.ADM_PASS); await C2.click('[data-act="login"]');
   await waitFor(async () => (await C2.locator('#lg-mail').count()) === 0, 30); await C2.waitForTimeout(3000); await nombreEquipo(C2);
   await go(C2, 'equipo'); await C2.click('[data-act="nuevaCuenta"]'); await C2.waitForTimeout(500);
   await C2.fill('#nc-n', 'Laura'); await C2.fill('#nc-m', 'laura@ejemplo.com'); await C2.fill('#nc-p', 'Paleteria2026'); await shot(C2, 'a12_crear_cuenta'); await cerrar(C2);

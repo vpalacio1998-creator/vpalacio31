@@ -175,9 +175,15 @@ async function borrarGasto(id) { exigirAdmin(); await remove("gastos", id); audi
 async function guardarTercero(id, d) { exigirAdmin(); id = id || "t" + newId(); await put("terceros", id, Object.assign({}, col("terceros")[id] || {}, d)); audit("TERCERO", id, d.nombre); return id; }
 async function crearCompra(c) { exigirAdmin(); const id = "c" + newId(); await put("compras", id, Object.assign({estado: "pedido", fecha: S.today, t: Date.now(), uid: uidActual()}, c)); audit("COMPRA_PEDIDO", id, (c.lineas || []).length + " líneas"); return id; }
 async function actualizarCompra(id, patch) { exigirAdmin(); await put("compras", id, Object.assign({}, col("compras")[id], patch)); }
-async function recibirCompra(id, lineas, datos) {
+/* una acción que suma o resta inventario no se ejecuta dos veces a la vez (doble toque mientras se guarda) */
+const EN_CURSO = new Set();
+async function unaVez(clave, fn) { if (EN_CURSO.has(clave)) return null; EN_CURSO.add(clave); try { return await fn(); } finally { EN_CURSO.delete(clave); } }
+const recibirCompra = (id, lineas, datos) => unaVez("recibir:" + id, () => recibirCompraYa(id, lineas, datos));
+async function recibirCompraYa(id, lineas, datos) {
   exigirAdmin(); const c = col("compras")[id]; if (!c) throw new Error("No existe la compra.");
-  for (const l of lineas) { if (!(l.q > 0)) continue; await sumarStock(l.pid, l.q, {tipo: "compra", motivo: "Compra recibida", compra: id, ref: (c.proveedor || "") + (datos && datos.factura ? " · " + datos.factura : "")}); if (l.costo != null && l.costo > 0) { const unit = l.costo; if ((costos()[l.pid] || {}).costo !== unit) await fijarCosto(l.pid, unit, "compra " + id); } }
+  if (c.estado === "recibido") throw new Error("Esta compra ya se registró como recibida.");                 // no suma dos veces
+  // proveedor y factura quedan en la compra (solo administrador): el movimiento de inventario lo ven también los empleados
+  for (const l of lineas) { if (!(l.q > 0)) continue; await sumarStock(l.pid, l.q, {tipo: "compra", motivo: "Compra recibida", compra: id}); if (l.costo != null && l.costo > 0) { const unit = l.costo; if ((costos()[l.pid] || {}).costo !== unit) await fijarCosto(l.pid, unit, "compra " + id); } }
   await put("compras", id, Object.assign({}, c, datos || {}, {lineas, estado: "recibido", recT: Date.now(), recFecha: S.today}));
   audit("COMPRA_RECIBIDA", id, fmt(sum(lineas, l => (l.costo || 0) * (l.q || 0))));
 }

@@ -6,6 +6,9 @@
 const VECES = 3;
 module.exports = async (req, res) => {
   res.setHeader("Cache-Control", "no-store");
+  // Vercel Cron manda "Authorization: Bearer <CRON_SECRET>" cuando ese secreto está configurado en el proyecto: así solo el cron la usa
+  const secreto = process.env.CRON_SECRET;
+  if (secreto && req.headers.authorization !== "Bearer " + secreto) { res.status(401).json({ok: false}); return; }
   const url = process.env.OLI_SUPABASE_URL, key = process.env.OLI_SUPABASE_ANON_KEY;
   if (!url || !key) { res.status(500).json({ok: false, error: "Falta configurar OLI_SUPABASE_URL / OLI_SUPABASE_ANON_KEY"}); return; }
   const out = [];

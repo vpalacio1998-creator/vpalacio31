@@ -6,6 +6,9 @@ const $$ = s => Array.from(document.querySelectorAll(s));
 const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]));
 const num = v => { const n = Number(String(v == null ? "" : v).replace(/[^\d-]/g, "")); return isFinite(n) ? n : 0; };
 const numDec = v => { const n = Number(String(v == null ? "" : v).replace(",", ".").replace(/[^\d.-]/g, "")); return isFinite(n) ? n : 0; };
+// cantidades de inventario: "1.000" y "$1.000" son mil (punto de miles, como se escribe en Colombia y como pone el teclado de la app);
+// "2,5" y "2.5" son dos y medio. (num es para plata: quita puntos y comas; numDec leía "1.000" como 1)
+const numCant = v => { let s = String(v == null ? "" : v).replace(/[$\s]/g, ""); s = /^-?\d{1,3}(\.\d{3})+(,\d+)?$/.test(s) ? s.replace(/\./g, "").replace(",", ".") : s.replace(",", "."); const n = Number(s.replace(/[^\d.-]/g, "")); return isFinite(n) ? n : 0; };
 const fmt = n => (n < 0 ? "-$" : "$") + Math.abs(Math.round(Number(n) || 0)).toLocaleString("es-CO");
 const fmtK = n => { const a = Math.abs(n), s = n < 0 ? "-" : ""; return a >= 1e6 ? s + "$" + (a / 1e6).toFixed(1).replace(".", ",") + " M" : a >= 1000 ? s + "$" + Math.round(a / 1000) + " mil" : s + "$" + Math.round(a); };
 const fmtN = (x, d = 1) => isFinite(x) ? (Math.round(x * 10 ** d) / 10 ** d).toLocaleString("es-CO", {minimumFractionDigits: 0, maximumFractionDigits: d}) : "–";

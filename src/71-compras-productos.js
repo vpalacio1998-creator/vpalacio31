@@ -73,7 +73,7 @@ function vProduccion() {
   ${pr.insumos.length ? `<div class="card"><h3>Insumos necesarios en total</h3>${pr.insumos.map(i => `<div class="row"><span>${esc(i.n)}</span><b style="color:${i.falta ? "var(--danger)" : "inherit"}">${fmtN(i.need, 1)} ${esc(i.u || "")}${i.falta ? " · tienes " + fmtN(Math.max(0, i.s), 1) : ""}</b></div>`).join("")}</div>` : ""}`;
 }
 ACT.producir = (el, d) => abrir(() => head("Registrar producción") + `<p style="margin-top:0">${esc(prod(d.id).nombre)}: suma al inventario y descuenta los insumos de la receta.</p>${stepper("pr-q", Number(d.q) || 1)}<button class="btn pri xl wide" style="margin-top:14px" data-act="doProducir" data-id="${esc(d.id)}">GUARDAR PRODUCCIÓN</button>`);
-ACT.doProducir = async (el, d) => { await guardar(async () => { await producir(d.id, num($("#pr-q").value)); cerrar(); }, "Producción registrada"); };
+ACT.doProducir = (el, d) => unaVez("act:doProducir", () => guardar(async () => { await producir(d.id, numCant($("#pr-q").value)); cerrar(); }, "Producción registrada"));
 function insumosFaltantes() {
   return insumos().filter(p => p.activo !== false && p.controla !== false).map(p => { const e = estadoProd(p), ideal = p.max || (p.min || 0) * 3; return {p, e, q: e.k === "bajo" || e.k === "agotado" ? Math.max(1, Math.ceil(ideal - Math.max(e.st || 0, 0))) : 0}; }).filter(x => x.q > 0);
 }
@@ -94,7 +94,7 @@ ACT.nuevaCompra = () => { const ps = prods().filter(p => p.activo !== false && p
   abrir(() => head("Nueva compra") + `<label class="f" for="nc-prov">Proveedor</label><input class="in plain" id="nc-prov" value="${esc(S.ultimoProv)}" placeholder="Nombre del proveedor">
     <label class="f" for="nc-prod">¿Qué compraste o vas a comprar?</label><select class="in" id="nc-prod">${ps.map(p => `<option value="${esc(p.id)}">${esc(p.nombre)}</option>`).join("")}</select>
     <label class="f">Cantidad</label>${stepper("nc-q", 10)}<button class="btn pri xl wide" style="margin-top:14px" data-act="doNuevaCompra">GUARDAR COMPRA</button>`); };
-ACT.doNuevaCompra = async () => { const pid = $("#nc-prod").value, q = num($("#nc-q").value), prov = $("#nc-prov").value.trim(); S.ultimoProv = prov; await guardar(async () => { await crearCompra({proveedor: prov, lineas: [{pid, q, costo: costoActual(pid), ok: false}]}); cerrar(); S.comprasTab = "lista"; irA("compras"); }, "Compra creada"); };
+ACT.doNuevaCompra = async () => { const pid = $("#nc-prod").value, q = numCant($("#nc-q").value), prov = $("#nc-prov").value.trim(); S.ultimoProv = prov; await guardar(async () => { await crearCompra({proveedor: prov, lineas: [{pid, q, costo: costoActual(pid), ok: false}]}); cerrar(); S.comprasTab = "lista"; irA("compras"); }, "Compra creada"); };
 ACT.recibir = (el, d) => { const c = col("compras")[d.id]; if (!c) return; const terc = Object.entries(col("terceros")).filter(([, t]) => t.tipo === "proveedor");
   abrir(() => head("Llegó el pedido") + `<p class="small muted" style="margin-top:0">Corrige lo que de verdad llegó. Se suma solo al inventario.</p>
     ${c.lineas.map((l, i) => `<div class="row" style="align-items:flex-end"><div class="l" style="flex:1"><b>${esc((prod(l.pid) || {nombre: "?"}).nombre)}</b><div class="small muted">Pediste ${l.q}</div></div><div style="width:84px"><label class="f" style="margin:0" for="rq-${i}">Llegó</label><input class="in plain" id="rq-${i}" inputmode="numeric" value="${l.q}" style="text-align:center"></div><div style="width:110px"><label class="f" style="margin:0" for="rc-${i}">Costo c/u</label><input class="in money" id="rc-${i}" inputmode="numeric" value="${l.costo != null ? fmt(l.costo) : ""}"></div></div>`).join("")}
@@ -105,7 +105,7 @@ ACT.recibir = (el, d) => { const c = col("compras")[d.id]; if (!c) return; const
       <label class="f">Tipo de soporte</label>${sel("rf-tip", ["Factura electrónica", "Factura", "Documento soporte", "Sin soporte"], (c.soporte || {}).tipo || "")}
       <label class="f" for="rf-iva">IVA total de la compra (si aplica)</label><input class="in money" id="rf-iva" inputmode="numeric" value="${c.iva ? fmt(c.iva) : ""}"></details>
     <button class="btn pri xl wide" data-act="doRecibir" data-id="${esc(d.id)}">GUARDAR Y SUMAR AL INVENTARIO</button>`); };
-ACT.doRecibir = async (el, d) => { const c = col("compras")[d.id], ls = c.lineas.map((l, i) => Object.assign({}, l, {q: num($("#rq-" + i).value), costo: $("#rc-" + i).value.trim() ? num($("#rc-" + i).value) : l.costo, ok: true}));
+ACT.doRecibir = async (el, d) => { const c = col("compras")[d.id], ls = c.lineas.map((l, i) => Object.assign({}, l, {q: numCant($("#rq-" + i).value), costo: $("#rc-" + i).value.trim() ? num($("#rc-" + i).value) : l.costo, ok: true}));
   await guardar(async () => { await recibirCompra(d.id, ls, {factura: $("#rf-fac").value.trim(), nit: $("#rf-nit").value.trim(), iva: num($("#rf-iva").value), soporte: {tipo: selVal("rf-tip"), ref: $("#rf-sop").value.trim()}}); cerrar(); }, "Inventario actualizado"); };
 
 /* ---------- productos ---------- */
@@ -159,7 +159,7 @@ function recetaEditorHTML() {
   return `<label class="f">Receta (cuánto insumo lleva cada unidad) ${ayuda("Opcional. Con la receta OLI calcula el costo del producto y los insumos que necesitas para producir.")}</label>${S.recDraft.map((l, i) => `<div class="row" style="padding:6px 0"><span style="flex:1">${esc((prod(l.iid) || {nombre: "?"}).nombre)}</span><span>${l.q} ${esc((prod(l.iid) || {}).unidad || "")}</span><button class="btn ghost sm" data-act="quitarIng" data-i="${i}">Quitar</button></div>`).join("")}
   ${ins.length ? `<div class="split" style="margin-top:6px"><select class="in" id="ing-p">${ins.map(x => `<option value="${esc(x.id)}">${esc(x.nombre)}</option>`).join("")}</select><input class="in plain" id="ing-q" inputmode="decimal" placeholder="Cantidad"></div><button class="btn ghost sm" style="margin-top:6px" data-act="agregarIng">Agregar ingrediente</button>` : '<p class="small muted">Primero crea insumos (tipo “Insumo”).</p>'}`;
 }
-ACT.agregarIng = () => { const q = numDec($("#ing-q").value); if (!(q > 0)) { toast("Escribe la cantidad.", true); return; } S.recDraft.push({iid: $("#ing-p").value, q}); $("#pr-rec").innerHTML = recetaEditorHTML(); };
+ACT.agregarIng = () => { const q = numCant($("#ing-q").value); if (!(q > 0)) { toast("Escribe la cantidad.", true); return; } S.recDraft.push({iid: $("#ing-p").value, q}); $("#pr-rec").innerHTML = recetaEditorHTML(); };
 ACT.quitarIng = (el, d) => { S.recDraft.splice(Number(d.i), 1); $("#pr-rec").innerHTML = recetaEditorHTML(); };
 function calcMargenProd() { const el = $("#pr-calc"); if (!el) return; const pr = num(($("#pr-p") || {}).value), c = ($("#pr-c") || {value: ""}).value.trim() ? num($("#pr-c").value) : null; el.innerHTML = pr && c != null ? `Utilidad por unidad: <b>${fmt(pr - c)}</b> · Margen: <b>${pct((pr - c) / pr, 1)}</b>` : pr ? "Agrega el costo (en Más opciones) para ver tu utilidad." : ""; }
 document.addEventListener("input", e => { if (e.target.id === "pr-p" || e.target.id === "pr-c") calcMargenProd(); });
@@ -182,7 +182,7 @@ ACT.doGuardarProd = async (el, d) => {
     const costoRaw = $("#pr-c").value.trim(), id = await guardarProducto(d.id, dat, costoRaw ? num(costoRaw) : null);
     if (S.recDraft.length || (d.id && col("recetas")[id])) await guardarReceta(id, S.recDraft.slice(), 1);
     const inv = $("#pr-i").value.trim(), orig = $("#pr-i").dataset.orig || "";   // solo cuenta si la persona cambió el número (no pisa ventas que llegaron mientras editaba)
-    if (inv !== "" && dat.controla && (!ant || inv !== orig)) await contarStock(id, numDec(inv), ant ? "edición" : "inventario inicial");
+    if (inv !== "" && dat.controla && (!ant || inv !== orig)) await contarStock(id, numCant(inv), ant ? "edición" : "inventario inicial");
     cerrar();
   }, "Producto guardado");
 };

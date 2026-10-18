@@ -440,6 +440,43 @@ begin
   reset role; set role anon;
   begin perform oli_cuenta_estado(); ok := false; exception when others then ok := true; end;
   perform t_assert(ok, 'sin sesión no se puede preguntar por cuentas');
+  -- T34: reglas del servidor (auditoría): hora futura, latido de empleados, retiros sin permiso, pérdidas
+  set role authenticated; perform t_as(e1);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','rs1','col','dispositivos','id','d1','t',9999999999999,'data', jsonb_build_object('dev','d1','nombre','Caja 1','rol','admin','uid', a::text,'pend',0))), 'd1', '1.0');
+  reset role;
+  perform t_assert(r->0->>'status' = 'applied' and (select data->>'rol' = 'empleado' and data->>'uid' = e1::text from oli_docs where collection = 'dispositivos' and doc_id = 'd1'), 'el latido de un equipo con cuenta de empleado queda con esa cuenta y rol empleado (no puede decir admin ni otra persona)');
+  perform t_assert((select device_ts <= (extract(epoch from clock_timestamp()) * 1000)::bigint + 600000 from oli_docs where collection = 'dispositivos' and doc_id = 'd1'), 'una hora del equipo en el futuro lejano no se guarda tal cual (máximo 10 minutos adelante)');
+  set role authenticated; perform t_as(e1);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','rs2','col','dispositivos','id','d1','t',(extract(epoch from clock_timestamp()) * 1000)::bigint + 700000,'data', jsonb_build_object('dev','d1','nombre','Caja 1 nueva','rol','empleado','uid', e1::text))), 'd1', '1.0');
+  reset role;
+  perform t_assert(r->0->>'status' = 'applied' and (select data->>'nombre' from oli_docs where collection = 'dispositivos' and doc_id = 'd1') = 'Caja 1 nueva', 'después, el latido real del equipo entra (no queda bloqueado como "viejo")');
+  set role authenticated; perform t_as(a);
+  perform oli_push_suscribir('https://push.example/a3', 'BPclave', 'authsecreto', 'dA');
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','rs3','col','meta','id','permisos','t',1,'data','{"movimientosEmpleado": false}'::jsonb)), 'dA', '1.0');
+  perform t_as(e1);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','rs4','col','cajas','id','2026-10-08_d1','t',1,'data', jsonb_build_object('fecha','2026-10-08','dev','d1','apertura', jsonb_build_object('id','ap8','t',1,'monto',50000,'uid',e1::text),'cierres','[]'::jsonb,
+         'movs', jsonb_build_array(jsonb_build_object('id','mv-r1','t',2,'tipo','retiro','monto',20000,'motivo','Retiro del dueño','uid',e1::text), jsonb_build_object('id','mv-i1','t',3,'tipo','ingreso','monto',5000,'motivo','Base adicional','uid',e1::text))))), 'd1', '1.0');
+  reset role;
+  perform t_assert(r->0->>'status' = 'applied' and (select count(*) from cash_movements where id = 'mv-r1') = 1, 'un retiro de un empleado con el permiso apagado NO se pierde (la plata sí salió): se guarda');
+  perform t_assert((select (select bool_and(case when m->>'id' = 'mv-r1' then m->>'sinPermiso' = 'true' else not (m ? 'sinPermiso') end) from jsonb_array_elements(data->'movs') m) from oli_docs where collection = 'cajas' and doc_id = '2026-10-08_d1'), '…queda marcado «sin permiso» (y una entrada de plata no se marca)');
+  perform t_assert(exists (select 1 from oli_push_queue where tag = 'mov-mv-r1' and body like 'Sin permiso para empleados%'), '…y el aviso al administrador lo dice');
+  set role authenticated; perform t_as(e1);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','rs5','col','cajas','id','2026-10-08_d1','t',4,'data', jsonb_build_object('fecha','2026-10-08','dev','d1','apertura', jsonb_build_object('id','ap8','t',1,'monto',50000,'uid',e1::text),
+         'cierres', jsonb_build_array(jsonb_build_object('id','ci8','t',5,'esperado',35000,'contado',35000,'dif',0,'uid',e1::text)),
+         'movs', jsonb_build_array(jsonb_build_object('id','mv-r1','t',2,'tipo','retiro','monto',20000,'motivo','Retiro del dueño','uid',e1::text), jsonb_build_object('id','mv-i1','t',3,'tipo','ingreso','monto',5000,'motivo','Base adicional','uid',e1::text))))), 'd1', '1.0');
+  reset role;
+  perform t_assert(r->0->>'status' = 'applied' and (select jsonb_array_length(data->'cierres') = 1 and (select count(*) from jsonb_array_elements(data->'movs') m where m->>'sinPermiso' = 'true') = 1 from oli_docs where collection = 'cajas' and doc_id = '2026-10-08_d1'), 'esa caja se puede cerrar igual, y el retiro sigue marcado una sola vez');
+  set role authenticated; perform t_as(a);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','rs6','col','cajas','id','2026-10-08_dA','t',1,'data', jsonb_build_object('fecha','2026-10-08','dev','dA','movs', jsonb_build_array(jsonb_build_object('id','mv-ra','t',2,'tipo','retiro','monto',1000,'motivo','x','uid',a::text))))), 'dA', '1.0');
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','rs7','col','meta','id','permisos','t',2,'data','{"movimientosEmpleado": true}'::jsonb)), 'dA', '1.0');
+  reset role;
+  perform t_assert((select not ((data->'movs'->0) ? 'sinPermiso') from oli_docs where collection = 'cajas' and doc_id = '2026-10-08_dA'), 'un retiro del administrador no se marca');
+  set role authenticated; perform t_as(e1);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','rs8','col','mermas','id','2026-10-08_d1','t',1,'data','{"fecha":"2026-10-08","dev":"d1","items":[{"id":"mm1","t":1,"pid":"p-mango","q":-5,"motivo":"Daño"}]}'::jsonb)), 'd1', '1.0');
+  perform t_assert(r->0->>'status' = 'rejected', 'una pérdida con cantidad negativa (que sumaría inventario) se rechaza');
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','rs9','col','mermas','id','2026-10-08_d1','t',2,'data','{"fecha":"2026-10-08","dev":"d1","items":[{"id":"mm2","t":1,"pid":"p-mango","q":1,"motivo":"Daño"}]}'::jsonb)), 'd1', '1.0');
+  perform t_assert(r->0->>'status' = 'applied', 'una pérdida normal entra');
+  reset role;
   -- T16: coherencia de totales
   reset role;
   perform t_assert((select sum(total) from sales) = (select sum(amount) from payments), 'total de ventas = total de pagos');

@@ -44,7 +44,7 @@ function sel(id, opts, val) { return `<div class="paygrid" id="${id}" data-sel="
 ACT.elegir = (el, d) => { const g = document.getElementById(d.g); g.querySelectorAll("button").forEach(b => b.setAttribute("aria-pressed", b === el ? "true" : "false")); g.dataset.val = d.v; };
 const selVal = id => { const g = document.getElementById(id); if (!g) return ""; const b = g.querySelector('[aria-pressed="true"]'); return b ? b.dataset.v : ""; };
 const stepper = (id, v = 1, mx = 999) => `<div class="qty" style="justify-content:center;gap:14px"><button type="button" data-act="paso" data-i="${id}" data-d="-1" aria-label="Menos" style="width:56px;height:56px;font-size:26px">−</button><input class="in plain" id="${id}" inputmode="numeric" value="${v}" style="width:90px;text-align:center;font-size:24px;font-weight:700" data-max="${mx}"><button type="button" data-act="paso" data-i="${id}" data-d="1" aria-label="Más" style="width:56px;height:56px;font-size:26px">+</button></div>`;
-ACT.paso = (el, d) => { const i = document.getElementById(d.i); i.value = clamp(num(i.value) + Number(d.d), 1, Number(i.dataset.max) || 999); };
+ACT.paso = (el, d) => { const i = document.getElementById(d.i); i.value = clamp(Math.round(numCant(i.value)) + Number(d.d), 1, Number(i.dataset.max) || 999); };
 
 /* ---------- gráficos simples (sin adornos) ---------- */
 let tipEl = null;
