@@ -540,6 +540,12 @@ begin
   perform t_assert((select count(*) from oli_docs where collection = 'ajustescaja') = 1, 'la caja ve que su diferencia ya se revisó');
   reset role; set role authenticated; perform t_as(x);
   perform t_assert((select count(*) from oli_docs where collection = 'ajustescaja') = 0, 'alguien de otro negocio no lo ve');
+  -- T38: la función de notificaciones exige la llave que guarda el servidor; la app no la puede leer
+  reset role;
+  perform t_assert(length(oli_push_claves()->>'llave') = 64 and (oli_push_claves()->>'llave') ~ '^[0-9a-f]+$', 'el servidor tiene una llave larga y aleatoria para la función de notificaciones');
+  perform t_assert(not has_function_privilege('authenticated', 'oli_push_claves()', 'execute') and not has_function_privilege('anon', 'oli_push_claves()', 'execute')
+    and not has_table_privilege('authenticated', 'oli_push_conf', 'select') and not has_table_privilege('anon', 'oli_push_conf', 'select'), 'ni un usuario ni alguien sin sesión pueden leer esa llave');
+  perform t_assert(position('x-oli-llave' in pg_get_functiondef('oli.push_ping()'::regprocedure)) > 0, 'la base de datos la manda al avisar a la función');
   -- T16: coherencia de totales
   reset role;
   perform t_assert((select sum(total) from sales) = (select sum(amount) from payments), 'total de ventas = total de pagos');

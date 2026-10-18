@@ -4,7 +4,8 @@
 // - GET: devuelve la clave pública VAPID, que el navegador necesita para activar las notificaciones (no es secreta).
 // Las claves VAPID se generan una sola vez, aquí mismo, y se guardan en el servidor (tabla oli_push_conf, sin acceso desde la
 // app): la privada nunca sale del servidor. No recibe datos de quien la llama: solo manda lo que ya está en la cola, así que
-// corre sin exigir sesión (verify_jwt = false). Usa la service_role key del entorno de Supabase (nunca llega al navegador).
+// corre sin exigir sesión (verify_jwt = false), pero el POST exige la llave que manda la base de datos (x-oli-llave). Usa la
+// service_role key del entorno de Supabase (nunca llega al navegador).
 // Despliegue: supabase functions deploy oli-push --no-verify-jwt
 import webpush from "npm:web-push@3.6.7";
 
@@ -12,7 +13,7 @@ const BASE = Deno.env.get("SUPABASE_URL")!, KEY = Deno.env.get("SUPABASE_SERVICE
 const cors = { "access-control-allow-origin": "*", "access-control-allow-headers": "authorization, x-client-info, apikey, content-type", "access-control-allow-methods": "GET, POST, OPTIONS" };
 const json = (b: unknown, s = 200) => new Response(JSON.stringify(b), { status: s, headers: { ...cors, "content-type": "application/json" } });
 
-type Claves = { pub: string; priv: string; sujeto: string };
+type Claves = { pub: string; priv: string; sujeto: string; llave?: string | null };
 type Sub = { endpoint: string; p256dh: string; auth: string };
 type Aviso = { id: number; kind: string; title: string; body: string; tag: string | null; url: string | null; subs: Sub[] };
 
@@ -57,6 +58,8 @@ Deno.serve(async (req) => {
     const k = await claves();
     await guardarDireccion();
     if (req.method === "GET") return json({ publicKey: k.pub });
+    // solo la base de datos la manda a trabajar: trae la llave que se guardó en el servidor (migración 20261018150000_oli_push_llave.sql)
+    if (k.llave && req.headers.get("x-oli-llave") !== k.llave) return json({ error: "no autorizado" }, 401);
     let avisos = 0, enviados = 0;
     for (let vuelta = 0; vuelta < 10; vuelta++) {
       const lote = (await rpc("oli_push_tomar", { p_limite: 50 })) as Aviso[] | null;
