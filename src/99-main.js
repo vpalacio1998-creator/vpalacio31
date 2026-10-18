@@ -22,7 +22,7 @@ ACT.doNombreEquipo = async () => { const n = $("#dv-o").value.trim() || selVal("
 
 function drawHeader() {
   $("#fecha").textContent = diaLargo(S.today); $("#estado").innerHTML = connInfo().txt;
-  const c = connInfo(); $("#dot").className = "dot" + (c.cls === "ok" ? "" : c.cls === "bad" ? " bad" : " off"); $("#dot").style.background = c.cls === "warn" ? "var(--warn)" : "";
+  const c = connInfo(); $(".estado-btn").setAttribute("aria-label", "Estado de envío: " + c.txt); $("#dot").className = "dot" + (c.cls === "ok" ? "" : c.cls === "bad" ? " bad" : " off"); $("#dot").style.background = c.cls === "warn" ? "var(--warn)" : "";
   const b = alertas().filter(a => a.sev === "bad").length; const bell = $("#bell"); bell.hidden = !esAdmin(); if (b) bell.dataset.n = b; else delete bell.dataset.n;
   $("#searchbtn").hidden = !esAdmin();
 }

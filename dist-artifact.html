@@ -333,7 +333,7 @@ details.help span{display:block;font-weight:500;font-size:13px;line-height:1.35;
 <div class="sheet hidden" id="sheet"><div class="bg"></div><div class="panel" role="dialog" aria-modal="true" id="panel"></div></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script>window.OLI_BUILD="cf59c773";</script>
+<script>window.OLI_BUILD="63c0ab61";</script>
 <script>
 (function(){
 "use strict";
@@ -610,7 +610,7 @@ async function remove(colName, id) {
   await IDB.tx([["docs", "del", path], ["outbox", "put", path, op]]);
   if (DS.mode === "db") kickSync(); else { delete OUT[path]; IDB.tx([["outbox", "del", path]]).catch(() => {}); }
 }
-const idsDe = d => { const o = []; for (const k of ["ventas", "items", "movs"]) for (const x of (d && d[k]) || []) if (x && x.id) o.push(x.id); return o; };
+const idsDe = d => { const o = []; for (const k of ["ventas", "items", "movs", "cierres"]) for (const x of (d && d[k]) || []) if (x && x.id) o.push(x.id); return o; };
 function appendTo(colName, id, field, item, base) { const cur = (DS.c[colName] || {})[id] || Object.assign({}, base, {[field]: []}); return put(colName, id, Object.assign({}, cur, {[field]: (cur[field] || []).concat([item])})); }
 function patchItem(colName, id, field, itemId, patch) { const cur = (DS.c[colName] || {})[id]; if (!cur) return Promise.reject(new Error("no existe")); return put(colName, id, Object.assign({}, cur, {[field]: (cur[field] || []).map(x => x.id === itemId ? Object.assign({}, x, patch) : x)})); }
 
@@ -656,7 +656,7 @@ function kickSync(delay = 0) { clearTimeout(syncTimer); syncTimer = setTimeout(s
 const ORDEN_ENVIO = {ventas: 0, cajas: 1, anulaciones: 3, confirmaciones: 3, dispositivos: 4, audit: 4};
 const turnoEnvio = op => op.col in ORDEN_ENVIO ? ORDEN_ENVIO[op.col] : 2;
 async function marcarRechazo(op, e) {
-  op.estado = "rechazada"; op.error = (e && e.code) || "error"; op.detalle = String((e && e.message) || "").slice(0, 160);
+  op.estado = "rechazada"; op.error = (e && e.code) || "error"; op.detalle = String((e && e.message) || "").slice(0, 160); op.reint = 1;   // ya se reintentó en la ronda
   if (OUT[op.path] === op) { SYNC.rechazadas = rechazadas().length; await IDB.tx([["outbox", "put", op.path, op]]).catch(() => {}); }   // si ya hay un cambio más nuevo, ese manda
   audit("SYNC_RECHAZADA", op.path, descCambio(op) + (op.detalle ? " · " + op.detalle : ""));
 }
@@ -666,6 +666,11 @@ const numeroNuevo = op => { op.opId = newOpId(op.path); return op; };
 async function syncNow() {
   if (syncing || DS.mode !== "db" || DS.bloqueada || DS.needsLogin) return;                   // en la pantalla de ingreso no se envía: se envía al ingresar
   if (!conRed()) { recalcEstado(); changed(); return; }
+  // lo que se rechazó antes (p. ej. en la versión anterior, una anulación que llegó antes que su venta) se reintenta una vez, con número
+  // nuevo, cuando su dueño ya ingresó; lo de otra persona sigue a la vista como rechazado
+  const reint = DS.uid ? rechazadas().filter(o => !o.reint && (!o.uid || o.uid === DS.uid || o.uid === "local")) : [];
+  if (reint.length) { for (const o of reint) { o.estado = "pendiente"; o.reint = 1; numeroNuevo(o); } await IDB.tx(reint.map(o => ["outbox", "put", o.path, o])).catch(() => {}); SYNC.rechazadas = rechazadas().length; }
+  if (syncing) return;                                                                        // (otra ronda empezó mientras se guardaba)
   // solo se envía lo que hizo la persona con sesión abierta (lo de otra persona espera a que ella vuelva a ingresar)
   const ops = enviables().sort((a, b) => turnoEnvio(a) - turnoEnvio(b) || a.t - b.t);
   if (!ops.length) { SYNC.estado = "sincronizado"; recalcEstado(); changed(); return; }
@@ -775,11 +780,7 @@ async function bootData() {
   await IDB.open(); await bootDevice(); await loadAcks();
   const docs = await IDB.getAll("docs"), outbox = await IDB.getAll("outbox"), ident = await IDB.get("kv", "ident");
   for (const x of Object.values(docs)) (DS.c[x.col] = DS.c[x.col] || {})[x.id] = x.data;
-  // lo rechazado antes de esta versión se reintenta una vez, con número nuevo (p. ej. una anulación que llegó antes que su venta);
-  // solo lo de quien tenía la sesión abierta: lo de otra persona sigue a la vista como rechazado
-  const reint = [], yo = ident && ident.uid, mio = op => !op.uid || op.uid === yo || op.uid === "local";
-  for (const [p, op] of Object.entries(outbox)) { if (op.estado === "rechazada" && !op.reint && mio(op)) { op.estado = "pendiente"; op.reint = 1; numeroNuevo(op); reint.push(["outbox", "put", p, op]); } OUT[p] = op; if (op.estado === "rechazada") SYNC.rechazadas++; if (op.del) { if (DS.c[op.col]) delete DS.c[op.col][op.id]; } else (DS.c[op.col] = DS.c[op.col] || {})[op.id] = op.data; }
-  if (reint.length) await IDB.tx(reint).catch(() => {});
+  for (const [p, op] of Object.entries(outbox)) { OUT[p] = op; if (op.estado === "rechazada") SYNC.rechazadas++; if (op.del) { if (DS.c[op.col]) delete DS.c[op.col][op.id]; } else (DS.c[op.col] = DS.c[op.col] || {})[op.id] = op.data; }
   if (window.OLI_CONFIG && window.OLI_CONFIG.supabaseUrl && typeof window.bootSupabase === "function") { await window.bootSupabase(ident); return; }
   const pedir = async () => { try { if (window.claude && typeof window.claude.use === "function") { const r = await Promise.all([window.claude.use("db"), window.claude.use("user")]); return r; } } catch (e) {} return [null, null]; };
   let [db, user] = await pedir();
@@ -813,11 +814,11 @@ async function conectarClaude(db, user, ident) {
 const listo = () => DS.mode !== "loading" && !DS.needsLogin && !DS.needsOrg && ["productos", "meta"].every(n => DS.ready[n]);
 
 /* ---------- dispositivos (para el administrador) ---------- */
-let lastHb = 0;
+let lastHb = 0, lastRech = -1;
 function heartbeat(force) {
   if (DS.mode !== "db" || !DEV.listo || !DEV.nombre || !conRed() || DS.needsLogin) return;
-  if (Date.now() - lastHb < (force ? 15000 : 40000)) return; lastHb = Date.now();
   const rech = rechazadas();                                                                  // el administrador ve en su equipo lo que el servidor le rechazó a este
+  if (Date.now() - lastHb < (force ? 15000 : 40000) && rech.length === lastRech) return; lastHb = Date.now(); lastRech = rech.length;   // si cambió, se avisa ya
   put("dispositivos", DEV.id, {dev: DEV.id, nombre: DEV.nombre, uid: DS.uid || "", rol: DS.isAdmin ? "admin" : "empleado", vis: Date.now(), pend: pendientes().length, ventasPend: ventasPendientes(),
     rech: rech.length, rechInfo: rech.slice(0, 5).map(o => ({c: descCambio(o), e: o.detalle || "", t: o.t})), v: 2}).catch(() => {});
 }
@@ -1601,7 +1602,7 @@ function alertas() {
         out.push({sev: "bad", tipo: "sync", t: (d.nombre || "Otro equipo") + ": " + (uno ? "un cambio que el servidor no aceptó." : d.rech + " cambios que el servidor no aceptó."),
           d: rechTxt(d) + ". " + (dias >= DIAS_EQUIPO_VIEJO
             ? "Ese equipo no se conecta desde hace " + dias + " días: si se borró o se reemplazó, " + (uno ? "ese cambio se perdió" : "esos cambios se perdieron") + " (no llegaron al servidor). Si ya no existe, quita este aviso en Equipo → «Quitar el aviso»."
-            : (uno ? "Sigue guardado" : "Siguen guardados") + " en ese equipo, no en el servidor: allá toca «Hay datos que revisar» (arriba) y luego «Reintentar el envío». Si vuelve a fallar, ingresa en ese equipo con tu cuenta: como administrador puedes reintentarlo o descartarlo. Última conexión de ese equipo: " + haceTxt(d.vis) + "."), tab: "equipo"}); }
+            : (uno ? "Sigue guardado" : "Siguen guardados") + " en ese equipo, no en el servidor: allá toca «Hay datos que revisar» (arriba) y luego «Reintentar el envío». Si vuelve a fallar, ingresa en ese equipo con tu cuenta: como administrador puedes reintentarlo" + (DS.backend === "supabase" ? " o descartarlo" : "") + ". Última conexión de ese equipo: " + haceTxt(d.vis) + "."), tab: "equipo"}); }
       for (const a of anomalias()) out.push({sev: a.sev, tipo: "anomalia", t: a.t, d: a.d, tab: a.ir === "hoy" ? "hoy" : a.ir === "compras" ? "compras" : a.ir === "inventario" ? "inventario" : a.ir === "cierres" ? "reportes" : "reportes", anom: true});
       for (const a of alertasCostos()) out.push({sev: a.tipo === "sube" ? "warn" : "ok", tipo: "costo", t: (a.insumo ? "El costo de " : "El costo de ") + a.p.nombre + (a.tipo === "sube" ? " aumentó " : " bajó ") + Math.round(Math.abs(a.ch) * 100) + "%.", d: a.insumo ? "Costo anterior " + fmt(a.prev) + ", nuevo " + fmt(a.nuevo) + ". Revisa precio o receta." : "Margen de " + pct(a.mPrev) + " a " + pct(a.mNuevo) + ". Revisa precio o receta.", tab: "productos", pid: a.p.id});
       const pp = proximoPuente(7); if (pp) out.push({sev: "warn", tipo: "compra", t: "Se viene fin de semana largo: " + rangoFechasTxt(pp.fechas) + ".", d: (pp.nombres.join(", ") || "Festivo") + ". Haz el pedido para los " + pp.fechas.length + " días: OLI ya pide " + Math.round(colchonFestivo() * 100) + " % más para esos días.", tab: "compras"});
@@ -2097,39 +2098,60 @@ ACT.verEnvio = () => abrir(() => {
     <div class="small muted" style="margin-top:12px">Este equipo: <b>${esc(DEV.nombre || DEV.id)}</b></div>`;
 }, {live: true});
 /* lo que el servidor no aceptó: qué es, por qué, y reintentar (o, el administrador, descartarlo y quedarse con lo del servidor) */
+const sesionLista = () => DS.mode !== "db" || (!!DS.uid && !DS.needsLogin && !DS.needsOrg && listo());
+const propioEnvio = o => !o.uid || o.uid === DS.uid || o.uid === "local";
+// el administrador puede enviar con su cuenta lo de otra persona (el servidor se lo acepta), menos el historial ajeno: ese solo lo acepta de su dueño
+const tomable = o => esAdmin() && !propioEnvio(o) && o.col !== "audit";
 function rechazadasHTML() {
   const r = rechazadas(); if (!r.length) return "";
-  const descartar = esAdmin() && DS.backend === "supabase";
+  const ya = sesionLista(), descartar = ya && esAdmin() && DS.backend === "supabase", ajenos = r.filter(tomable).length;
   return `<div class="notice bad" style="margin-top:12px;display:block"><b>${r.length === 1 ? "Un cambio no se pudo enviar: el servidor no lo aceptó." : r.length + " cambios no se pudieron enviar: el servidor no los aceptó."}</b> ${r.length === 1 ? "Sigue guardado" : "Siguen guardados"} en este equipo${esAdmin() ? "" : ". Avísale al administrador"}.
     ${r.map(o => `<div class="row"><div class="l"><b>${esc(descCambio(o))}</b>${o.detalle ? `<div class="small">${esc(o.detalle)}</div>` : ""}${sinEnviarTxt(o) ? `<div class="small muted">${esc(sinEnviarTxt(o))}</div>` : ""}</div>${descartar ? `<div class="r"><button class="btn ghost sm" data-act="descartarCambio" data-p="${esc(o.path)}">Descartar</button></div>` : ""}</div>`).join("")}
-    <button class="btn sm" style="margin-top:8px" data-act="reintentarEnvio">Reintentar el envío</button>${esAdmin() ? '<div class="small" style="margin-top:6px">Como administrador, al reintentar se envía con tu cuenta (también lo que hizo otra persona).</div>' : ""}</div>`;
+    ${ya ? `<button class="btn sm" style="margin-top:8px" data-act="reintentarEnvio">Reintentar el envío</button>` : '<div class="small" style="margin-top:8px">Para reintentar, primero ingresa con tu cuenta.</div>'}${ya && ajenos ? '<div class="small" style="margin-top:6px">Lo que hizo otra persona se puede enviar con tu cuenta de administrador: antes te preguntamos.</div>' : ""}</div>`;
 }
 /* lo que ese cambio tiene que el servidor todavía no recibió (lo que se perdería al descartarlo) */
 const registrosDe = d => [].concat((d && d.ventas) || [], (d && d.items) || [], (d && d.movs) || [], (d && d.cierres) || []).filter(x => x && x.id);
 function sinEnviar(o) { const ack = (DS.acks || {})[o.path] || []; return registrosDe(o.data).filter(x => !ack.includes(x.id)); }
 function sinEnviarTxt(o) {
-  const xs = sinEnviar(o); if (!xs.length) return registrosDe(o.data).length ? "Todo lo que trae ya estaba en el servidor." : "";
+  const todos = registrosDe(o.data); if (!todos.length) return "";
+  if (!(DS.acks || {})[o.path]) return (todos.length === 1 ? "Trae 1 registro" : "Trae " + todos.length + " registros") + ": este equipo no sabe si alguno ya había llegado al servidor.";
+  const xs = sinEnviar(o); if (!xs.length) return "Todo lo que trae ya estaba en el servidor.";
   const total = xs.reduce((s, x) => s + (Number(x.total) || Number(x.monto) || 0), 0), quien = uniq(xs.map(x => x.uid).filter(Boolean)).map(u => nombreDe(u) || "otra persona");
-  return (xs.length === 1 ? "1 registro que no llegó" : xs.length + " registros que no llegaron") + " al servidor" + (total ? " por " + fmt(total) : "") + (quien.length ? ", de " + quien.join(" y ") : "") + ".";
+  return (xs.length === 1 ? "1 registro que no llegó" : xs.length + " registros que no llegaron") + " al servidor" + (total ? " por " + fmt(total) : "") + (quien.length ? ", de " + uniq(quien).join(" y ") : "") + ".";
 }
 ACT.reintentarEnvio = async () => {
-  // solo se envía lo de quien tiene la sesión abierta; el administrador puede enviar también lo de otra persona (el servidor se lo acepta)
-  const todas = rechazadas(), propio = o => !o.uid || !DS.uid || o.uid === DS.uid || o.uid === "local", r = esAdmin() ? todas : todas.filter(propio);
-  const otraTxt = "Los cambios de otra persona los reintenta esa persona o el administrador: que ingrese en este equipo y toque «Reintentar el envío».";
-  if (!r.length) { if (todas.length) toast(otraTxt, true); return; }
-  for (const o of r) { o.estado = "pendiente"; o.error = ""; o.detalle = ""; if (!propio(o)) o.uid = DS.uid; numeroNuevo(o); }
+  if (!sesionLista()) { toast("Primero ingresa con tu cuenta.", true); return; }
+  if (DS.mode === "db" && !conRed()) { toast("Sin conexión: reintenta cuando vuelva Internet.", true); return; }
+  const todas = rechazadas(), mios = todas.filter(propioEnvio); let ajenos = todas.filter(tomable);
+  if (ajenos.length && !(await confirmar({titulo: "¿Enviar con tu cuenta lo de otra persona?", texto: "El servidor no se lo aceptó a esa persona; a ti, como administrador, sí te lo acepta:<br>" +
+      ajenos.map(o => "• <b>" + esc(descCambio(o)) + "</b>" + (o.detalle ? " (" + esc(o.detalle) + ")" : "") + (sinEnviarTxt(o) ? ". " + esc(sinEnviarTxt(o)) : "")).join("<br>") + "<br>En el historial queda que lo enviaste tú.", si: "Sí, enviar con mi cuenta", no: "Solo lo mío"}))) ajenos = [];
+  const r = mios.concat(ajenos).filter(o => OUT[o.path] === o && o.estado === "rechazada"), quedan = rechazadas().length - r.length;
+  const otraTxt = esAdmin() ? "Lo de otra persona que no enviaste sigue aquí; su historial solo lo puede enviar esa persona, ingresando en este equipo." : "Los cambios de otra persona los reintenta esa persona o el administrador, ingresando en este equipo.";
+  if (!r.length) { if (quedan) toast(otraTxt, true); return; }
+  for (const o of r) {
+    if (!propioEnvio(o)) { o.uidOrig = o.uidOrig || o.uid; audit("REINTENTO_ADMIN", o.path, descCambio(o) + " de " + (nombreDe(o.uid) || "otra persona") + (o.detalle ? " · rechazo: " + o.detalle : "")); o.uid = DS.uid; }
+    o.estado = "pendiente"; o.error = ""; o.detalle = ""; numeroNuevo(o);
+  }
   await IDB.tx(r.map(o => ["outbox", "put", o.path, o])).catch(() => {});
   SYNC.rechazadas = rechazadas().length; netFail = false; kickSync(100);
-  toast(r.length < todas.length ? "Reintentando lo tuyo. " + otraTxt : "Reintentando el envío…");
+  toast(quedan ? "Reintentando. " + otraTxt : "Reintentando el envío…");
 };
+/* descartar: primero se trae del servidor cómo está ese documento; solo entonces se borra lo de este equipo y se pone lo del servidor */
 ACT.descartarCambio = async (el, d) => {
   const o = OUT[d.p]; if (!o || o.estado !== "rechazada" || !esAdmin() || DS.backend !== "supabase") return;
+  const sinServidor = () => !conRed() || SB.sinVerificar || DS.needsLogin || !SB.client || !SB.org;
+  if (sinServidor()) { toast("Para descartar hace falta conexión con el servidor.", true); return; }
   if (!(await confirmar({titulo: "¿Descartar este cambio?", texto: "<b>" + esc(descCambio(o)) + "</b>. " + esc(sinEnviarTxt(o)) + " Se borra de este equipo y queda lo que tiene el servidor: lo que no llegó se pierde. No se puede deshacer. Si se puede, mejor toca «Reintentar el envío».", si: "Sí, descartar", no: "No", peligro: true}))) return;
-  if (OUT[o.path] !== o) return;                                                              // se reintentó o cambió mientras tanto
-  delete OUT[o.path]; const m = Object.assign({}, DS.c[o.col]); delete m[o.id]; DS.c[o.col] = m;   // sin la copia local, al recargar no se "restaura" lo descartado
-  await IDB.tx([["outbox", "del", o.path], ["docs", "del", o.path]]).catch(() => {});
-  SYNC.rechazadas = rechazadas().length; recalcEstado(); audit("CAMBIO_DESCARTADO", o.path, descCambio(o) + (o.detalle ? " · " + o.detalle : ""));
-  sbCargarTodo([o.col]); changed(); toast("Listo: quedó lo que tiene el servidor.");
+  if (OUT[o.path] !== o || o.estado !== "rechazada") return;                                   // se reintentó o cambió mientras tanto
+  if (sinServidor()) { toast("Se perdió la conexión: no se descartó nada.", true); return; }
+  let srv;
+  try { const r = await withTimeout(Promise.resolve(SB.client.from("oli_docs").select("data").eq("org_id", SB.org).eq("collection", o.col).eq("doc_id", o.id).limit(1)), 15000); if (r.error) throw r.error; srv = r.data && r.data[0] ? r.data[0].data : null; }
+  catch (e) { toast("No se pudo traer lo del servidor: no se descartó nada. Intenta de nuevo.", true); return; }
+  if (OUT[o.path] !== o) return;
+  delete OUT[o.path]; const m = Object.assign({}, DS.c[o.col]); if (srv) m[o.id] = srv; else delete m[o.id]; DS.c[o.col] = m;   // sin la copia local, al recargar no se "restaura" lo descartado
+  await IDB.tx([["outbox", "del", o.path], srv ? ["docs", "put", o.path, {col: o.col, id: o.id, data: srv}] : ["docs", "del", o.path]]).catch(() => {});
+  SYNC.rechazadas = rechazadas().length; recalcEstado(); audit("CAMBIO_DESCARTADO", o.path, descCambio(o) + (o.detalle ? " · " + o.detalle : "") + (sinEnviarTxt(o) ? " · " + sinEnviarTxt(o) : ""));
+  changed(); toast("Listo: quedó lo que tiene el servidor.");
 };
 
 /* ---------- ayuda y bienvenida ---------- */
@@ -3430,7 +3452,7 @@ VIEWS.equipo = () => {
     ${aud.length ? aud.map(a => { pedirNombres([a.u]); return `<div class="row" style="align-items:flex-start;padding:8px 0"><div class="l"><b>${esc(audTxt(a.a))}</b><div class="small muted">${esc(a.d || "")}</div></div><div style="text-align:right" class="xs muted">${diaCorto(ymd(new Date(a.t)))} ${hora(a.t)}<br>${esc(nombreDe(a.u) || "")}</div></div>`; }).join("") : '<p class="muted">No hay registros.</p>'}</div>
   ${rechazadas().length ? `<div class="card"><h3>Cambios de este equipo que el servidor no aceptó</h3>${rechazadasHTML()}<p class="small muted">No borres los datos del navegador: se perderían.</p></div>` : ""}`;
 };
-const AUD_TXT = {LUZ_AFUERA: "Prendió la luz de afuera", PLATA_CONTADA: "Anotó la plata que tienen", PLATA_CONTADA_QUITADA: "Quitó la plata anotada", APERTURA_CAJA: "Caja abierta", CIERRE_CAJA: "Caja cerrada", REABRIR_CAJA: "Caja reabierta", CAJA_RETIRO: "Salió dinero de caja", CAJA_INGRESO: "Entró dinero a caja", CAJA_GASTO: "Pago desde caja", ANULACION: "Venta anulada", DESCUENTO: "Descuento aplicado", MERMA: "Pérdida anotada", AJUSTE_INVENTARIO: "Inventario ajustado", CAMBIO_PRECIO: "Cambio de precio", CAMBIO_COSTO: "Cambio de costo", PRODUCTO_CREADO: "Producto creado", PRODUCTO_EDITADO: "Producto editado", PRODUCTO_DESACTIVADO: "Producto desactivado", PRODUCTO_REACTIVADO: "Producto reactivado", GASTO: "Gasto registrado", GASTO_BORRADO: "Gasto borrado", COMPRA_PEDIDO: "Compra creada", COMPRA_RECIBIDA: "Compra recibida", PRODUCCION: "Producción registrada", RECETA: "Receta guardada", CONFIG: "Configuración", TERCERO: "Tercero guardado", CONFLICTO_INVENTARIO: "Venta que necesita revisión", SYNC_RECHAZADA: "Envío rechazado", CAMBIO_DESCARTADO: "Cambio rechazado descartado", AVISO_EQUIPO_QUITADO: "Quitó el aviso de un equipo que ya no existe"};
+const AUD_TXT = {LUZ_AFUERA: "Prendió la luz de afuera", PLATA_CONTADA: "Anotó la plata que tienen", PLATA_CONTADA_QUITADA: "Quitó la plata anotada", APERTURA_CAJA: "Caja abierta", CIERRE_CAJA: "Caja cerrada", REABRIR_CAJA: "Caja reabierta", CAJA_RETIRO: "Salió dinero de caja", CAJA_INGRESO: "Entró dinero a caja", CAJA_GASTO: "Pago desde caja", ANULACION: "Venta anulada", DESCUENTO: "Descuento aplicado", MERMA: "Pérdida anotada", AJUSTE_INVENTARIO: "Inventario ajustado", CAMBIO_PRECIO: "Cambio de precio", CAMBIO_COSTO: "Cambio de costo", PRODUCTO_CREADO: "Producto creado", PRODUCTO_EDITADO: "Producto editado", PRODUCTO_DESACTIVADO: "Producto desactivado", PRODUCTO_REACTIVADO: "Producto reactivado", GASTO: "Gasto registrado", GASTO_BORRADO: "Gasto borrado", COMPRA_PEDIDO: "Compra creada", COMPRA_RECIBIDA: "Compra recibida", PRODUCCION: "Producción registrada", RECETA: "Receta guardada", CONFIG: "Configuración", TERCERO: "Tercero guardado", CONFLICTO_INVENTARIO: "Venta que necesita revisión", SYNC_RECHAZADA: "Envío rechazado", CAMBIO_DESCARTADO: "Cambio rechazado descartado", REINTENTO_ADMIN: "Envió con su cuenta un cambio de otra persona", AVISO_EQUIPO_QUITADO: "Quitó el aviso de un equipo que ya no existe"};
 const audTxt = a => AUD_TXT[a] || a;
 /* un equipo que se borró o se cambió deja para siempre su último aviso de cambios rechazados: el administrador lo puede quitar
    (no borra el equipo, para que las ventas viejas sigan mostrando su nombre; si ese equipo vuelve a conectarse, el aviso vuelve) */
@@ -4682,7 +4704,7 @@ ACT.doNombreEquipo = async () => { const n = $("#dv-o").value.trim() || selVal("
 
 function drawHeader() {
   $("#fecha").textContent = diaLargo(S.today); $("#estado").innerHTML = connInfo().txt;
-  const c = connInfo(); $("#dot").className = "dot" + (c.cls === "ok" ? "" : c.cls === "bad" ? " bad" : " off"); $("#dot").style.background = c.cls === "warn" ? "var(--warn)" : "";
+  const c = connInfo(); $(".estado-btn").setAttribute("aria-label", "Estado de envío: " + c.txt); $("#dot").className = "dot" + (c.cls === "ok" ? "" : c.cls === "bad" ? " bad" : " off"); $("#dot").style.background = c.cls === "warn" ? "var(--warn)" : "";
   const b = alertas().filter(a => a.sev === "bad").length; const bell = $("#bell"); bell.hidden = !esAdmin(); if (b) bell.dataset.n = b; else delete bell.dataset.n;
   $("#searchbtn").hidden = !esAdmin();
 }

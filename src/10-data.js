@@ -128,7 +128,7 @@ async function remove(colName, id) {
   await IDB.tx([["docs", "del", path], ["outbox", "put", path, op]]);
   if (DS.mode === "db") kickSync(); else { delete OUT[path]; IDB.tx([["outbox", "del", path]]).catch(() => {}); }
 }
-const idsDe = d => { const o = []; for (const k of ["ventas", "items", "movs"]) for (const x of (d && d[k]) || []) if (x && x.id) o.push(x.id); return o; };
+const idsDe = d => { const o = []; for (const k of ["ventas", "items", "movs", "cierres"]) for (const x of (d && d[k]) || []) if (x && x.id) o.push(x.id); return o; };
 function appendTo(colName, id, field, item, base) { const cur = (DS.c[colName] || {})[id] || Object.assign({}, base, {[field]: []}); return put(colName, id, Object.assign({}, cur, {[field]: (cur[field] || []).concat([item])})); }
 function patchItem(colName, id, field, itemId, patch) { const cur = (DS.c[colName] || {})[id]; if (!cur) return Promise.reject(new Error("no existe")); return put(colName, id, Object.assign({}, cur, {[field]: (cur[field] || []).map(x => x.id === itemId ? Object.assign({}, x, patch) : x)})); }
 
@@ -174,7 +174,7 @@ function kickSync(delay = 0) { clearTimeout(syncTimer); syncTimer = setTimeout(s
 const ORDEN_ENVIO = {ventas: 0, cajas: 1, anulaciones: 3, confirmaciones: 3, dispositivos: 4, audit: 4};
 const turnoEnvio = op => op.col in ORDEN_ENVIO ? ORDEN_ENVIO[op.col] : 2;
 async function marcarRechazo(op, e) {
-  op.estado = "rechazada"; op.error = (e && e.code) || "error"; op.detalle = String((e && e.message) || "").slice(0, 160);
+  op.estado = "rechazada"; op.error = (e && e.code) || "error"; op.detalle = String((e && e.message) || "").slice(0, 160); op.reint = 1;   // ya se reintentó en la ronda
   if (OUT[op.path] === op) { SYNC.rechazadas = rechazadas().length; await IDB.tx([["outbox", "put", op.path, op]]).catch(() => {}); }   // si ya hay un cambio más nuevo, ese manda
   audit("SYNC_RECHAZADA", op.path, descCambio(op) + (op.detalle ? " · " + op.detalle : ""));
 }
@@ -184,6 +184,11 @@ const numeroNuevo = op => { op.opId = newOpId(op.path); return op; };
 async function syncNow() {
   if (syncing || DS.mode !== "db" || DS.bloqueada || DS.needsLogin) return;                   // en la pantalla de ingreso no se envía: se envía al ingresar
   if (!conRed()) { recalcEstado(); changed(); return; }
+  // lo que se rechazó antes (p. ej. en la versión anterior, una anulación que llegó antes que su venta) se reintenta una vez, con número
+  // nuevo, cuando su dueño ya ingresó; lo de otra persona sigue a la vista como rechazado
+  const reint = DS.uid ? rechazadas().filter(o => !o.reint && (!o.uid || o.uid === DS.uid || o.uid === "local")) : [];
+  if (reint.length) { for (const o of reint) { o.estado = "pendiente"; o.reint = 1; numeroNuevo(o); } await IDB.tx(reint.map(o => ["outbox", "put", o.path, o])).catch(() => {}); SYNC.rechazadas = rechazadas().length; }
+  if (syncing) return;                                                                        // (otra ronda empezó mientras se guardaba)
   // solo se envía lo que hizo la persona con sesión abierta (lo de otra persona espera a que ella vuelva a ingresar)
   const ops = enviables().sort((a, b) => turnoEnvio(a) - turnoEnvio(b) || a.t - b.t);
   if (!ops.length) { SYNC.estado = "sincronizado"; recalcEstado(); changed(); return; }
@@ -293,11 +298,7 @@ async function bootData() {
   await IDB.open(); await bootDevice(); await loadAcks();
   const docs = await IDB.getAll("docs"), outbox = await IDB.getAll("outbox"), ident = await IDB.get("kv", "ident");
   for (const x of Object.values(docs)) (DS.c[x.col] = DS.c[x.col] || {})[x.id] = x.data;
-  // lo rechazado antes de esta versión se reintenta una vez, con número nuevo (p. ej. una anulación que llegó antes que su venta);
-  // solo lo de quien tenía la sesión abierta: lo de otra persona sigue a la vista como rechazado
-  const reint = [], yo = ident && ident.uid, mio = op => !op.uid || op.uid === yo || op.uid === "local";
-  for (const [p, op] of Object.entries(outbox)) { if (op.estado === "rechazada" && !op.reint && mio(op)) { op.estado = "pendiente"; op.reint = 1; numeroNuevo(op); reint.push(["outbox", "put", p, op]); } OUT[p] = op; if (op.estado === "rechazada") SYNC.rechazadas++; if (op.del) { if (DS.c[op.col]) delete DS.c[op.col][op.id]; } else (DS.c[op.col] = DS.c[op.col] || {})[op.id] = op.data; }
-  if (reint.length) await IDB.tx(reint).catch(() => {});
+  for (const [p, op] of Object.entries(outbox)) { OUT[p] = op; if (op.estado === "rechazada") SYNC.rechazadas++; if (op.del) { if (DS.c[op.col]) delete DS.c[op.col][op.id]; } else (DS.c[op.col] = DS.c[op.col] || {})[op.id] = op.data; }
   if (window.OLI_CONFIG && window.OLI_CONFIG.supabaseUrl && typeof window.bootSupabase === "function") { await window.bootSupabase(ident); return; }
   const pedir = async () => { try { if (window.claude && typeof window.claude.use === "function") { const r = await Promise.all([window.claude.use("db"), window.claude.use("user")]); return r; } } catch (e) {} return [null, null]; };
   let [db, user] = await pedir();
@@ -331,11 +332,11 @@ async function conectarClaude(db, user, ident) {
 const listo = () => DS.mode !== "loading" && !DS.needsLogin && !DS.needsOrg && ["productos", "meta"].every(n => DS.ready[n]);
 
 /* ---------- dispositivos (para el administrador) ---------- */
-let lastHb = 0;
+let lastHb = 0, lastRech = -1;
 function heartbeat(force) {
   if (DS.mode !== "db" || !DEV.listo || !DEV.nombre || !conRed() || DS.needsLogin) return;
-  if (Date.now() - lastHb < (force ? 15000 : 40000)) return; lastHb = Date.now();
   const rech = rechazadas();                                                                  // el administrador ve en su equipo lo que el servidor le rechazó a este
+  if (Date.now() - lastHb < (force ? 15000 : 40000) && rech.length === lastRech) return; lastHb = Date.now(); lastRech = rech.length;   // si cambió, se avisa ya
   put("dispositivos", DEV.id, {dev: DEV.id, nombre: DEV.nombre, uid: DS.uid || "", rol: DS.isAdmin ? "admin" : "empleado", vis: Date.now(), pend: pendientes().length, ventasPend: ventasPendientes(),
     rech: rech.length, rechInfo: rech.slice(0, 5).map(o => ({c: descCambio(o), e: o.detalle || "", t: o.t})), v: 2}).catch(() => {});
 }
