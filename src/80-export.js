@@ -410,7 +410,7 @@ async function pdfDueno(d) {
 function resumenContable(d) {
   const recib = d.compras.filter(c => c.estado === "Recibida"), pedidas = d.compras.filter(c => c.estado === "Pendiente"), porConf = ventasOk().filter(v => v.fecha >= d.a && v.fecha <= d.b && v.pend);
   const valIni = sum(d.inv, r => (r.inicial || 0) > 0 && r.costo != null ? r.inicial * r.costo : 0), valFin = sum(d.inv, r => (r.final || 0) > 0 && r.costo != null ? r.final * r.costo : 0);
-  const cc = d.cajas.filter(c => c.contado != null), impV = sum(d.imp.ventas, x => x.impuesto);
+  const cc = d.cajas.filter(c => c.contado != null), sinRev = cc.filter(c => c.revisada === false).length, impV = sum(d.imp.ventas, x => x.impuesto);
   return [
     ["Periodo", periodoDoc(d.a, d.b), ""], ["Ventas brutas (antes de descuentos)", fmt(d.bruto), "Ventas confirmadas"], ["Devoluciones / anulaciones", fmt(d.anuladoTot), d.anuladas + " ventas anuladas (no se suman)"], ["Descuentos", fmt(d.desc), ""],
     ["Ingresos netos", fmt(d.tot), "Ventas brutas − descuentos (impuestos incluidos)"], ["Base gravable / no gravada de ventas", fmt(sum(d.imp.ventas, x => x.base)), "Según tratamiento configurado"], ["Costo de ventas", fmt(d.costo), d.sinCosto ? d.sinCosto + " líneas sin costo" : "Costo registrado"],
