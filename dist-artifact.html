@@ -333,7 +333,7 @@ details.help span{display:block;font-weight:500;font-size:13px;line-height:1.35;
 <div class="sheet hidden" id="sheet"><div class="bg"></div><div class="panel" role="dialog" aria-modal="true" id="panel"></div></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script>window.OLI_BUILD="8995f58b";</script>
+<script>window.OLI_BUILD="b62b4255";</script>
 <script>
 (function(){
 "use strict";
@@ -887,6 +887,7 @@ const lsOk = () => { try { localStorage.setItem("oli-ls", "1"); localStorage.rem
 function revocarSesion(s) { if (!s || !s.access_token || SB.revocadas.has(s.access_token)) return; SB.revocadas.add(s.access_token); try { withTimeout(SB.client.auth.admin.signOut(s.access_token, "local"), 8000).catch(() => {}); } catch (e) {} }
 /* la sesión se cerró o el servidor la rechazó: este equipo olvida la identidad y lo que solo ve el administrador (las ventas por enviar se conservan) */
 async function olvidarIdentidad() {
+  limpiarNotisEquipo(false);                                                                          // los avisos del administrador no se quedan en el equipo
   await IDB.tx([["kv", "del", "ident"]]).catch(() => {});
   const soloAdmin = new Set(SB_ADMIN_COLS); for (const c of soloAdmin) { delete DS.c[c]; delete DS.ready[c]; }   // al volver a ingresar se espera a que lleguen de nuevo
   try { const all = await IDB.getAll("docs"), ops = []; for (const [p, x] of Object.entries(all || {})) if (x && soloAdmin.has(x.col)) ops.push(["docs", "del", p]); if (ops.length) await IDB.tx(ops); } catch (e) {}
@@ -961,7 +962,7 @@ async function sbCompletarSesion(session) {
   if (!me && fallo && ident && ident.sb && ident.uid === session.user.id) usarIdent(ident);                           // servidor sin respuesta: identidad guardada
   else if (!me && fallo) { DS.needsLogin = true; DS.loginMsg = "Ingresaste, pero el servidor de OLI no está respondiendo. Intenta de nuevo en unos minutos."; changed(); return; }
   else if (!me) { DS.needsLogin = false; DS.needsOrg = true; DS.uid = session.user.id; SB.email = session.user.email || ""; changed(); return; }
-  else { SB.org = me.org_id; SB.store = me.store_id; SB.role = me.role; DS.uid = session.user.id; DS.isAdmin = !!me.is_admin; DS.nombre = me.name || (session.user.email || "").split("@")[0]; SB.email = session.user.email || "";
+  else { SB.org = me.org_id; SB.store = me.store_id; SB.role = me.role; DS.uid = session.user.id; DS.isAdmin = !!me.is_admin; if (!DS.isAdmin) limpiarNotisEquipo(false); DS.nombre = me.name || (session.user.email || "").split("@")[0]; SB.email = session.user.email || "";
     if (gen !== SB.gen) return; await IDB.kvSet("ident", {uid: DS.uid, isAdmin: DS.isAdmin, org: SB.org, store: SB.store, role: SB.role, nombre: DS.nombre, sb: true}); }
   DS.needsLogin = false; DS.needsOrg = false; DS.loginMsg = ""; await purgarNoPermitido();
   if (DS.isAdmin && S.tab === "vender" && !leerHash()) S.tab = "hoy";                                       // el administrador empieza en Inicio (al arrancar aún no se sabía quién entraba)
@@ -2938,34 +2939,48 @@ ACT.luzPrendida = async () => { await guardar(() => marcarLuzAfuera(), "¡Listo!
    una anulación, una apertura o cierre de caja, plata que entra o sale de la caja, o un cambio que el servidor no aceptó, el
    servidor arma el aviso y lo manda (migración 20261018000000_oli_push.sql + Edge Function oli-push): llega aunque OLI esté
    cerrada. Lo que pasa en este mismo equipo no se avisa aquí. Los avisos nunca llevan costos ni utilidades.
-   En iPhone/iPad solo funcionan con OLI instalada (Agregar a inicio) y abierta desde el ícono. */
-const NOTI = {perm: "default", sub: null, prefs: null, registrada: false, cargando: false, revisado: false};
+   En iPhone/iPad solo funcionan con OLI instalada (Agregar a inicio), abierta desde el ícono, con iOS 16.4 o más nuevo.
+   Si la sesión del administrador termina (cerrar sesión, vencida o revocada), el equipo deja de recibirlos y se borran los
+   avisos que ya estaban a la vista: el equipo puede quedar en manos de un empleado. */
+const NOTI = {perm: "default", sub: null, info: null, registrada: false, verificado: false, cargando: false, revisado: false, guardando: Promise.resolve()};
 const TIPOS_NOTI = [["venta", "Cada venta"], ["anulacion", "Ventas anuladas"], ["caja", "Abrir y cerrar caja (con faltantes o sobrantes)"], ["dinero", "Plata que entra o sale de la caja"], ["problema", "Cambios que no llegan al servidor"]];
-const pushSoportado = () => !!window.OLI_PWA && "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+const pushSoportado = () => { try { return !!window.OLI_PWA && "serviceWorker" in navigator && "PushManager" in window && "Notification" in window; } catch (e) { return false; } };
 const notisPosibles = () => DS.backend === "supabase" && esAdmin();
 const b64uBytes = s => { const b = atob(s.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((s.length + 3) % 4)); const u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; };
 const mismaClave = (sub, pk) => { try { const a = new Uint8Array(sub.options.applicationServerKey), b = b64uBytes(pk); return a.length === b.length && a.every((x, i) => x === b[i]); } catch (e) { return false; } };
+const errNoti = e => (e && (e.message || e.error_description)) || "intenta de nuevo";
 async function revisarNotis() {
-  if (!pushSoportado() || !notisPosibles()) return;
+  if (!pushSoportado() || !notisPosibles() || NOTI.revisando) return;
+  NOTI.revisando = true; try { await revisarNotisYa(); } finally { NOTI.revisando = false; }
+}
+async function revisarNotisYa() {
   NOTI.perm = Notification.permission;
   try { const reg = await navigator.serviceWorker.getRegistration(); NOTI.sub = reg ? await reg.pushManager.getSubscription() : null; } catch (e) { NOTI.sub = null; }
-  NOTI.registrada = false; NOTI.prefs = null;
-  if (NOTI.sub && SB.client && conRed()) { try { const r = await withTimeout(Promise.resolve(SB.client.rpc("oli_push_prefs", {p_endpoint: NOTI.sub.endpoint})), 9000); if (!r.error && r.data) { NOTI.registrada = true; NOTI.prefs = r.data.prefs || {}; } } catch (e) {} }
+  NOTI.registrada = false; NOTI.verificado = false; NOTI.info = null;
+  if (NOTI.sub && SB.client && conRed() && !SB.sinVerificar) {
+    try { const r = await withTimeout(Promise.resolve(SB.client.rpc("oli_push_prefs", {p_endpoint: NOTI.sub.endpoint})), 9000); if (!r.error) { NOTI.verificado = true; if (r.data) { NOTI.registrada = true; NOTI.info = r.data; } } } catch (e) {}
+  }
   NOTI.revisado = true; changed();
 }
+window.addEventListener("online", () => { NOTI.revisado = false; changed(); });   // al volver Internet se revisa otra vez
 const notiActiva = () => !!(NOTI.sub && NOTI.registrada && NOTI.perm === "granted");
+const prefsNoti = () => (NOTI.info && NOTI.info.prefs) || {};
 function notisHTML() {
   if (!notisPosibles()) return "";
   if (!NOTI.revisado && pushSoportado()) setTimeout(() => revisarNotis(), 0);
   const ios = /^ios/.test(equipoTipo()), cuerpo = (() => {
     if (!window.OLI_PWA) return '<p class="muted" style="margin:0">Las notificaciones funcionan en la app instalada desde la página de OLI.</p>';
     if (ios && !esInstalada()) return `<p style="margin:0 0 10px">En iPhone o iPad primero instala OLI: toca <b>Compartir</b> → <b>Agregar a inicio</b> y ábrela desde el ícono. Ahí aparece el botón para activarlas.</p>${btnInstalar()}`;
+    if (ios && !pushSoportado()) return '<p class="muted" style="margin:0">Este iPhone o iPad necesita iOS 16.4 o más nuevo para recibir notificaciones: actualízalo en <b>Ajustes → General → Actualización de software</b>.</p>';
     if (!pushSoportado()) return '<p class="muted" style="margin:0">Este navegador no puede recibir notificaciones. Prueba con Chrome (Android o computador) o con OLI instalada en iPhone.</p>';
     if (NOTI.perm === "denied") return '<div class="notice bad" style="margin:0">Las notificaciones de OLI están bloqueadas en este equipo. Permítelas en los ajustes del navegador o del teléfono (Notificaciones → OLI) y vuelve aquí.</div>';
+    if (!NOTI.revisado) return '<p class="muted" style="margin:0">Revisando…</p>';
+    if (NOTI.sub && !NOTI.verificado) return '<p style="margin:0">Este equipo tiene notificaciones, pero ahora no se pudo revisar con el servidor (¿sin Internet?). Se revisa otra vez cuando vuelva la conexión.</p>';
     if (!notiActiva()) return `<p style="margin:0 0 10px">Te avisamos al celular, aunque OLI esté cerrada, cuando en las cajas pase algo: una venta, una anulación, abrir o cerrar caja, plata que sale de la caja.</p>
-      <button class="btn pri" data-act="activarNotis" ${NOTI.cargando ? "disabled" : ""}>${ic("campana", 18)} ${NOTI.cargando ? "Activando…" : "ACTIVAR NOTIFICACIONES"}</button>${NOTI.sub && !NOTI.registrada && conRed() ? '<p class="small muted">Este equipo tenía notificaciones pero el servidor ya no lo tiene en la lista: actívalas otra vez.</p>' : ""}`;
-    return `<div class="notice ok" style="margin:0 0 10px">Activadas en este equipo.</div><p class="small muted" style="margin:0 0 6px">Avisarme de:</p>
-      ${TIPOS_NOTI.map(([k, l]) => `<label class="check"><input type="checkbox" data-act-change="notiPref" data-k="${k}" ${(NOTI.prefs || {})[k] === false ? "" : "checked"}> ${l}</label>`).join("")}
+      <button class="btn pri" data-act="activarNotis" ${NOTI.cargando ? "disabled" : ""}>${ic("campana", 18)} ${NOTI.cargando ? "Activando…" : "ACTIVAR NOTIFICACIONES"}</button>${NOTI.sub && NOTI.verificado && !NOTI.registrada ? '<p class="small muted">Este equipo tenía notificaciones pero el servidor ya no lo tiene en la lista: actívalas otra vez.</p>' : ""}`;
+    const inf = NOTI.info || {};
+    return `<div class="notice ok" style="margin:0 0 10px">Activadas en este equipo.</div>${inf.fails ? `<div class="notice bad" style="margin:0 0 10px">Los últimos avisos no llegaron a este equipo (${esc(inf.last_error || "error")}). Prueba «Desactivar» y activarlas otra vez.</div>` : ""}<p class="small muted" style="margin:0 0 6px">Avisarme de:</p>
+      ${TIPOS_NOTI.map(([k, l]) => `<label class="check"><input type="checkbox" data-act-change="notiPref" data-k="${k}" ${prefsNoti()[k] === false ? "" : "checked"}> ${l}</label>`).join("")}
       <div class="btns" style="margin-top:10px"><button class="btn ghost" data-act="probarNotis">Enviar una de prueba</button><button class="btn ghost" data-act="quitarNotis">Desactivar en este equipo</button></div>
       <p class="xs muted" style="margin-bottom:0">Lo que hagas en este mismo equipo no te llega aquí. Los avisos no llevan costos ni utilidades.</p>`;
   })();
@@ -2989,43 +3004,61 @@ ACT.activarNotis = async () => {
     const j = sub.toJSON();
     const r = await withTimeout(Promise.resolve(SB.client.rpc("oli_push_suscribir", {p_endpoint: j.endpoint, p_p256dh: j.keys.p256dh, p_auth: j.keys.auth, p_dev: DEV.id, p_prefs: null})), 15000);
     if (r.error) throw r.error;
-    NOTI.sub = sub; NOTI.registrada = true; NOTI.prefs = (r.data && r.data.prefs) || {};
+    NOTI.sub = sub; NOTI.registrada = true; NOTI.verificado = true; NOTI.info = r.data || {};
     audit("NOTIS_ACTIVADAS", DEV.id, DEV.nombre || "");
     toast("Listo: este equipo recibirá los avisos. Toca «Enviar una de prueba» para verlo.");
-  } catch (e) { toast("No se pudieron activar: " + ((e && e.message) || "intenta de nuevo"), true); }
+  } catch (e) { toast("No se pudieron activar: " + errNoti(e), true); }
   NOTI.cargando = false; NOTI.revisado = true; draw();
 };
-ACT.notiPref = async (el, d) => {
+/* las preferencias se mandan en orden y completas (lo que dicen todas las casillas), así dos cambios seguidos no se pisan */
+ACT.notiPref = (el) => {
   if (!notiActiva()) return;
-  const prefs = Object.assign({}, NOTI.prefs, {[d.k]: !!el.checked});
-  try { const r = await withTimeout(Promise.resolve(SB.client.rpc("oli_push_prefs", {p_endpoint: NOTI.sub.endpoint, p_prefs: prefs})), 10000); if (r.error) throw r.error; NOTI.prefs = (r.data && r.data.prefs) || prefs; toast("Guardado"); }
-  catch (e) { el.checked = !el.checked; toast("No se pudo guardar: revisa la conexión.", true); }
+  const prefs = {}; document.querySelectorAll('input[data-act-change="notiPref"]').forEach(c => { prefs[c.dataset.k] = !!c.checked; });
+  NOTI.guardando = NOTI.guardando.then(async () => {
+    try {
+      const r = await withTimeout(Promise.resolve(SB.client.rpc("oli_push_prefs", {p_endpoint: NOTI.sub.endpoint, p_prefs: prefs})), 10000);
+      if (r.error) throw r.error;
+      if (!r.data) { NOTI.registrada = false; toast("El servidor ya no tiene este equipo en la lista: activa las notificaciones otra vez.", true); draw(); return; }
+      NOTI.info = r.data; toast("Guardado");
+    } catch (e) { toast("No se pudo guardar (" + errNoti(e) + ").", true); revisarNotis(); }
+  });
 };
 document.addEventListener("change", e => { const t = e.target; if (t.dataset && t.dataset.actChange === "notiPref") ACT.notiPref(t, t.dataset); });
 ACT.probarNotis = async () => {
   if (!notiActiva()) return;
-  try { const r = await withTimeout(Promise.resolve(SB.client.rpc("oli_push_prueba", {p_endpoint: NOTI.sub.endpoint})), 10000); if (r.error) throw r.error;
-    toast(r.data && r.data.url === false ? "El envío de avisos todavía no está configurado en el servidor." : "Enviada: debe llegar en unos segundos.", r.data && r.data.url === false); }
-  catch (e) { toast("No se pudo enviar: revisa la conexión.", true); }
+  try {
+    const r = await withTimeout(Promise.resolve(SB.client.rpc("oli_push_prueba", {p_endpoint: NOTI.sub.endpoint})), 10000); if (r.error) throw r.error;
+    const listo = r.data && r.data.url !== false && r.data.net !== false;
+    toast(listo ? "Enviada: debe llegar en unos segundos. Si no llega, revisa que el teléfono no tenga las notificaciones de OLI silenciadas." : "El envío de avisos todavía no está listo en el servidor: llegará cuando quede configurado.", !listo);
+  } catch (e) { toast("No se pudo enviar (" + errNoti(e) + ").", true); }
 };
 async function quitarNotis(silencio) {
   const sub = NOTI.sub; if (!sub) return;
   try { if (SB.client && conRed()) await withTimeout(Promise.resolve(SB.client.rpc("oli_push_quitar", {p_endpoint: sub.endpoint})), 6000); } catch (e) {}
   try { await sub.unsubscribe(); } catch (e) {}                                                      // sin la suscripción, el servidor la borra cuando el servicio de avisos diga que ya no existe
-  NOTI.sub = null; NOTI.registrada = false; NOTI.prefs = null;
+  NOTI.sub = null; NOTI.registrada = false; NOTI.info = null;
   if (!silencio) { audit("NOTIS_DESACTIVADAS", DEV.id, DEV.nombre || ""); toast("Notificaciones desactivadas en este equipo."); draw(); }
 }
 ACT.quitarNotis = () => quitarNotis(false);
-/* al cerrar sesión: este equipo deja de recibir los avisos del administrador (puede quedar en manos de un empleado) */
-async function quitarNotisAlSalir() {
+/* el equipo deja de recibir los avisos del administrador y se quitan los que ya estaban a la vista (también sin Internet) */
+async function limpiarNotisEquipo(conServidor) {
   if (!pushSoportado()) return;
-  try { const reg = await withTimeout(navigator.serviceWorker.getRegistration(), 3000); const sub = reg && await reg.pushManager.getSubscription(); if (sub) { NOTI.sub = sub; await quitarNotis(true); } } catch (e) {}
+  try {
+    const reg = await withTimeout(navigator.serviceWorker.getRegistration(), 3000); if (!reg) return;
+    try { for (const n of await reg.getNotifications()) n.close(); } catch (e) {}
+    const sub = await reg.pushManager.getSubscription();
+    if (sub) { NOTI.sub = sub; if (conServidor) await quitarNotis(true); else { try { await sub.unsubscribe(); } catch (e) {} NOTI.sub = null; NOTI.registrada = false; NOTI.info = null; } }
+  } catch (e) {}
+  NOTI.revisado = false;
 }
+const quitarNotisAlSalir = () => limpiarNotisEquipo(true);                  // al tocar «Cerrar sesión» (con la sesión todavía válida)
 /* tocar un aviso abre OLI en la sección del aviso (el service worker manda la sección) */
-if ("serviceWorker" in navigator) navigator.serviceWorker.addEventListener("message", e => {
-  const d = e.data; if (!d || d.tipo !== "ir" || typeof d.url !== "string") return;
-  const r = d.url.replace("#", ""); if (RUTAS[r] && rutaOk(r)) irA(r);
-});
+if (window.OLI_PWA) try {
+  navigator.serviceWorker.addEventListener("message", e => {
+    const d = e.data; if (!d || d.tipo !== "ir" || typeof d.url !== "string") return;
+    const r = d.url.replace("#", ""); if (RUTAS[r] && rutaOk(r)) irA(r);
+  });
+} catch (e) {}
 
 /* >>> 70-comando.js */
 /* ============ 70 · CENTRO DE COMANDO OLI (inicio del administrador) ============
@@ -4881,7 +4914,7 @@ function drawAuto() {
 }
 window.draw = drawAuto;
 ACT.buscar = () => abrir(() => `${head("Buscar")}<div class="search">${ic("buscar", 20)}<input class="in plain" id="gq" type="search" placeholder="Producto, venta, gasto, compra o persona" autofocus autocomplete="off"></div><div id="gres" style="margin-top:12px"></div>`, {wide: true});
-ACT.campana = () => abrir(() => { const al = alertas(); return head("Avisos") + (notisPosibles() && window.OLI_PWA && !notiActiva() ? `<button class="alertrow" data-act="ir" data-r="ajustes"><span class="sev"></span><div><b>¿Quieres que OLI te avise al celular?</b><span>Activa las notificaciones de ventas y de la caja en Ajustes → Notificaciones.</span></div></button>` : "") + (al.length ? al.map(a => `<button class="alertrow" data-act="${a.tab ? "ir" : "cerrar"}" data-r="${a.tab || ""}"><span class="sev ${a.sev === "ok" ? "" : a.sev}"></span><div><b>${esc(a.t)}</b><span>${esc(a.d || "")}</span></div></button>`).join("") : vacio("ok", "Todo en orden", "No hay avisos por ahora.")); }, {live: true});
+ACT.campana = () => abrir(() => { const al = alertas(); return head("Avisos") + (notisPosibles() && window.OLI_PWA && (NOTI.revisado || !pushSoportado() || (revisarNotis(), false)) && !notiActiva() ? `<button class="alertrow" data-act="ir" data-r="ajustes"><span class="sev"></span><div><b>¿Quieres que OLI te avise al celular?</b><span>Activa las notificaciones de ventas y de la caja en Ajustes → Notificaciones.</span></div></button>` : "") + (al.length ? al.map(a => `<button class="alertrow" data-act="${a.tab ? "ir" : "cerrar"}" data-r="${a.tab || ""}"><span class="sev ${a.sev === "ok" ? "" : a.sev}"></span><div><b>${esc(a.t)}</b><span>${esc(a.d || "")}</span></div></button>`).join("") : vacio("ok", "Todo en orden", "No hay avisos por ahora.")); }, {live: true});
 document.addEventListener("input", e => { if (e.target.id === "gq") { const q = e.target.value.trim().toLowerCase(), out = $("#gres"); if (q.length < 2) { out.innerHTML = ""; return; } out.innerHTML = buscarGlobal(q); } });
 function buscarGlobal(q) {
   const g = (t, items) => items.length ? `<h3 style="font-size:15px">${t}</h3>${items.slice(0, 6).join("")}` : "", r = [];

@@ -7,7 +7,7 @@
 
 do $$ begin
   if exists (select 1 from pg_available_extensions where name = 'pg_net') then create extension if not exists pg_net with schema extensions; end if;
-exception when others then null; end $$;
+exception when others then raise warning 'OLI: no se pudo activar pg_net (los avisos no saldrán al instante): %', sqlerrm; end $$;
 
 -- a quién avisar: un registro por equipo donde un administrador activó las notificaciones
 create table if not exists oli_push_subs (
@@ -21,7 +21,8 @@ create table if not exists oli_push_subs (
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   last_ok timestamptz,
-  fails int not null default 0
+  fails int not null default 0,                             -- envíos seguidos que el servicio de avisos no aceptó
+  last_error text
 );
 create index if not exists oli_push_subs_org on oli_push_subs (org_id);
 
@@ -36,6 +37,7 @@ create table if not exists oli_push_queue (
   url text,
   dev text,                                                 -- equipo que lo originó (a ese equipo no se le avisa)
   solo_endpoint text,                                       -- aviso de prueba: solo a ese equipo
+  entregados text[] not null default '{}',                  -- a qué equipos ya llegó (al reintentar no se repite)
   created_at timestamptz not null default now(),
   claimed_at timestamptz,
   sent_at timestamptz,
@@ -60,7 +62,15 @@ create or replace function oli.plata(n numeric) returns text language sql immuta
 $$ select case when n < 0 then '− ' else '' end || '$' || replace(to_char(round(abs(coalesce(n, 0))), 'FM999,999,999,990'), ',', '.') $$;
 
 create or replace function oli.push_nombre_equipo(p_org uuid, p_dev text, p_alt text) returns text language sql stable security definer set search_path = public as
-$$ select coalesce(nullif((select o.data->>'nombre' from oli_docs o where o.org_id = p_org and o.collection = 'dispositivos' and o.doc_id = p_dev), ''), nullif(p_alt, ''), 'Una caja') $$;
+$$ select left(coalesce(nullif((select o.data->>'nombre' from oli_docs o where o.org_id = p_org and o.collection = 'dispositivos' and o.doc_id = p_dev), ''), nullif(p_alt, ''), 'Una caja'), 40) $$;
+
+-- un número que llega en el documento (si no es número, no se usa: un aviso nunca debe fallar por un dato raro)
+create or replace function oli.num(t text) returns numeric language sql immutable as
+$$ select case when t ~ '^\s*-?[0-9]+(\.[0-9]+)?\s*$' then t::numeric end $$;
+
+-- preferencias válidas: un objeto con solo estas claves y valores sí/no
+create or replace function oli.push_prefs_ok(p jsonb) returns boolean language sql immutable as
+$$ select p is null or (jsonb_typeof(p) = 'object' and not exists (select 1 from jsonb_each(p) e where e.key not in ('venta', 'anulacion', 'caja', 'dinero', 'problema') or jsonb_typeof(e.value) <> 'boolean')) $$;
 
 create or replace function oli.push_corto(t text, n int) returns text language sql immutable as
 $$ select case when length(coalesce(t, '')) > n then left(t, n - 1) || '…' else coalesce(t, '') end $$;
@@ -82,7 +92,8 @@ end $$;
 create or replace function oli.push_eventos() returns trigger language plpgsql security definer set search_path = public as
 $$
 declare
-  dev text := coalesce(new.device_id, new.data->>'dev'); nom text; n int; tot numeric; x jsonb; it jsonb; prods text; s record; hay boolean := false;
+  dev text := coalesce(new.device_id, new.data->>'dev'); nom text; n int; tot numeric; k int; x jsonb; it jsonb; prods text; s record; hay boolean := false;
+  pend boolean; dif numeric;
 begin
   if not exists (select 1 from oli_push_subs ps where ps.org_id = new.org_id) then return new; end if;   -- nadie activó avisos
   if new.doc_id like 'demo%' then return new; end if;                                                    -- datos de demostración
@@ -91,7 +102,7 @@ begin
 
     if new.collection = 'ventas' then
       -- ventas nuevas en este documento (las que no estaban antes)
-      select count(*), coalesce(sum((v->>'total')::numeric), 0) into n, tot
+      select count(*), coalesce(sum(oli.num(v->>'total')), 0) into n, tot
         from jsonb_array_elements(coalesce(new.data->'ventas', '[]'::jsonb)) v
         where coalesce(v->>'id', '') not like 'demo-%'
           and not exists (select 1 from jsonb_array_elements(coalesce(old.data->'ventas', '[]'::jsonb)) o where o->>'id' = v->>'id');
@@ -99,17 +110,18 @@ begin
         for x in select v from jsonb_array_elements(coalesce(new.data->'ventas', '[]'::jsonb)) v
                  where coalesce(v->>'id', '') not like 'demo-%'
                    and not exists (select 1 from jsonb_array_elements(coalesce(old.data->'ventas', '[]'::jsonb)) o where o->>'id' = v->>'id') loop
-          select string_agg(case when coalesce((i->>'q')::numeric, 1) <> 1 then (i->>'q') || '× ' else '' end || coalesce(i->>'n', 'producto'), ', ') into prods
-            from jsonb_array_elements(coalesce(x->'items', '[]'::jsonb)) i;
+          select string_agg(case when coalesce(oli.num(i->>'q'), 1) <> 1 then (i->>'q') || '× ' else '' end || coalesce(i->>'n', 'producto'), ', ') into prods
+            from jsonb_array_elements(case when jsonb_typeof(x->'items') = 'array' then x->'items' else '[]'::jsonb end) i;
+          pend := coalesce(x->>'m', '') in ('Nequi', 'Daviplata', 'QR Bancolombia') and coalesce(x->>'confirmada', '') <> 'true';   -- igual que la app: pago digital sin confirmar
           insert into oli_push_queue (org_id, kind, title, body, tag, url, dev)
-          values (new.org_id, 'venta', 'Venta ' || oli.plata((x->>'total')::numeric) || ' · ' || nom,
-                  oli.push_corto(coalesce(x->>'m', '') || case when coalesce((x->>'pend')::boolean, false) then ' (por confirmar)' else '' end || case when prods is not null then ' · ' || prods else '' end, 160),
+          values (new.org_id, 'venta', oli.push_corto('Venta ' || oli.plata(oli.num(x->>'total')) || ' · ' || nom, 90),
+                  oli.push_corto(coalesce(x->>'m', '') || case when pend then ' (por confirmar)' else '' end || case when prods is not null then ' · ' || prods else '' end, 160),
                   'venta-' || (x->>'id'), '#ventas', dev);
           hay := true;
         end loop;
       elsif n > 3 then
         insert into oli_push_queue (org_id, kind, title, body, tag, url, dev)
-        values (new.org_id, 'venta', nom || ': llegaron ' || n || ' ventas por ' || oli.plata(tot),
+        values (new.org_id, 'venta', oli.push_corto(nom || ': llegaron ' || n || ' ventas por ' || oli.plata(tot), 90),
                 'Estaban guardadas en el equipo (sin Internet) y ya llegaron al servidor.', 'ventas-' || new.doc_id, '#ventas', dev);
         hay := true;
       end if;
@@ -119,25 +131,25 @@ begin
                 where not exists (select 1 from jsonb_array_elements(coalesce(old.data->'items', '[]'::jsonb)) o where o->>'id' = i->>'id') loop
         select sa.sale_label, sa.total into s from sales sa where sa.org_id = new.org_id and sa.id = it->>'ventaId';
         insert into oli_push_queue (org_id, kind, title, body, tag, url, dev)
-        values (new.org_id, 'anulacion', 'Venta anulada · ' || nom,
-                oli.push_corto(coalesce(s.sale_label || ' ', '') || 'por ' || oli.plata(coalesce((it->>'total')::numeric, s.total)) || case when coalesce(it->>'motivo', '') <> '' then ' · ' || (it->>'motivo') else '' end, 160),
+        values (new.org_id, 'anulacion', oli.push_corto('Venta anulada · ' || nom, 90),
+                oli.push_corto(coalesce(s.sale_label || ' ', '') || 'por ' || oli.plata(coalesce(s.total, oli.num(it->>'total'))) || case when coalesce(it->>'motivo', '') <> '' then ' · ' || (it->>'motivo') else '' end, 160),
                 'anul-' || (it->>'id'), '#ventas', dev);
         hay := true;
       end loop;
 
     elsif new.collection = 'cajas' then
-      if new.data ? 'apertura' and jsonb_typeof(new.data->'apertura') = 'object' and (old.data is null or not (old.data ? 'apertura') or jsonb_typeof(old.data->'apertura') <> 'object') then
+      if jsonb_typeof(new.data->'apertura') = 'object' and (old.data is null or jsonb_typeof(old.data->'apertura') is distinct from 'object') then
         insert into oli_push_queue (org_id, kind, title, body, tag, url, dev)
-        values (new.org_id, 'caja', nom || ' abrió caja', 'Base ' || oli.plata((new.data->'apertura'->>'monto')::numeric), 'abre-' || new.doc_id, '#caja', dev);
+        values (new.org_id, 'caja', oli.push_corto(nom || ' abrió caja', 90), 'Base ' || oli.plata(oli.num(new.data->'apertura'->>'monto')), 'abre-' || new.doc_id, '#caja', dev);
         hay := true;
       end if;
       for it in select c from jsonb_array_elements(coalesce(new.data->'cierres', '[]'::jsonb)) c
                 where not exists (select 1 from jsonb_array_elements(coalesce(old.data->'cierres', '[]'::jsonb)) o where o->>'id' = c->>'id') loop
+        dif := coalesce(oli.num(it->>'dif'), 0);
         insert into oli_push_queue (org_id, kind, title, body, tag, url, dev)
         values (new.org_id, 'caja',
-                nom || ' cerró caja' || case when coalesce((it->>'dif')::numeric, 0) < 0 then ': faltaron ' || oli.plata(-(it->>'dif')::numeric)
-                                              when coalesce((it->>'dif')::numeric, 0) > 0 then ': sobraron ' || oli.plata((it->>'dif')::numeric) else ': cuadró' end,
-                oli.push_corto('Esperado ' || oli.plata((it->>'esperado')::numeric) || ' · contado ' || oli.plata((it->>'contado')::numeric) || case when coalesce(it->>'obs', '') <> '' then ' · ' || (it->>'obs') else '' end, 160),
+                oli.push_corto(nom || ' cerró caja' || case when dif < 0 then ': faltaron ' || oli.plata(-dif) when dif > 0 then ': sobraron ' || oli.plata(dif) else ': cuadró' end, 90),
+                oli.push_corto('Esperado ' || oli.plata(oli.num(it->>'esperado')) || ' · contado ' || oli.plata(oli.num(it->>'contado')) || case when coalesce(it->>'obs', '') <> '' then ' · ' || (it->>'obs') else '' end, 160),
                 'cierre-' || (it->>'id'), '#caja', dev);
         hay := true;
       end loop;
@@ -146,26 +158,32 @@ begin
                   and not exists (select 1 from jsonb_array_elements(coalesce(old.data->'movs', '[]'::jsonb)) o where o->>'id' = m->>'id') loop
         insert into oli_push_queue (org_id, kind, title, body, tag, url, dev)
         values (new.org_id, 'dinero',
-                case when it->>'tipo' = 'ingreso' then 'Entró ' || oli.plata((it->>'monto')::numeric) || ' a ' || nom
-                     when it->>'tipo' = 'gasto' then 'Pago desde ' || nom || ': ' || oli.plata((it->>'monto')::numeric)
-                     else 'Salió ' || oli.plata((it->>'monto')::numeric) || ' de ' || nom end,
+                oli.push_corto(case when it->>'tipo' = 'ingreso' then 'Entró ' || oli.plata(oli.num(it->>'monto')) || ' a ' || nom
+                     when it->>'tipo' = 'gasto' then 'Pago desde ' || nom || ': ' || oli.plata(oli.num(it->>'monto'))
+                     else 'Salió ' || oli.plata(oli.num(it->>'monto')) || ' de ' || nom end, 90),
                 oli.push_corto(coalesce(it->>'motivo', ''), 160), 'mov-' || (it->>'id'), '#caja', dev);
         hay := true;
       end loop;
 
     elsif new.collection = 'dispositivos' then
-      if coalesce((new.data->>'rech')::int, 0) > coalesce((old.data->>'rech')::int, 0) then
-        x := new.data->'rechInfo'->0;
+      k := coalesce(oli.num(new.data->>'rech'), 0)::int - coalesce(oli.num(old.data->>'rech'), 0)::int;
+      if k > 0 then
+        -- el rechazo nuevo (el que no estaba en el reporte anterior); si no se distingue, el último
+        select i into x from jsonb_array_elements(case when jsonb_typeof(new.data->'rechInfo') = 'array' then new.data->'rechInfo' else '[]'::jsonb end) with ordinality e(i, o)
+          where not exists (select 1 from jsonb_array_elements(case when jsonb_typeof(old.data->'rechInfo') = 'array' then old.data->'rechInfo' else '[]'::jsonb end) p
+                            where p->>'c' is not distinct from i->>'c' and p->>'t' is not distinct from i->>'t')
+          order by o desc limit 1;
         insert into oli_push_queue (org_id, kind, title, body, tag, url, dev)
-        values (new.org_id, 'problema', nom || ': un cambio no llegó al servidor',
+        values (new.org_id, 'problema', oli.push_corto(nom || case when k = 1 then ': un cambio no llegó al servidor' else ': ' || k || ' cambios no llegaron al servidor' end, 90),
                 oli.push_corto(coalesce(x->>'c', 'Un cambio') || case when coalesce(x->>'e', '') <> '' then ' (' || (x->>'e') || ')' else '' end || '. Revísalo en Equipo.', 160),
-                'rech-' || new.doc_id, '#equipo', null);
+                'rech-' || new.doc_id || '-' || coalesce(new.data->>'rech', ''), '#equipo', null);
         hay := true;
       end if;
     end if;
 
     if hay then perform oli.push_ping(); end if;
-  exception when others then null;                                   -- un aviso nunca frena una venta
+  exception when others then
+    raise warning 'OLI: no se pudo armar el aviso (% %): %', new.collection, new.doc_id, sqlerrm;   -- un aviso nunca frena una venta
   end;
   return new;
 end $$;
@@ -186,20 +204,22 @@ begin
   if auth.uid() is null then raise exception 'not_authenticated' using errcode = '28000'; end if;
   select * into mem from oli.my_membership();
   if mem.org_id is null or oli.role_level(mem.role) < 3 then raise exception 'solo el administrador recibe notificaciones' using errcode = '42501'; end if;
-  if coalesce(p_endpoint, '') !~ '^https://' or length(p_endpoint) > 1000 or coalesce(p_p256dh, '') = '' or coalesce(p_auth, '') = '' then raise exception 'suscripción inválida' using errcode = '22023'; end if;
+  if coalesce(p_endpoint, '') !~ '^https://' or length(p_endpoint) > 1000 or coalesce(p_p256dh, '') = '' or coalesce(p_auth, '') = '' or length(p_p256dh) > 200 or length(p_auth) > 100 then raise exception 'suscripción inválida' using errcode = '22023'; end if;
+  if not oli.push_prefs_ok(p_prefs) then raise exception 'preferencias inválidas' using errcode = '22023'; end if;
   insert into oli_push_subs (endpoint, org_id, user_id, device_id, p256dh, auth, prefs)
   values (p_endpoint, mem.org_id, auth.uid(), p_dev, p_p256dh, p_auth, coalesce(p_prefs, '{}'::jsonb))
   on conflict (endpoint) do update set org_id = excluded.org_id, user_id = excluded.user_id, device_id = excluded.device_id, p256dh = excluded.p256dh, auth = excluded.auth,
-    prefs = coalesce(p_prefs, oli_push_subs.prefs), updated_at = now(), fails = 0;
-  return (select jsonb_build_object('prefs', prefs) from oli_push_subs where endpoint = p_endpoint);
+    prefs = coalesce(p_prefs, oli_push_subs.prefs), updated_at = now(), fails = 0, last_error = null;
+  return (select jsonb_build_object('prefs', prefs, 'fails', fails, 'last_error', last_error, 'last_ok', last_ok) from oli_push_subs where endpoint = p_endpoint);
 end $$;
 
 create or replace function oli_push_prefs(p_endpoint text, p_prefs jsonb default null) returns jsonb
 language plpgsql security definer set search_path = public as
 $$
 begin
+  if not oli.push_prefs_ok(p_prefs) then raise exception 'preferencias inválidas' using errcode = '22023'; end if;
   if p_prefs is not null then update oli_push_subs set prefs = p_prefs, updated_at = now() where endpoint = p_endpoint and user_id = auth.uid(); end if;
-  return (select jsonb_build_object('prefs', prefs) from oli_push_subs where endpoint = p_endpoint and user_id = auth.uid());
+  return (select jsonb_build_object('prefs', prefs, 'fails', fails, 'last_error', last_error, 'last_ok', last_ok) from oli_push_subs where endpoint = p_endpoint and user_id = auth.uid());
 end $$;
 
 create or replace function oli_push_quitar(p_endpoint text) returns void language sql security definer set search_path = public as
@@ -214,7 +234,7 @@ begin
   insert into oli_push_queue (org_id, kind, title, body, tag, url, solo_endpoint)
   values (sub.org_id, 'prueba', 'OLI: notificación de prueba', 'Así te van a llegar los avisos de ventas y de la caja.', 'prueba', '#hoy', p_endpoint);
   perform oli.push_ping();
-  return jsonb_build_object('ok', true, 'url', (select v is not null from oli_push_conf where k = 'url'));
+  return jsonb_build_object('ok', true, 'url', exists (select 1 from oli_push_conf where k = 'url'), 'net', to_regproc('net.http_post') is not null);
 end $$;
 
 revoke all on function oli_push_suscribir(text, text, text, text, jsonb), oli_push_prefs(text, jsonb), oli_push_quitar(text), oli_push_prueba(text) from public, anon;
@@ -225,6 +245,14 @@ grant execute on function oli_push_suscribir(text, text, text, text, jsonb), oli
 -- ---------------------------------------------------------------------------
 create or replace function oli_push_claves() returns jsonb language sql stable security definer set search_path = public as
 $$ select jsonb_build_object('pub', (select v from oli_push_conf where k = 'vapid_pub'), 'priv', (select v from oli_push_conf where k = 'vapid_priv'), 'sujeto', coalesce((select v from oli_push_conf where k = 'sujeto'), 'https://oli-pos.vercel.app')) $$;
+
+-- la función guarda su propia dirección para que la base de datos la llame (solo una dirección de función de Supabase)
+create or replace function oli_push_guardar_url(p_url text) returns void language plpgsql security definer set search_path = public as
+$$
+begin
+  if coalesce(p_url, '') !~ '^https://[a-z0-9-]+\.supabase\.co/functions/v1/oli-push$' then return; end if;
+  insert into oli_push_conf (k, v) values ('url', p_url) on conflict (k) do update set v = excluded.v;
+end $$;
 
 create or replace function oli_push_guardar_claves(p_pub text, p_priv text) returns jsonb language plpgsql security definer set search_path = public as
 $$
@@ -251,21 +279,38 @@ begin
                              from oli_push_subs s join memberships m on m.user_id = s.user_id and m.org_id = s.org_id and m.active and oli.role_level(m.role) >= 3
                              where s.org_id = t.org_id
                                and (t.solo_endpoint is null or s.endpoint = t.solo_endpoint)
-                               and (t.solo_endpoint is not null or coalesce((s.prefs->>t.kind)::boolean, true))
-                               and (t.dev is null or s.device_id is distinct from t.dev)), '[]'::jsonb)) order by t.id), '[]'::jsonb)
+                               and (t.solo_endpoint is not null or (s.prefs -> t.kind) is distinct from 'false'::jsonb)
+                               and (t.dev is null or s.device_id is distinct from t.dev)
+                               and not (s.endpoint = any(t.entregados))), '[]'::jsonb)) order by t.id), '[]'::jsonb)
     into r from tomados t;
   return r;
 end $$;
 
-create or replace function oli_push_resultado(p_ids bigint[], p_ok text[], p_malos text[]) returns void language plpgsql security definer set search_path = public as
+-- p_ids: avisos terminados; p_entregas: [{id, endpoint}] que sí llegaron (al reintentar no se repiten);
+-- p_fallas: [{endpoint, status}] que el servicio de avisos no aceptó (quedan registradas para mostrarlas en Ajustes)
+create or replace function oli_push_resultado(p_ids bigint[], p_ok text[], p_malos text[], p_entregas jsonb default '[]'::jsonb, p_fallas jsonb default '[]'::jsonb) returns void language plpgsql security definer set search_path = public as
 $$
 begin
+  update oli_push_queue q set entregados = q.entregados || array(select e->>'endpoint' from jsonb_array_elements(coalesce(p_entregas, '[]'::jsonb)) e where (e->>'id')::bigint = q.id)
+    where q.id in (select (e->>'id')::bigint from jsonb_array_elements(coalesce(p_entregas, '[]'::jsonb)) e);
   update oli_push_queue set sent_at = now(), result = 'ok' where id = any(coalesce(p_ids, '{}'));
-  update oli_push_subs set last_ok = now(), fails = 0 where endpoint = any(coalesce(p_ok, '{}'));
+  update oli_push_subs set last_ok = now(), fails = 0, last_error = null where endpoint = any(coalesce(p_ok, '{}'));
+  update oli_push_subs s set fails = s.fails + 1, last_error = 'el servicio de avisos respondió ' || (f->>'status')
+    from jsonb_array_elements(coalesce(p_fallas, '[]'::jsonb)) f where s.endpoint = f->>'endpoint';
   delete from oli_push_subs where endpoint = any(coalesce(p_malos, '{}'));                     -- el navegador ya no la tiene (404/410)
   delete from oli_push_queue where sent_at < now() - interval '30 days';
 end $$;
 
-revoke all on function oli_push_claves(), oli_push_guardar_claves(text, text), oli_push_tomar(int), oli_push_resultado(bigint[], text[], text[]) from public, anon, authenticated;
-grant execute on function oli_push_claves(), oli_push_guardar_claves(text, text), oli_push_tomar(int), oli_push_resultado(bigint[], text[], text[]) to service_role;
-revoke execute on function oli.push_eventos(), oli.push_ping(), oli.push_nombre_equipo(uuid, text, text), oli.plata(numeric), oli.push_corto(text, int) from public, anon, authenticated;
+revoke all on function oli_push_claves(), oli_push_guardar_claves(text, text), oli_push_guardar_url(text), oli_push_tomar(int), oli_push_resultado(bigint[], text[], text[], jsonb, jsonb) from public, anon, authenticated;
+grant execute on function oli_push_claves(), oli_push_guardar_claves(text, text), oli_push_guardar_url(text), oli_push_tomar(int), oli_push_resultado(bigint[], text[], text[], jsonb, jsonb) to service_role;
+revoke execute on function oli.push_eventos(), oli.push_ping(), oli.push_nombre_equipo(uuid, text, text), oli.plata(numeric), oli.push_corto(text, int), oli.num(text), oli.push_prefs_ok(jsonb) from public, anon, authenticated;
+
+-- reintento cada minuto: un aviso que falló (o cuya llamada se perdió) no espera a que haya otra venta
+do $$ begin
+  if exists (select 1 from pg_available_extensions where name = 'pg_cron') then
+    create extension if not exists pg_cron;
+    perform cron.unschedule(jobid) from cron.job where jobname = 'oli-push-reintentar';
+    perform cron.schedule('oli-push-reintentar', '* * * * *',
+      $c$ select oli.push_ping() where exists (select 1 from public.oli_push_queue where sent_at is null and tries < 5 and created_at > now() - interval '2 hours' and (claimed_at is null or claimed_at < now() - interval '2 minutes')) $c$);
+  end if;
+exception when others then raise warning 'OLI: no se pudo programar el reintento de avisos (pg_cron): %', sqlerrm; end $$;

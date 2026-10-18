@@ -31,6 +31,7 @@ const lsOk = () => { try { localStorage.setItem("oli-ls", "1"); localStorage.rem
 function revocarSesion(s) { if (!s || !s.access_token || SB.revocadas.has(s.access_token)) return; SB.revocadas.add(s.access_token); try { withTimeout(SB.client.auth.admin.signOut(s.access_token, "local"), 8000).catch(() => {}); } catch (e) {} }
 /* la sesión se cerró o el servidor la rechazó: este equipo olvida la identidad y lo que solo ve el administrador (las ventas por enviar se conservan) */
 async function olvidarIdentidad() {
+  limpiarNotisEquipo(false);                                                                          // los avisos del administrador no se quedan en el equipo
   await IDB.tx([["kv", "del", "ident"]]).catch(() => {});
   const soloAdmin = new Set(SB_ADMIN_COLS); for (const c of soloAdmin) { delete DS.c[c]; delete DS.ready[c]; }   // al volver a ingresar se espera a que lleguen de nuevo
   try { const all = await IDB.getAll("docs"), ops = []; for (const [p, x] of Object.entries(all || {})) if (x && soloAdmin.has(x.col)) ops.push(["docs", "del", p]); if (ops.length) await IDB.tx(ops); } catch (e) {}
@@ -105,7 +106,7 @@ async function sbCompletarSesion(session) {
   if (!me && fallo && ident && ident.sb && ident.uid === session.user.id) usarIdent(ident);                           // servidor sin respuesta: identidad guardada
   else if (!me && fallo) { DS.needsLogin = true; DS.loginMsg = "Ingresaste, pero el servidor de OLI no está respondiendo. Intenta de nuevo en unos minutos."; changed(); return; }
   else if (!me) { DS.needsLogin = false; DS.needsOrg = true; DS.uid = session.user.id; SB.email = session.user.email || ""; changed(); return; }
-  else { SB.org = me.org_id; SB.store = me.store_id; SB.role = me.role; DS.uid = session.user.id; DS.isAdmin = !!me.is_admin; DS.nombre = me.name || (session.user.email || "").split("@")[0]; SB.email = session.user.email || "";
+  else { SB.org = me.org_id; SB.store = me.store_id; SB.role = me.role; DS.uid = session.user.id; DS.isAdmin = !!me.is_admin; if (!DS.isAdmin) limpiarNotisEquipo(false); DS.nombre = me.name || (session.user.email || "").split("@")[0]; SB.email = session.user.email || "";
     if (gen !== SB.gen) return; await IDB.kvSet("ident", {uid: DS.uid, isAdmin: DS.isAdmin, org: SB.org, store: SB.store, role: SB.role, nombre: DS.nombre, sb: true}); }
   DS.needsLogin = false; DS.needsOrg = false; DS.loginMsg = ""; await purgarNoPermitido();
   if (DS.isAdmin && S.tab === "vender" && !leerHash()) S.tab = "hoy";                                       // el administrador empieza en Inicio (al arrancar aún no se sabía quién entraba)
