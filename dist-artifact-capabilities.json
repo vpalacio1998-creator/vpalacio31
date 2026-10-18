@@ -43,6 +43,11 @@
         "write": "interact"
       },
       {
+        "path": "facturas",
+        "read": "admin",
+        "write": "interact"
+      },
+      {
         "path": "costos",
         "read": "admin",
         "write": "admin"

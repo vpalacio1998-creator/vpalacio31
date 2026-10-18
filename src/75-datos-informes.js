@@ -46,8 +46,10 @@ function filasRecomendacion() {
   return recomendarCompra(fechasHorizonte("7")).filter(r => r.comprar > 0).map(r => ({producto: r.p.nombre, inventario: r.st == null ? null : Math.max(0, r.st), consumo: r.avg == null ? null : Math.round(r.avg * 10) / 10, demanda: r.dem == null ? null : Math.round(r.dem), seguridad: r.seg, cantidad: r.comprar, proveedor: proveedorDe(r.pid), costo: costoActual(r.pid), costoTotal: costoActual(r.pid) == null ? null : costoActual(r.pid) * r.comprar, fecha: r.ag ? r.ag.fecha : S.today, motivo: r.riesgo === "bad" ? "Se agota pronto" : r.riesgo === "warn" ? "Inventario ajustado para la demanda" : "Reposición normal"}));
 }
 function filasCajas(a, b) {
-  return cajasAll().filter(c => c.fecha >= a && c.fecha <= b && c.apertura).sort((x, y) => (x.fecha + x.dev).localeCompare(y.fecha + y.dev)).map(c => { const k = cajaCalc(c), ci = (c.cierres || []).slice(-1)[0], cerr = !!ci && cajaEstado(c) === "cerrada";   // lo cerrado se informa tal como se cerró
-    return {fecha: c.fecha, caja: devNombre(c.dev), empleado: empNombre(c.apertura.uid), apertura: k.apertura, efectivo: k.efectivo, digitales: k.ventas - k.efectivo, ingresos: k.ingresos, retiros: k.retiros, gastos: k.gastos, esperado: cerr ? (ci.esperado != null ? ci.esperado : k.esperado) : null, contado: cerr ? ci.contado : null, diferencia: cerr ? (ci.dif != null ? ci.dif : ci.contado - k.esperado) : null, hAp: hora(c.apertura.t), hCi: cerr ? hora(ci.t) : "", estado: cerr ? "Cerrada" : "Abierta", obs: cerr ? ci.obs || "" : "Caja abierta · efectivo esperado ahora " + fmt(k.esperado), id: c.id}; });
+  return cajasAll().filter(c => c.fecha >= a && c.fecha <= b && c.apertura).sort((x, y) => (x.fecha + x.dev).localeCompare(y.fecha + y.dev)).map(c => { const k = cajaCalc(c), ci = (c.cierres || []).slice(-1)[0], cerr = !!ci && cajaEstado(c) === "cerrada", r = cerr ? difCierre(c) : null;   // lo cerrado se informa tal como se cerró, y aparte cómo quedó al revisarlo (61-difcaja)
+    return {fecha: c.fecha, caja: devNombre(c.dev), empleado: empNombre(c.apertura.uid), apertura: k.apertura, efectivo: k.efectivo, digitales: k.ventas - k.efectivo, ingresos: k.ingresos, retiros: k.retiros, gastos: k.gastos, esperado: cerr ? (ci.esperado != null ? ci.esperado : k.esperado) : null, contado: cerr ? ci.contado : null, diferencia: cerr ? (ci.dif != null ? ci.dif : ci.contado - k.esperado) : null,
+      explicado: cerr ? r.explicado : null, difFinal: cerr ? r.final : null, esperadoRev: cerr ? r.esperado : null, contadoRev: cerr ? r.contado : null, revisada: cerr ? r.revisada : null,
+      revision: !cerr ? "" : r.conAjustes ? r.items.map(ajusteTxt).join(" | ") : Math.abs(r.orig) >= 1 ? "Sin revisar" : "", hAp: hora(c.apertura.t), hCi: cerr ? hora(ci.t) : "", estado: cerr ? "Cerrada" : "Abierta", obs: cerr ? ci.obs || "" : "Caja abierta · efectivo esperado ahora " + fmt(k.esperado), id: c.id}; });
 }
 function filasMovCaja(a, b) { const out = []; for (const c of cajasAll()) if (c.fecha >= a && c.fecha <= b) for (const m of (c.movs || [])) out.push({fecha: c.fecha, hora: hora(m.t), caja: devNombre(c.dev), tipo: m.tipo === "retiro" ? "Salida de dinero" : m.tipo === "ingreso" ? "Entrada de dinero" : "Pago desde caja", valor: m.monto, motivo: m.motivo, usuario: empNombre(m.uid), soporte: ""}); return out; }
 function filasGastos(a, b) { return gastosEn(a, b).map(g => ({fecha: g.fecha, proveedor: g.proveedor || "", categoria: g.cat || "", descripcion: g.desc || "", base: g.base || (g.iva ? g.valor - g.iva : g.valor), iva: g.iva || 0, retencion: g.retencion || 0, total: g.valor, metodo: g.m || "", cuenta: g.origen === "caja" || g.m === "Efectivo" ? "Caja" : "Banco", usuario: empNombre(g.uid), soporte: (g.soporte && g.soporte.ref) || "", estado: g.origen === "caja" ? "Desde caja" : (g.estado || "Registrado")})).sort((x, y) => x.fecha.localeCompare(y.fecha)); }
@@ -119,7 +121,7 @@ function conciliacion(a, b) {
   const row = (n, x, nx, y, ny, tol, nota) => ({n, x, nx, y, ny, dif: y == null ? null : x - y, ok: y != null && Math.abs(x - y) <= tol, nota});
   return [
     feCfg ? row("Ventas OLI vs documentos electrónicos", f.ventas, "Ventas OLI", sum(de, d => d.total || 0), "Documentos aceptados", 1, "") : {n: "Ventas OLI vs documentos electrónicos", x: f.ventas, nx: "Ventas OLI", y: null, ny: "Documentos electrónicos", dif: null, ok: false, nota: "No hay proveedor de facturación electrónica conectado. Requiere contador."},
-    row("Caja OLI vs caja declarada", sum(cajas, c => c.esperado), "Efectivo esperado", sum(cajas, c => c.contado), "Efectivo contado", 0, ""),
+    row("Caja OLI vs caja declarada", sum(cajas, c => c.esperadoRev), "Efectivo esperado", sum(cajas, c => c.contadoRev), "Efectivo contado", 0, cajas.some(c => c.explicado) ? "Con las diferencias ya revisadas (pagos por otro medio, gastos sin anotar, conteos)." : ""),
     row("Compras vs soportes", sum(cr, c => c.total), "Compras registradas", sum(crSop, c => c.total), "Con soporte", 0, ""),
     row("Inventario vs costo de ventas", f.cogs, "Costo de ventas (OLI)", Math.round(cvTeo), "Inventario inicial + entradas − final − mermas y ajustes", Math.max(1000, f.cogs * 0.05), "Estimación con costos actuales; diferencias menores al 5% son normales."),
     row("Pagos digitales vs confirmados", digTot, "Ventas digitales", digConf, "Pagos confirmados", 0, "")
@@ -128,7 +130,7 @@ function conciliacion(a, b) {
 function riesgosAuditoria(a, b) {
   const out = [], R = {ANULACION: "Medio", DESCUENTO: "Bajo", CAMBIO_PRECIO: "Medio", CAMBIO_COSTO: "Medio", AJUSTE_INVENTARIO: "Medio", GASTO_BORRADO: "Alto", REABRIR_CAJA: "Medio", SYNC_RECHAZADA: "Alto", CONFLICTO_INVENTARIO: "Alto", PRODUCTO_DESACTIVADO: "Bajo"};
   for (const x of filasAuditoria(a, b)) if (R[x.codigo]) out.push({riesgo: R[x.codigo], tipo: x.accion, accion: x.detalle, usuario: x.usuario, fecha: x.fecha + " " + x.hora, soporte: x.registro});
-  for (const c of filasCajas(a, b)) if (c.diferencia) out.push({riesgo: Math.abs(c.diferencia) >= 20000 ? "Alto" : "Medio", tipo: "Diferencia de caja", accion: fmt(c.diferencia) + (c.obs ? " · " + c.obs : ""), usuario: c.empleado, fecha: c.fecha + " " + c.hCi, soporte: c.caja});
+  for (const c of filasCajas(a, b)) if (c.difFinal && Math.abs(c.difFinal) >= 1) out.push({riesgo: Math.abs(c.difFinal) >= 20000 ? "Alto" : "Medio", tipo: c.revisada ? "Diferencia de caja (revisada y aceptada)" : "Diferencia de caja sin revisar", accion: fmt(c.difFinal) + (c.obs ? " · " + c.obs : "") + (c.revisada ? " · " + c.revision : ""), usuario: c.empleado, fecha: c.fecha + " " + c.hCi, soporte: c.caja});
   for (const c of filasCompras(a, b)) if (c.estado === "Recibida" && !c.soporte) out.push({riesgo: "Medio", tipo: "Compra sin soporte", accion: c.producto + " · " + fmt(c.total), usuario: "", fecha: c.fecha, soporte: c.proveedor || "sin proveedor"});
   if (pendientes().length) out.push({riesgo: "Medio", tipo: "Sincronización pendiente", accion: pendientes().length + " cambios en este equipo", usuario: "", fecha: S.today, soporte: DEV.nombre});
   const ord = {Alto: 0, Medio: 1, Bajo: 2}; return out.sort((x, y) => ord[x.riesgo] - ord[y.riesgo] || y.fecha.localeCompare(x.fecha));
@@ -141,7 +143,7 @@ function chequeosCierre(mes) {
   const syncP = pendientes().length + sum(dispositivosEstado().filter(d => !d.mine), d => d.ventasPend || 0);
   const invOk = !Object.values(stockMap()).some(s => s != null && s < 0);
   const comprasViejas = Object.values(col("compras")).filter(c => c.estado === "pedido" && c.fecha <= addDays(S.today, -3)).length;
-  const difs = filasCajas(a, b).filter(c => c.diferencia).length;
+  const fc = filasCajas(a, b), difs = fc.filter(c => c.diferencia).length, sinRev = fc.filter(c => c.revisada === false).length;
   return [
     {k: "cajas", t: "Todas las cajas cerradas", ok: cajasAb === 0, auto: true, d: cajasAb ? cajasAb + " cajas abiertas" : ""},
     {k: "sync", t: "Ventas sincronizadas", ok: syncP === 0, auto: true, d: syncP ? syncP + " pendientes" : ""},
@@ -151,7 +153,7 @@ function chequeosCierre(mes) {
     {k: "mermas", t: "Mermas registradas", ok: !!man.mermas, auto: false},
     {k: "anul", t: "Anulaciones revisadas", ok: !!man.anul, auto: false, d: filasAnulaciones(a, b).length + " anulaciones"},
     {k: "docs", t: "Documentos electrónicos revisados", ok: !!man.docs, auto: false},
-    {k: "difs", t: "Diferencias revisadas", ok: !!man.difs, auto: false, d: difs ? difs + " cierres con diferencia" : ""},
+    {k: "difs", t: "Diferencias revisadas", ok: !!man.difs && !sinRev, auto: false, d: sinRev ? sinRev + " sin revisar: ábrelas en Caja → Mes y toca Resolver" : difs ? difs + " cierres con diferencia" : ""},
     {k: "paquete", t: "Información para contador generada", ok: !!per.paqueteT, auto: true, d: per.paqueteT ? "Generado " + diaCorto(ymd(new Date(per.paqueteT))) : ""}
   ].map(x => Object.assign(x, {inconsistencias: it.length}));
 }

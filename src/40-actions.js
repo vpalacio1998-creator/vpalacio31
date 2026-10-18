@@ -179,8 +179,45 @@ async function producir(pid, q) {
 }
 
 /* ---------- gastos, compras, terceros ---------- */
+/* ---------- diferencias de caja: el administrador las explica o corrige (ver difCierre en 20-domain). Nada se borra: todo queda en el historial ---------- */
+async function ajustarCaja(c, x) {
+  exigirAdmin(); const ci = (c.cierres || []).slice(-1)[0], id = c.id || cajaId(c.fecha, c.dev), cur = col("ajustescaja")[id] || {fecha: c.fecha, dev: c.dev, items: []};
+  // se liga al cierre vigente si la caja está cerrada; si está abierta (una corrección de medio antes de cerrar), a ninguno: cambia lo esperado
+  const it = Object.assign({id: "aj" + newId(), t: Date.now(), uid: uidActual(), cierre: ci && cajaEstado(Object.assign({id}, c)) === "cerrada" ? ci.id : null}, x);
+  await put("ajustescaja", id, Object.assign({}, cur, {fecha: c.fecha, dev: c.dev, items: (cur.items || []).concat([it])}));
+  audit("CAJA_AJUSTE", id, diaCorto(c.fecha) + " · " + ajusteTxt(it));
+  return it;
+}
+async function deshacerAjuste(c, itemId) {
+  exigirAdmin(); const id = c.id || cajaId(c.fecha, c.dev), x = ajustesCajaAll().find(y => y.id === itemId && y.caja === id); if (!x) throw new Error("Ese ajuste ya no está.");
+  const cur = col("ajustescaja")[id] || {fecha: c.fecha, dev: c.dev, items: []};
+  await put("ajustescaja", id, Object.assign({}, cur, {items: (cur.items || []).concat([{id: "aj" + newId(), t: Date.now(), uid: uidActual(), anula: itemId}])}));
+  if (x.tipo === "gasto" && x.gasto && !x.vinculado && col("gastos")[x.gasto]) await borrarGasto(x.gasto);   // el gasto que se creó al explicar la diferencia (uno que ya estaba anotado en Dinero se queda)
+  audit("CAJA_AJUSTE_DESHECHO", id, diaCorto(c.fecha) + " · " + ajusteTxt(x));
+}
+// corregir cómo pagaron una o varias ventas de la misma caja (p. ej. quedó en efectivo y fue por QR). Si la caja ya cerró, explica su diferencia.
+async function corregirMedio(ventas, a, conf, nota) {
+  exigirAdmin(); if (!ventas.length) throw new Error("Elige la venta.");
+  const v0 = ventas[0], de = v0.m;
+  if (ventas.some(v => v.fecha !== v0.fecha || v.dev !== v0.dev)) throw new Error("Corrige las ventas de una caja a la vez.");
+  if (ventas.some(v => v.anulada)) throw new Error("Una venta anulada no se corrige.");
+  if (ventas.some(v => v.m !== de)) throw new Error("Esas ventas quedaron con medios distintos: corrígelas por separado.");
+  if (!a || a === de) throw new Error("Elige el medio con el que de verdad pagaron.");
+  const c = cajaDe(v0.fecha, v0.dev) || {id: cajaId(v0.fecha, v0.dev), fecha: v0.fecha, dev: v0.dev, cierres: []};
+  return ajustarCaja(c, {tipo: "medio", ventas: ventas.map(v => v.id), de, a, monto: sum(ventas, v => Number(v.total) || 0), conf: !!conf, nota: nota || ""});
+}
+// un pago desde la caja que no se anotó: se registra el gasto (en efectivo, con la fecha de esa caja) y explica la diferencia
+async function gastoDeCaja(c, monto, cat, desc) {
+  exigirAdmin(); if (!(monto > 0)) throw new Error("Escribe cuánto se pagó."); if (!cat) throw new Error("Elige en qué fue.");
+  const gid = await guardarGasto({fecha: c.fecha, cat, desc: desc || "Pagado con plata de la caja (anotado al revisar el cierre)", valor: monto, m: "Efectivo", cajaAjuste: c.id});
+  return ajustarCaja(c, {tipo: "gasto", monto, gasto: gid, nota: cat + (desc ? " · " + desc : "")});
+}
 async function guardarGasto(g) { exigirAdmin(); const id = g.id || "g" + newId(); await put("gastos", id, Object.assign({estado: "registrado", uid: uidActual(), t: Date.now()}, g, {id: undefined})); audit("GASTO", id, g.cat + " · " + fmt(g.valor)); return id; }
-async function borrarGasto(id) { exigirAdmin(); await remove("gastos", id); audit("GASTO_BORRADO", id, ""); }
+async function borrarGasto(id) {
+  exigirAdmin(); await remove("gastos", id); audit("GASTO_BORRADO", id, "");
+  // si ese gasto explicaba una diferencia de caja, ese ajuste se deshace (así lo ven también los equipos de caja, que no leen los gastos)
+  for (const x of ajustesCajaAll().filter(y => y.tipo === "gasto" && y.gasto === id)) { const cur = col("ajustescaja")[x.caja]; if (cur) await put("ajustescaja", x.caja, Object.assign({}, cur, {items: (cur.items || []).concat([{id: "aj" + newId(), t: Date.now(), uid: uidActual(), anula: x.id}])})); }
+}
 async function guardarTercero(id, d) { exigirAdmin(); id = id || "t" + newId(); await put("terceros", id, Object.assign({}, col("terceros")[id] || {}, d)); audit("TERCERO", id, d.nombre); return id; }
 async function crearCompra(c) { exigirAdmin(); const id = "c" + newId(); await put("compras", id, Object.assign({estado: "pedido", fecha: S.today, t: Date.now(), uid: uidActual()}, c)); audit("COMPRA_PEDIDO", id, (c.lineas || []).length + " líneas"); return id; }
 async function actualizarCompra(id, patch) { exigirAdmin(); await put("compras", id, Object.assign({}, col("compras")[id], patch)); }

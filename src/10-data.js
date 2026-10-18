@@ -23,9 +23,9 @@ const RULES = [
   {path: "data/users", read: "admin", write: "admin"}, {path: "data/users/{self}", read: "interact", write: "interact"}
 ];
 const LV = {view: 1, interact: 2, admin: 3, owner: 4};
-const SHARED_COLS = ["productos", "stock", "movinv", "ventas", "cajas", "mermas", "checklists", "anulaciones", "confirmaciones", "demandaperdida", "dispositivos", "reaperturas", "meta", "cajashelado"];
+const SHARED_COLS = ["productos", "stock", "movinv", "ventas", "cajas", "mermas", "checklists", "anulaciones", "confirmaciones", "demandaperdida", "dispositivos", "reaperturas", "meta", "cajashelado", "ajustescaja"];
 const ADMIN_COLS = ["costos", "recetas", "gastos", "compras", "config", "terceros", "periodos", "docelec", "facturas"];
-const RANGED = new Set(["ventas", "cajas", "mermas", "checklists", "anulaciones", "confirmaciones", "demandaperdida", "reaperturas", "movinv", "cajashelado", "facturas"]);
+const RANGED = new Set(["ventas", "cajas", "mermas", "checklists", "anulaciones", "confirmaciones", "demandaperdida", "reaperturas", "movinv", "cajashelado", "facturas", "ajustescaja"]);
 const HIST_DIAS = 95;
 
 const DS = {lastRemote: 0, mode: "loading", dbh: null, uid: null, isAdmin: false, canWrite: true, c: {}, v: 0, ready: {}, error: null, fromCache: true, localRole: "admin", subs: [], remoteSeen: false};
@@ -162,7 +162,7 @@ const rechazadas = () => Object.values(OUT).filter(o => o.estado === "rechazada"
 // pendiente de OTRA cuenta que usó este equipo: no se envía solo (espera a que esa persona ingrese aquí, o a que el administrador lo envíe con su cuenta)
 const pendientesAjenos = () => pendientes().filter(o => o.uid && DS.uid && o.uid !== DS.uid && o.uid !== "local");
 /* qué es un cambio, en palabras (para avisar cuando el servidor no lo acepta) */
-const NOM_CAMBIO = {ventas: "Ventas", cajas: "Caja", anulaciones: "Anulación de una venta", confirmaciones: "Confirmación de un pago", mermas: "Pérdidas", checklists: "Lista de la caja", cajashelado: "Cambio de caja de helado", demandaperdida: "Lo que pidieron y no había", dispositivos: "Datos del equipo", audit: "Historial", reaperturas: "Caja reabierta"};
+const NOM_CAMBIO = {ventas: "Ventas", cajas: "Caja", anulaciones: "Anulación de una venta", confirmaciones: "Confirmación de un pago", mermas: "Pérdidas", checklists: "Lista de la caja", cajashelado: "Cambio de caja de helado", demandaperdida: "Lo que pidieron y no había", dispositivos: "Datos del equipo", audit: "Historial", reaperturas: "Caja reabierta", ajustescaja: "Revisión de una diferencia de caja", facturas: "Datos de factura de un cliente"};
 const descCambio = o => (NOM_CAMBIO[o.col] || o.col) + (/^\d{4}-\d{2}-\d{2}/.test(String(o.id)) ? " del " + diaCorto(String(o.id).slice(0, 10)) : "");
 const ventasPendientes = () => { let n = 0; for (const o of pendientes()) if (o.col === "ventas") { const acked = (DS.acks || {})[o.path] || []; n += (o.ids || []).filter(i => !acked.includes(i)).length; } return n; };
 

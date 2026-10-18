@@ -9,7 +9,7 @@ const primerMesDatos = () => { const fs = ventasOk().map(v => v.fecha).concat(ca
 
 function resumenMes(mes) {
   const a = mes + "-01", fin = lastOfMonth(a), b = fin < S.today ? fin : S.today, en = f => !!f && f >= a && f <= b;
-  const L = liquidez({a, b}), dias = {}, dia = f => dias[f] || (dias[f] = {f, vendido: 0, n: 0, gastos: 0, devol: 0, dif: 0, sinAnotar: 0, aCuentas: 0, cajas: 0, abiertas: 0, cerradas: 0});
+  const L = liquidez({a, b}), dias = {}, dia = f => dias[f] || (dias[f] = {f, vendido: 0, n: 0, gastos: 0, devol: 0, dif: 0, sinAnotar: 0, aCuentas: 0, cajas: 0, abiertas: 0, cerradas: 0, pendientes: [], revisadas: 0});
   const porMedio = {}, porCat = {};
   for (const v of ventasOk()) if (en(v.fecha)) { const d = dia(v.fecha), x = Number(v.total) || 0; d.vendido += x; d.n++; porMedio[v.m || "Otro"] = (porMedio[v.m || "Otro"] || 0) + x; }
   for (const g of gastosEn(a, b)) { const x = Number(g.valor) || 0; dia(g.fecha).gastos += x; porCat[g.cat || "Otros"] = (porCat[g.cat || "Otros"] || 0) + x; }
@@ -18,13 +18,14 @@ function resumenMes(mes) {
     const d = dia(c.fecha);
     if (c.apertura) { d.cajas++; if (cajaEstado(c) === "abierta") { d.abiertas++; if (c.fecha < S.today) sinCerrar.push(c); } }
     for (const mv of (c.movs || [])) if (mv.tipo === "retiro" && empiezaCon(mv.motivo, "Devolución a cliente")) d.devol += Number(mv.monto) || 0;
-    const ci = (c.cierres || []).slice(-1)[0];   // misma regla que la liquidez: un faltante por "Gasto sin anotar" se resta cuando se anota el gasto
-    if (ci && c.apertura && cajaEstado(c) === "cerrada") { const x = Number(ci.dif) || 0; d.cerradas++; cerradas++;
-      if (x < 0 && empiezaCon(ci.obs, "Gasto sin anotar")) d.sinAnotar -= x; else if (x < 0 && empiezaCon(ci.obs, "Pagaron por transferencia")) d.aCuentas = (d.aCuentas || 0) - x; else if (x) d.dif += x; }   // pagado por otro medio: no faltó plata, está en la cuenta
+    if (c.apertura && cajaEstado(c) === "cerrada") {   // misma regla que la liquidez (difPlata): un faltante revisado cuenta lo que quedó; uno por "Gasto sin anotar" se resta cuando se anota el gasto
+      const o = difPlata(c), r = difCierre(c); d.cerradas++; cerradas++; d.sinAnotar += o.sinAnotar; d.aCuentas += o.aCuentas; if (Math.abs(o.dif) >= 1) d.dif += o.dif;
+      if (!r.revisada) d.pendientes.push(c); else if (r.conAjustes) d.revisadas++; }
   }
   let acum = 0;
   const filas = Object.values(dias).sort((x, y) => x.f.localeCompare(y.f)).map(d => { const neto = d.vendido - d.gastos - d.devol + d.dif; acum += neto; return Object.assign(d, {neto, acum}); });
-  return {a, b, L, filas, porMedio, porCat, sinCerrar, cerradas, incompleto: DS.mode === "db" && a < addDays(S.today, -HIST_DIAS)};
+  const pendientes = [].concat(...Object.values(dias).map(d => d.pendientes)).sort((x, y) => x.fecha.localeCompare(y.fecha));
+  return {a, b, L, filas, porMedio, porCat, sinCerrar, cerradas, pendientes, incompleto: DS.mode === "db" && a < addDays(S.today, -HIST_DIAS)};
 }
 
 function cajaMesHTML() {
@@ -44,6 +45,8 @@ function cajaMesHTML() {
       <div class="kpi"><span>Gastos</span><b>${fmt(L.gastos)}</b><small>${plural(L.nG, "gasto", "gastos")}, también los pagados desde la caja</small></div>
       <div class="kpi${L.difs < 0 ? " neg" : ""}"><span>${L.difs < 0 ? "Faltó al cerrar caja" : L.difs > 0 ? "Sobró al cerrar caja" : "Cierres de caja"}</span><b>${plata(L.difs)}</b><small>${L.nDifs ? plural(L.nDifs, "cierre", "cierres") + " con diferencia" : !R.cerradas ? "Ninguna caja cerrada" : L.sinAnotar ? "" : "Todo cuadró"}${L.sinAnotar ? (L.nDifs ? " · " : "") + "faltó " + fmt(L.sinAnotar) + " por gastos sin anotar" : ""}</small></div>
     </div>
+    ${R.pendientes.length ? `<div class="card"><h3>${R.pendientes.length === 1 ? "Una diferencia de caja sin revisar" : R.pendientes.length + " diferencias de caja sin revisar"}</h3><p class="small muted" style="margin-top:-4px">${esAdmin() ? "Dile a OLI qué pasó (pago por QR, gasto sin anotar, mal conteo…) y se corrige donde corresponde." : "El administrador las revisa."}</p>
+      ${R.pendientes.map(c => { const r = difCierre(c); return `<div class="row"><div class="l">${esc(nombreEq(c))} · ${esc(diaCorto(c.fecha))}${r.ci.obs ? `<div class="small muted">«${esc(r.ci.obs)}»</div>` : ""}</div><div class="r" style="display:flex;gap:8px;align-items:center"><b style="color:var(--danger)">${difTxt(r.final)}</b>${esAdmin() ? `<button class="btn ghost sm" data-act="resolverDif" data-id="${esc(c.id)}">RESOLVER</button>` : ""}</div></div>`; }).join("")}</div>` : ""}
     ${R.sinCerrar.length ? `<div class="notice bad" style="margin-bottom:12px"><b>${R.sinCerrar.length === 1 ? "Una caja quedó sin cerrar" : R.sinCerrar.length + " cajas quedaron sin cerrar"}:</b> ${esc(R.sinCerrar.map(c => nombreEq(c) + " (" + diaCorto(c.fecha) + ")").join(", "))}. Ciérrenla en ese equipo para que su efectivo y su diferencia entren en la cuenta.</div>` : ""}
     <div class="two">
       <div class="card"><h3>Cómo pagaron</h3>${medios.map(([m, v]) => fila(esc(m), "", v)).join("")}</div>
@@ -58,7 +61,8 @@ function cajaMesHTML() {
       ${tablaVista([{h: "Día", f: d => `<button class="lnk" data-act="verDiaVentas" data-f="${esc(d.f)}">${esc(diaCorto(d.f))}</button>`}, {h: "Vendido", n: 1, f: d => fmt(d.vendido)}, {h: "Gastos", n: 1, f: d => d.gastos || d.devol ? "− " + fmt(d.gastos + d.devol) : "–"},
         {h: "Caja", n: 1, f: d => [d.dif ? `<span style="color:${d.dif < 0 ? "var(--danger)" : "inherit"}">${d.dif < 0 ? "Faltó " : "Sobró "}${fmt(Math.abs(d.dif))}</span>` : "",
           d.sinAnotar ? `<span class="muted">Faltó ${fmt(d.sinAnotar)} (gasto sin anotar)</span>` : "", d.aCuentas ? `<span class="muted">${fmt(d.aCuentas)} pagados por transferencia o QR</span>` : "", d.abiertas ? '<span class="muted">abierta</span>' : "",
-          !d.dif && !d.sinAnotar && !d.aCuentas && d.cerradas ? "cuadró" : ""].filter(Boolean).join("<br>") || "–"},
+          d.revisadas && !d.pendientes.length ? '<span class="muted">revisada</span>' : "", d.pendientes.length ? '<span style="color:var(--danger)">sin revisar</span>' : "",
+          !d.dif && !d.sinAnotar && !d.aCuentas && d.cerradas && !d.revisadas ? "cuadró" : ""].filter(Boolean).join("<br>") || "–"},
         {h: "Acumulado", n: 1, f: d => `<b>${plata(d.acum)}</b>`}], R.filas)}
     </div>
     <p class="xs muted">Acumulado = lo vendido menos los gastos y las devoluciones, más o menos lo que faltó o sobró al cerrar caja (igual que «¿Cuánta plata hay?» en Dinero). No incluye la plata con la que empezaron ni el costo de lo vendido: la utilidad está en Dinero → Mes.</p>`}`;

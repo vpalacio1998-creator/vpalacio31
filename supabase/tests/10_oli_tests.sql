@@ -513,6 +513,33 @@ begin
   perform t_assert((select jsonb_array_length(data->'items') from oli_docs where collection = 'facturas' and doc_id = '2026-10-10_d1') = 2, 'el administrador los ve, y los envíos se unen sin perder ninguno');
   reset role; set role authenticated; perform t_as(x);
   perform t_assert((select count(*) from oli_docs where collection = 'facturas') = 0, 'alguien de otro negocio no los ve');
+  -- T37: diferencias de caja revisadas por el administrador (colección ajustescaja)
+  reset role; set role authenticated; perform t_as(e1);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','aj0','col','ajustescaja','id','2026-10-03_d1','t',1,'data','{"fecha":"2026-10-03","dev":"d1","items":[{"id":"ajE","t":1,"tipo":"aceptada","monto":1}]}'::jsonb)), 'd1', '1.0');
+  perform t_assert(r->0->>'status' = 'rejected', 'un empleado no puede revisar diferencias de caja');
+  reset role; set role authenticated; perform t_as(a);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','aj1','col','ajustescaja','id','2026-10-03_d1','t',10,'data','{"fecha":"2026-10-03","dev":"d1","items":[{"id":"aj1","t":10,"tipo":"medio","ventas":["d1-aaa-1"],"de":"Efectivo","a":"QR Bancolombia","monto":24000,"conf":false}]}'::jsonb)), 'dA', '1.0');
+  perform t_assert(r->0->>'status' = 'applied', 'el administrador corrige cómo pagaron una venta');
+  reset role;
+  perform t_assert((select method from payments where sale_id = 'd1-aaa-1') = 'QR Bancolombia' and not (select confirmed from payments where sale_id = 'd1-aaa-1') and (select method from sales where id = 'd1-aaa-1') = 'Efectivo',
+    'el pago queda con el medio corregido (por confirmar, porque no dijo que revisó la cuenta); la venta guarda cómo se marcó al vender');
+  set role authenticated; perform t_as(a);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','aj2','col','ajustescaja','id','2026-10-03_d1','t',20,'data','{"fecha":"2026-10-03","dev":"d1","items":[{"id":"aj1","t":10,"tipo":"medio","ventas":["d1-aaa-1"],"de":"Efectivo","a":"QR Bancolombia","monto":24000,"conf":false},{"id":"aj2","t":20,"tipo":"medio","ventas":["d1-aaa-1"],"de":"Efectivo","a":"Nequi","monto":24000,"conf":true}]}'::jsonb)), 'dA', '1.0');
+  reset role;
+  perform t_assert((select method from payments where sale_id = 'd1-aaa-1') = 'Nequi' and (select confirmed from payments where sale_id = 'd1-aaa-1'), 'vale la corrección más reciente (y queda confirmada si revisó la cuenta)');
+  set role authenticated; perform t_as(a);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','aj3','col','ajustescaja','id','2026-10-03_d1','t',30,'data','{"fecha":"2026-10-03","dev":"d1","items":[{"id":"aj3","t":30,"anula":"aj2"}]}'::jsonb)), 'dA', '1.0');
+  reset role;
+  perform t_assert((select method from payments where sale_id = 'd1-aaa-1') = 'QR Bancolombia', 'al deshacer la última, vuelve la anterior');
+  set role authenticated; perform t_as(a);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','aj4','col','ajustescaja','id','2026-10-03_d1','t',40,'data','{"fecha":"2026-10-03","dev":"d1","items":[{"id":"aj4","t":40,"anula":"aj1"}]}'::jsonb)), 'dA', '1.0');
+  reset role;
+  perform t_assert((select method from payments where sale_id = 'd1-aaa-1') = 'Efectivo' and (select confirmed from payments where sale_id = 'd1-aaa-1'), 'al deshacerlas todas, el pago vuelve a como se marcó al vender');
+  perform t_assert((select jsonb_array_length(data->'items') from oli_docs where collection = 'ajustescaja' and doc_id = '2026-10-03_d1') = 4, 'nada se borra: cada ajuste y cada «deshacer» quedan en el historial');
+  set role authenticated; perform t_as(e1);
+  perform t_assert((select count(*) from oli_docs where collection = 'ajustescaja') = 1, 'la caja ve que su diferencia ya se revisó');
+  reset role; set role authenticated; perform t_as(x);
+  perform t_assert((select count(*) from oli_docs where collection = 'ajustescaja') = 0, 'alguien de otro negocio no lo ve');
   -- T16: coherencia de totales
   reset role;
   perform t_assert((select sum(total) from sales) = (select sum(amount) from payments), 'total de ventas = total de pagos');

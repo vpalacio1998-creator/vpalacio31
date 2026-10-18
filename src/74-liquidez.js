@@ -14,6 +14,26 @@ const enEfectivo = m => m === "Efectivo";
 const empiezaCon = (txt, pre) => String(txt || "").indexOf(pre) === 0;
 const pesosDe = v => num(String(v == null ? "" : v).replace(/[.,]\d{1,2}\s*$/, ""));   // "1.200.000,00" → 1200000: los centavos no se suman como pesos
 const conteoAhora = s => !!s && s.t > parse(s.desde).getTime();                       // contaron a una hora (no "al empezar el día")
+/* cómo entra en la plata lo que faltó o sobró al cerrar una caja. Sin revisar: según lo que anotó la caja al cerrar. Revisada (61-difcaja): cuenta la
+   diferencia que queda, y lo que la explicó va a su lugar (las ventas corregidas y los gastos registrados ya se cuentan por su lado). */
+function difPlata(c) {
+  const r = difCierre(c), o = {dif: 0, sinAnotar: 0, aCuentas: 0, consig: 0, retDueno: 0, otrosRet: 0, otrosIng: 0}; if (!r) return o;
+  if (!r.conAjustes) {
+    const d = r.orig, obs = r.ci.obs;
+    if (d < 0 && empiezaCon(obs, "Gasto sin anotar")) o.sinAnotar = -d;                 // ese gasto se anota en Dinero y se resta allá: aquí no, para no restarlo dos veces
+    else if (d < 0 && empiezaCon(obs, "Pagaron por transferencia")) o.aCuentas = -d;    // se marcó efectivo pero llegó a la cuenta: la plata pasa de la caja a cuentas
+    else o.dif = d;
+    return o;
+  }
+  o.dif = r.final;
+  for (const x of r.items) {
+    const m = Math.abs(Number(x.monto) || 0);
+    if (x.tipo === "medio" && !(x.ventas || []).length) o.aCuentas -= explicaAjuste(x);   // sin saber cuál venta: la plata pasa de la caja a cuentas (o al revés)
+    else if (x.tipo === "retiro") o[x.mot === "Consignación" ? "consig" : x.mot === "Retiro del dueño" ? "retDueno" : "otrosRet"] += m;
+    else if (x.tipo === "ingreso" && x.mot === "Otro") o.otrosIng += m;
+  }
+  return o;
+}
 
 function liquidez(rango) {                                    // rango {a, b}: solo lo que pasó entre esas fechas (sin conteo), p. ej. un mes
   const s = rango ? null : saldosIni(), t0 = s ? s.t : 0, cajas = cajasAll(), hoy = S.today;
@@ -57,11 +77,10 @@ function liquidez(rango) {                                    // rango {a, b}: s
       } else if (mv.tipo === "ingreso" && empiezaCon(mv.motivo, "Otro")) otrosIng += x;          // "Base adicional" y "Cambio de billetes": la plata cambia de lugar
     }
     // lo que faltó o sobró al cerrar: solo cajas abiertas después del conteo (si no, el conteo ya lo incluye)
-    const ci = (c.cierres || []).slice(-1)[0];
-    if (ci && cajaEstado(c) === "cerrada" && c.apertura && despues(c.fecha, c.apertura.t)) { const d = Number(ci.dif) || 0;
-      if (d < 0 && empiezaCon(ci.obs, "Gasto sin anotar")) { sinAnotar -= d; sinAnotarF.push(c.fecha); }   // ese gasto se anota en Dinero y se resta allá: aquí no, para no restarlo dos veces
-      else if (d < 0 && empiezaCon(ci.obs, "Pagaron por transferencia")) aCuentas -= d;                       // se marcó efectivo pero llegó a la cuenta: la plata pasa de la caja a cuentas
-      else if (d) { difs += d; nDifs++; } }
+    if (cajaEstado(c) === "cerrada" && c.apertura && despues(c.fecha, c.apertura.t)) { const o = difPlata(c);
+      if (o.sinAnotar) { sinAnotar += o.sinAnotar; sinAnotarF.push(c.fecha); }
+      aCuentas += o.aCuentas; consig += o.consig; retDueno += o.retDueno; otrosRet += o.otrosRet; otrosIng += o.otrosIng;
+      if (Math.abs(o.dif) >= 1) { difs += o.dif; nDifs++; } }
   }
   const sEf = s ? Number(s.efectivo) || 0 : 0, sCu = s ? Number(s.cuentas) || 0 : 0;
   const efectivo = sEf + vEf - anEf - gEf - devol + difs - consig - aCuentas, cuentas = sCu + vCu - anCu - gCu + consig + aCuentas;

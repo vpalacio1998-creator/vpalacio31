@@ -260,7 +260,7 @@ function anomalias() {
       const dig = v => esDigital(v.m), d30 = ventasEn(addDays(t, -29), addDays(t, -1)), h0 = ventasEn(t, t);
       if (d30.length >= 30 && h0.length >= 5) for (const m of ["Nequi", "Daviplata", "QR Bancolombia", "Tarjeta"]) { const s30 = d30.filter(v => v.m === m).length / d30.length, s0 = h0.filter(v => v.m === m).length / h0.length; if (s0 - s30 > 0.2) out.push({sev: "warn", t: `Las ventas por ${m} están por encima del comportamiento normal.`, d: Math.round(s0 * 100) + "% de las ventas de hoy contra " + Math.round(s30 * 100) + "% habitual.", ir: "reportes"}); }
     }
-    const difs = cajasAll().filter(c => c.fecha >= addDays(t, -29) && (c.cierres || []).length && Math.abs((c.cierres.slice(-1)[0] || {}).dif || 0) >= 1000);
+    const difs = cajasAll().filter(c => c.fecha >= addDays(t, -29) && cajaEstado(c) === "cerrada" && Math.abs(difFinal(c)) >= 1000);   // después de lo que el administrador ya explicó
     if (difs.length >= 3) out.push({sev: "warn", t: `Se registraron ${difs.length} cierres con diferencias en 30 días.`, d: "Conviene revisar los cierres y el conteo de efectivo.", ir: "cierres"});
     for (const [pid, st] of Object.entries(stockMap())) { const p = prod(pid); if (st != null && st < 0 && (!p || (p.activo !== false && !p.combo))) out.push({sev: "bad", t: `El inventario de ${(p || {}).nombre || pid} quedó negativo (${st}).`, d: "Puede ser un conflicto entre dispositivos o un conteo desactualizado. Haz un conteo.", ir: "inventario"}); }   // un combo o un producto desactivado no se cuenta: su alerta sale en el insumo
     const viejos = conteosViejos(); if (viejos.length) { const malos = viejos.filter(x => x.dias >= HIST_DIAS - 2);
@@ -291,7 +291,7 @@ function alertas() {
     for (const r of riesgosStock()) out.push({sev: r.sev, tipo: "inventario", t: r.t, d: r.d, tab: "inventario", pid: r.pid});
     for (const r of riesgosInsumos()) out.push({sev: r.sev, tipo: "inventario", t: r.t, d: r.d, tab: "inventario", pid: r.pid});
     const pend = ventasOk().filter(v => v.pend).length; if (pend) out.push({sev: "warn", tipo: "caja", t: pend + (pend === 1 ? " pago digital por confirmar." : " pagos digitales por confirmar."), d: "Verifica que llegó el dinero.", tab: "caja"});
-    const c = cajaHoy(); if (c && cajaEstado(c) === "cerrada") { const ci = c.cierres.slice(-1)[0]; if (ci && Math.abs(ci.dif) >= 1) out.push({sev: "warn", tipo: "caja", t: "Diferencia de caja de " + fmt(ci.dif) + " en " + (col("dispositivos")[c.dev] || {nombre: "la caja"}).nombre + ".", d: ci.obs ? "Observación: " + ci.obs : "Sin observación.", tab: "caja"}); }
+    const c = cajaHoy(); if (c && cajaEstado(c) === "cerrada") { const r = difCierre(c); if (r && Math.abs(r.final) >= 1 && !r.revisada) out.push({sev: "warn", tipo: "caja", t: "Diferencia de caja de " + fmt(r.final) + " en " + (col("dispositivos")[c.dev] || {nombre: "la caja"}).nombre + ".", d: (r.ci.obs ? "Observación: " + r.ci.obs + ". " : "Sin observación. ") + (adm ? "Toca para decir qué pasó." : "El administrador la revisa."), tab: "caja", act: adm ? "resolverDif" : "", id: c.id}); }
     if (SYNC.rechazadas) out.push({sev: "bad", tipo: "sync", t: SYNC.rechazadas === 1 ? "Un cambio de este equipo no se pudo enviar: el servidor no lo aceptó." : SYNC.rechazadas + " cambios de este equipo no se pudieron enviar: el servidor no los aceptó.", d: rechazadas().map(descCambio).join("; ") + ". Toca «Hay datos que revisar» (arriba) para ver por qué y reintentar.", tab: "equipo"});
     if (adm) {
       for (const d of dispositivosEstado()) if (!d.mine && d.rech > 0) { const uno = d.rech === 1, dias = Math.floor(d.hace / 86400000);
@@ -319,8 +319,10 @@ function decisionesHoy() {
     for (const r of riesgosStock()) { const p = prod(r.pid); const rec = recomendarCompra(fechasHorizonte("3")).find(x => x.pid === r.pid);
       const acc = rec && rec.comprar ? "Comprar " + rec.comprar + " de " + p.nombre + "." : r.t; (r.sev === "bad" ? urg : imp).push({t: acc, d: r.d, tab: "compras"}); }
     for (const r of riesgosInsumos()) (r.sev === "bad" ? urg : imp).push({t: "Reponer " + prod(r.pid).nombre + ".", d: r.d, tab: "compras"});
-    const ayer = addDays(t, -1); for (const c of cajasAll().filter(c => c.fecha === ayer && c.apertura && cajaEstado(c) !== "cerrada")) urg.push({t: "Cerrar la caja de ayer (" + ((col("dispositivos")[c.dev] || {}).nombre || "caja") + ").", d: "Quedó abierta.", tab: "caja"});
-    for (const c of cajasAll().filter(c => c.fecha >= addDays(t, -1) && (c.cierres || []).length)) { const ci = c.cierres.slice(-1)[0]; if (Math.abs(ci.dif) >= 1000) urg.push({t: "Revisar diferencia de caja de " + fmt(ci.dif) + ".", d: ci.obs || "Sin observación.", tab: "reportes"}); }
+    // cajas de días anteriores que siguen abiertas (de cualquier equipo): RESOLVER abre el cierre de esa caja
+    for (const c of cajasAll().filter(c => c.fecha < t && c.fecha >= addDays(t, -7) && c.apertura && cajaEstado(c) === "abierta").sort((a, b) => b.fecha.localeCompare(a.fecha))) urg.push({t: "Cerrar la caja " + (c.fecha === addDays(t, -1) ? "de ayer" : "del " + diaCorto(c.fecha)) + " (" + ((col("dispositivos")[c.dev] || {}).nombre || c.devNombre || "caja") + ").", d: "Quedó abierta. Cuenta el efectivo de esa caja y ciérrala.", tab: "caja", act: "cerrarCaja", id: c.id});
+    // diferencias de cierre de la última semana que nadie ha revisado: RESOLVER abre la revisión (qué pasó y cómo corregirlo)
+    for (const c of cajasAll().filter(c => c.fecha >= addDays(t, -7) && cajaEstado(c) === "cerrada")) { const r = difCierre(c); if (r && Math.abs(r.final) >= 1000 && !r.revisada) urg.push({t: "Revisar diferencia de caja de " + fmt(r.final) + " (" + ((col("dispositivos")[c.dev] || {}).nombre || c.devNombre || "caja") + ", " + diaCorto(c.fecha) + ").", d: r.ci.obs || "Sin observación.", tab: "caja", act: "resolverDif", id: c.id}); }
     for (const a of anomalias().filter(x => x.sev === "bad")) urg.push({t: a.t, d: a.d, tab: "inventario"});
     const cp = Object.values(col("compras")).filter(c => c.estado === "pedido"); if (cp.length) imp.push({t: "Registrar llegada de " + cp.length + (cp.length === 1 ? " pedido." : " pedidos."), d: "Así el inventario queda al día.", tab: "compras"});
     const pend = ventasOk().filter(v => v.pend).length; if (pend) imp.push({t: "Confirmar " + pend + " pagos digitales.", d: "Verifica que llegaron al banco.", tab: "caja"});
@@ -336,7 +338,7 @@ function decisionesHoy() {
 /* ---- resumen del día ---- */
 function resumenDia(fecha = S.today) {
   const f = finanzas(fecha, fecha), rent = rentabilidad(fecha, fecha).sort((a, b) => b.uds - a.uds), est = rent[0], ago = prods().filter(p => p.activo !== false && p.controla !== false && estadoProd(p).k === "agotado");
-  const cajas = cajasAll().filter(c => c.fecha === fecha && cajaEstado(c) === "cerrada"), dif = sum(cajas, c => Number(c.cierres.slice(-1)[0].dif) || 0), al = alertas().length;   // una caja reabierta no cuenta su cierre viejo
+  const cajas = cajasAll().filter(c => c.fecha === fecha && cajaEstado(c) === "cerrada"), dif = sum(cajas, difFinal), al = alertas().length;   // una caja reabierta no cuenta su cierre viejo
   const rec = recomendarCompra(fechasHorizonte("finde")).filter(r => r.comprar > 0 && r.riesgo !== "ok").slice(0, 2);
   const recTxt = rec.length ? "Comprar " + rec.map(r => r.comprar + " " + r.p.nombre.replace(/^Paleta /, "")).join(" y ") + " antes del " + DOW[6] + "." : (ago.length ? "Reponer " + ago.map(p => p.nombre).slice(0, 2).join(" y ") + "." : "Todo en orden. Sigue así.");
   return {f, fecha, uds: sum(rent, r => r.uds), est, ago, dif, al, rec: recTxt, txt: ""};
