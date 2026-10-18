@@ -22,7 +22,8 @@ create table if not exists oli_push_subs (
   updated_at timestamptz not null default now(),
   last_ok timestamptz,
   fails int not null default 0,                             -- envíos seguidos que el servicio de avisos no aceptó
-  last_error text
+  last_error text,
+  baja timestamptz                                          -- el navegador ya no la tiene (404/410): no se le manda más
 );
 create index if not exists oli_push_subs_org on oli_push_subs (org_id);
 
@@ -58,21 +59,21 @@ revoke all on sequence oli_push_queue_id_seq from public, anon, authenticated;
 -- ---------------------------------------------------------------------------
 -- Textos
 -- ---------------------------------------------------------------------------
-create or replace function oli.plata(n numeric) returns text language sql immutable as
+create or replace function oli.plata(n numeric) returns text language sql immutable set search_path = pg_catalog as
 $$ select case when n < 0 then '− ' else '' end || '$' || replace(to_char(round(abs(coalesce(n, 0))), 'FM999,999,999,990'), ',', '.') $$;
 
 create or replace function oli.push_nombre_equipo(p_org uuid, p_dev text, p_alt text) returns text language sql stable security definer set search_path = public as
 $$ select left(coalesce(nullif((select o.data->>'nombre' from oli_docs o where o.org_id = p_org and o.collection = 'dispositivos' and o.doc_id = p_dev), ''), nullif(p_alt, ''), 'Una caja'), 40) $$;
 
 -- un número que llega en el documento (si no es número, no se usa: un aviso nunca debe fallar por un dato raro)
-create or replace function oli.num(t text) returns numeric language sql immutable as
+create or replace function oli.num(t text) returns numeric language sql immutable set search_path = pg_catalog as
 $$ select case when t ~ '^\s*-?[0-9]+(\.[0-9]+)?\s*$' then t::numeric end $$;
 
 -- preferencias válidas: un objeto con solo estas claves y valores sí/no
-create or replace function oli.push_prefs_ok(p jsonb) returns boolean language sql immutable as
+create or replace function oli.push_prefs_ok(p jsonb) returns boolean language sql immutable set search_path = pg_catalog as
 $$ select p is null or (jsonb_typeof(p) = 'object' and not exists (select 1 from jsonb_each(p) e where e.key not in ('venta', 'anulacion', 'caja', 'dinero', 'problema') or jsonb_typeof(e.value) <> 'boolean')) $$;
 
-create or replace function oli.push_corto(t text, n int) returns text language sql immutable as
+create or replace function oli.push_corto(t text, n int) returns text language sql immutable set search_path = pg_catalog as
 $$ select case when length(coalesce(t, '')) > n then left(t, n - 1) || '…' else coalesce(t, '') end $$;
 
 -- avisa a la Edge Function que hay avisos por mandar (si ya se configuró su dirección)
@@ -95,7 +96,7 @@ declare
   dev text := coalesce(new.device_id, new.data->>'dev'); nom text; n int; tot numeric; k int; x jsonb; it jsonb; prods text; s record; hay boolean := false;
   pend boolean; dif numeric;
 begin
-  if not exists (select 1 from oli_push_subs ps where ps.org_id = new.org_id) then return new; end if;   -- nadie activó avisos
+  if not exists (select 1 from oli_push_subs ps where ps.org_id = new.org_id and ps.baja is null) then return new; end if;   -- nadie activó avisos
   if new.doc_id like 'demo%' then return new; end if;                                                    -- datos de demostración
   begin
     nom := oli.push_nombre_equipo(new.org_id, dev, new.data->>'devNombre');
@@ -209,7 +210,7 @@ begin
   insert into oli_push_subs (endpoint, org_id, user_id, device_id, p256dh, auth, prefs)
   values (p_endpoint, mem.org_id, auth.uid(), p_dev, p_p256dh, p_auth, coalesce(p_prefs, '{}'::jsonb))
   on conflict (endpoint) do update set org_id = excluded.org_id, user_id = excluded.user_id, device_id = excluded.device_id, p256dh = excluded.p256dh, auth = excluded.auth,
-    prefs = coalesce(p_prefs, oli_push_subs.prefs), updated_at = now(), fails = 0, last_error = null;
+    prefs = coalesce(p_prefs, oli_push_subs.prefs), updated_at = now(), fails = 0, last_error = null, baja = null;
   return (select jsonb_build_object('prefs', prefs, 'fails', fails, 'last_error', last_error, 'last_ok', last_ok) from oli_push_subs where endpoint = p_endpoint);
 end $$;
 
@@ -219,7 +220,7 @@ $$
 begin
   if not oli.push_prefs_ok(p_prefs) then raise exception 'preferencias inválidas' using errcode = '22023'; end if;
   if p_prefs is not null then update oli_push_subs set prefs = p_prefs, updated_at = now() where endpoint = p_endpoint and user_id = auth.uid(); end if;
-  return (select jsonb_build_object('prefs', prefs, 'fails', fails, 'last_error', last_error, 'last_ok', last_ok) from oli_push_subs where endpoint = p_endpoint and user_id = auth.uid());
+  return (select jsonb_build_object('prefs', prefs, 'fails', fails, 'last_error', last_error, 'last_ok', last_ok) from oli_push_subs where endpoint = p_endpoint and user_id = auth.uid() and baja is null);
 end $$;
 
 create or replace function oli_push_quitar(p_endpoint text) returns void language sql security definer set search_path = public as
@@ -229,7 +230,7 @@ create or replace function oli_push_prueba(p_endpoint text) returns jsonb langua
 $$
 declare sub record;
 begin
-  select * into sub from oli_push_subs where endpoint = p_endpoint and user_id = auth.uid();
+  select * into sub from oli_push_subs where endpoint = p_endpoint and user_id = auth.uid() and baja is null;
   if sub.endpoint is null then raise exception 'este equipo no tiene las notificaciones activadas' using errcode = '22023'; end if;
   insert into oli_push_queue (org_id, kind, title, body, tag, url, solo_endpoint)
   values (sub.org_id, 'prueba', 'OLI: notificación de prueba', 'Así te van a llegar los avisos de ventas y de la caja.', 'prueba', '#hoy', p_endpoint);
@@ -277,7 +278,7 @@ begin
   select coalesce(jsonb_agg(jsonb_build_object('id', t.id, 'kind', t.kind, 'title', t.title, 'body', t.body, 'tag', t.tag, 'url', t.url,
            'subs', coalesce((select jsonb_agg(jsonb_build_object('endpoint', s.endpoint, 'p256dh', s.p256dh, 'auth', s.auth))
                              from oli_push_subs s join memberships m on m.user_id = s.user_id and m.org_id = s.org_id and m.active and oli.role_level(m.role) >= 3
-                             where s.org_id = t.org_id
+                             where s.org_id = t.org_id and s.baja is null
                                and (t.solo_endpoint is null or s.endpoint = t.solo_endpoint)
                                and (t.solo_endpoint is not null or (s.prefs -> t.kind) is distinct from 'false'::jsonb)
                                and (t.dev is null or s.device_id is distinct from t.dev)
@@ -297,8 +298,7 @@ begin
   update oli_push_subs set last_ok = now(), fails = 0, last_error = null where endpoint = any(coalesce(p_ok, '{}'));
   update oli_push_subs s set fails = s.fails + 1, last_error = 'el servicio de avisos respondió ' || (f->>'status')
     from jsonb_array_elements(coalesce(p_fallas, '[]'::jsonb)) f where s.endpoint = f->>'endpoint';
-  delete from oli_push_subs where endpoint = any(coalesce(p_malos, '{}'));                     -- el navegador ya no la tiene (404/410)
-  delete from oli_push_queue where sent_at < now() - interval '30 days';
+  update oli_push_subs set baja = now() where endpoint = any(coalesce(p_malos, '{}'));         -- el navegador ya no la tiene (404/410): no se le manda más
 end $$;
 
 revoke all on function oli_push_claves(), oli_push_guardar_claves(text, text), oli_push_guardar_url(text), oli_push_tomar(int), oli_push_resultado(bigint[], text[], text[], jsonb, jsonb) from public, anon, authenticated;
@@ -309,7 +309,6 @@ revoke execute on function oli.push_eventos(), oli.push_ping(), oli.push_nombre_
 do $$ begin
   if exists (select 1 from pg_available_extensions where name = 'pg_cron') then
     create extension if not exists pg_cron;
-    perform cron.unschedule(jobid) from cron.job where jobname = 'oli-push-reintentar';
     perform cron.schedule('oli-push-reintentar', '* * * * *',
       $c$ select oli.push_ping() where exists (select 1 from public.oli_push_queue where sent_at is null and tries < 5 and created_at > now() - interval '2 hours' and (claimed_at is null or claimed_at < now() - interval '2 minutes')) $c$);
   end if;

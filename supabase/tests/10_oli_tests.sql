@@ -414,7 +414,7 @@ begin
   perform oli_push_resultado(array[(r->0->>'id')::bigint], array[]::text[], array[]::text[]);
   perform oli_push_resultado(array[]::bigint[], array[]::text[], array['https://push.example/a1']);
   reset role;
-  perform t_assert(not exists (select 1 from oli_push_subs where endpoint = 'https://push.example/a1'), 'un celular que ya no recibe (el navegador la quitó) se borra de la lista');
+  perform t_assert((select baja is not null from oli_push_subs where endpoint = 'https://push.example/a1'), 'un celular que ya no recibe (el navegador la quitó) queda dado de baja: no se le manda más');
   set role authenticated; perform t_as(e1);
   r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','ps5','col','ventas','id','2026-10-07_d1','t',99200,'data', jsonb_build_object('fecha','2026-10-07','dev','d1','ventas', jsonb_build_array(
          jsonb_build_object('id','d1-ps-10','n',100,'num','Caja 1 #100','t',99200,'fecha','2026-10-07','uid',e1::text,'dev','d1','m','Efectivo','total',8000,'sub',8000,'desc',0,'estado','confirmada','items','[{"pid":"p-mango","n":"Paleta Mango","q":1,"p":8000,"d":0}]'::jsonb))))), 'd1', '1.0');
