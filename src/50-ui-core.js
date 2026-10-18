@@ -108,10 +108,10 @@ ACT.verEnvio = () => abrir(() => {
     <div class="small muted" style="margin-top:12px">Este equipo: <b>${esc(DEV.nombre || DEV.id)}</b></div>`;
 }, {live: true});
 /* lo que el servidor no aceptó: qué es, por qué, y reintentar (o, el administrador, descartarlo y quedarse con lo del servidor) */
-const sesionLista = () => DS.mode !== "db" || (!!DS.uid && !DS.needsLogin && !DS.needsOrg && listo());
+const sesionLista = () => DS.mode !== "db" || (DS.backend === "supabase" ? !!DS.uid && !DS.needsLogin && !DS.needsOrg && listo() : listo());   // (con Claude no hay pantalla de ingreso)
 const propioEnvio = o => !o.uid || o.uid === DS.uid || o.uid === "local";
 // el administrador puede enviar con su cuenta lo de otra persona (el servidor se lo acepta), menos el historial ajeno: ese solo lo acepta de su dueño
-const tomable = o => esAdmin() && !propioEnvio(o) && o.col !== "audit";
+const tomable = o => esAdmin() && !!DS.uid && !propioEnvio(o) && o.col !== "audit";
 function rechazadasHTML() {
   const r = rechazadas(); if (!r.length) return "";
   const ya = sesionLista(), descartar = ya && esAdmin() && DS.backend === "supabase", ajenos = r.filter(tomable).length;
@@ -132,14 +132,15 @@ function sinEnviarTxt(o) {
 ACT.reintentarEnvio = async () => {
   if (!sesionLista()) { toast("Primero ingresa con tu cuenta.", true); return; }
   if (DS.mode === "db" && !conRed()) { toast("Sin conexión: reintenta cuando vuelva Internet.", true); return; }
-  const todas = rechazadas(), mios = todas.filter(propioEnvio); let ajenos = todas.filter(tomable);
+  const yo = DS.uid, adm = esAdmin(), todas = rechazadas(), mios = todas.filter(propioEnvio); let ajenos = todas.filter(tomable);
   if (ajenos.length && !(await confirmar({titulo: "¿Enviar con tu cuenta lo de otra persona?", texto: "El servidor no se lo aceptó a esa persona; a ti, como administrador, sí te lo acepta:<br>" +
       ajenos.map(o => "• <b>" + esc(descCambio(o)) + "</b>" + (o.detalle ? " (" + esc(o.detalle) + ")" : "") + (sinEnviarTxt(o) ? ". " + esc(sinEnviarTxt(o)) : "")).join("<br>") + "<br>En el historial queda que lo enviaste tú.", si: "Sí, enviar con mi cuenta", no: "Solo lo mío"}))) ajenos = [];
+  if (!sesionLista() || DS.uid !== yo || esAdmin() !== adm || (DS.mode === "db" && !conRed())) { toast("La sesión o la conexión cambiaron: no se reintentó nada.", true); return; }
   const r = mios.concat(ajenos).filter(o => OUT[o.path] === o && o.estado === "rechazada"), quedan = rechazadas().length - r.length;
   const otraTxt = esAdmin() ? "Lo de otra persona que no enviaste sigue aquí; su historial solo lo puede enviar esa persona, ingresando en este equipo." : "Los cambios de otra persona los reintenta esa persona o el administrador, ingresando en este equipo.";
   if (!r.length) { if (quedan) toast(otraTxt, true); return; }
   for (const o of r) {
-    if (!propioEnvio(o)) { o.uidOrig = o.uidOrig || o.uid; audit("REINTENTO_ADMIN", o.path, descCambio(o) + " de " + (nombreDe(o.uid) || "otra persona") + (o.detalle ? " · rechazo: " + o.detalle : "")); o.uid = DS.uid; }
+    if (o.uid && o.uid !== yo && o.uid !== "local") { o.uidOrig = o.uidOrig || o.uid; audit("REINTENTO_ADMIN", o.path, descCambio(o) + " de " + (nombreDe(o.uid) || "otra persona") + (o.detalle ? " · rechazo: " + o.detalle : "")); o.uid = yo; }
     o.estado = "pendiente"; o.error = ""; o.detalle = ""; numeroNuevo(o);
   }
   await IDB.tx(r.map(o => ["outbox", "put", o.path, o])).catch(() => {});
@@ -157,7 +158,7 @@ ACT.descartarCambio = async (el, d) => {
   let srv;
   try { const r = await withTimeout(Promise.resolve(SB.client.from("oli_docs").select("data").eq("org_id", SB.org).eq("collection", o.col).eq("doc_id", o.id).limit(1)), 15000); if (r.error) throw r.error; srv = r.data && r.data[0] ? r.data[0].data : null; }
   catch (e) { toast("No se pudo traer lo del servidor: no se descartó nada. Intenta de nuevo.", true); return; }
-  if (OUT[o.path] !== o) return;
+  if (OUT[o.path] !== o || o.estado !== "rechazada" || !esAdmin() || sinServidor()) { toast("No se descartó nada: el cambio o la sesión cambiaron mientras tanto.", true); return; }
   delete OUT[o.path]; const m = Object.assign({}, DS.c[o.col]); if (srv) m[o.id] = srv; else delete m[o.id]; DS.c[o.col] = m;   // sin la copia local, al recargar no se "restaura" lo descartado
   await IDB.tx([["outbox", "del", o.path], srv ? ["docs", "put", o.path, {col: o.col, id: o.id, data: srv}] : ["docs", "del", o.path]]).catch(() => {});
   SYNC.rechazadas = rechazadas().length; recalcEstado(); audit("CAMBIO_DESCARTADO", o.path, descCambio(o) + (o.detalle ? " · " + o.detalle : "") + (sinEnviarTxt(o) ? " · " + sinEnviarTxt(o) : ""));

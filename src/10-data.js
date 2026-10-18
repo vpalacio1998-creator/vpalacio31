@@ -141,7 +141,11 @@ function audit(accion, ref, det) {
 const auditList = () => memo("audit", () => { if (!DS.isAdmin) return []; const out = []; for (const d of Object.values(DS.c.audit || {})) for (const it of (d.items || [])) out.push(it); return out.sort((a, b) => b.t - a.t); });
 
 /* ---------- estado de sincronización de una venta ---------- */
-async function loadAcks() { DS.acks = (await IDB.get("kv", "acks")) || {}; }
+async function loadAcks() {
+  DS.acks = (await IDB.get("kv", "acks")) || {};
+  // antes los cierres de caja no quedaban en lo recibido: esas marcas viejas de cajas se olvidan una vez (mejor "no se sabe" que "no llegó")
+  if (((await IDB.get("kv", "acksV")) || 0) < 2) { for (const p of Object.keys(DS.acks)) if (p.startsWith("cajas/")) delete DS.acks[p]; await IDB.tx([["kv", "put", "acks", DS.acks], ["kv", "put", "acksV", 2]]).catch(() => {}); }
+}
 function ventaSync(v) {
   if (DS.mode !== "db") return "local";
   const path = "ventas/" + v.docId, acked = (DS.acks || {})[path] || [];
@@ -186,7 +190,7 @@ async function syncNow() {
   if (!conRed()) { recalcEstado(); changed(); return; }
   // lo que se rechazó antes (p. ej. en la versión anterior, una anulación que llegó antes que su venta) se reintenta una vez, con número
   // nuevo, cuando su dueño ya ingresó; lo de otra persona sigue a la vista como rechazado
-  const reint = DS.uid ? rechazadas().filter(o => !o.reint && (!o.uid || o.uid === DS.uid || o.uid === "local")) : [];
+  const reint = DS.uid || DS.backend !== "supabase" ? rechazadas().filter(o => !o.reint && (!o.uid || o.uid === DS.uid || o.uid === "local")) : [];
   if (reint.length) { for (const o of reint) { o.estado = "pendiente"; o.reint = 1; numeroNuevo(o); } await IDB.tx(reint.map(o => ["outbox", "put", o.path, o])).catch(() => {}); SYNC.rechazadas = rechazadas().length; }
   if (syncing) return;                                                                        // (otra ronda empezó mientras se guardaba)
   // solo se envía lo que hizo la persona con sesión abierta (lo de otra persona espera a que ella vuelva a ingresar)
@@ -198,7 +202,7 @@ async function syncNow() {
     try {
       await withTimeout(REMOTE.apply(op), 12000);
       const still = OUT[op.path];
-      const acks = DS.acks || (DS.acks = {}); acks[op.path] = (op.ids || []).slice(-600);
+      const acks = DS.acks || (DS.acks = {}); acks[op.path] = (op.del ? [] : idsDe(op.data)).slice(-600);   // de lo que se envió (también ops guardados por una versión anterior)
       const ops2 = [["kv", "put", "acks", acks]];
       if (still && still.t === op.t) { delete OUT[op.path]; ops2.push(["outbox", "del", op.path]); }
       await IDB.tx(ops2); SYNC.hecho++; SYNC.ultima = Date.now(); netFail = false; return null;
