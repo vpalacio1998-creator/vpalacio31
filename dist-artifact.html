@@ -50,6 +50,8 @@ h3{font-size:18px;margin:0 0 10px}
 .top .when{flex:1;min-width:0}
 .top .when b{display:block;font-size:14px}
 .top .when small{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.top .when .estado-btn{display:flex;align-items:center;gap:6px;min-width:0;max-width:100%;min-height:28px;padding:0;border:0;background:none;font:inherit;color:inherit;cursor:pointer;text-align:left}
+.top .when .estado-btn span{overflow:hidden;text-overflow:ellipsis}
 .dot{width:7px;height:7px;border-radius:50%;background:var(--ok);flex:none}.dot.off{background:var(--muted)}.dot.bad{background:var(--danger)}
 .iconbtn{position:relative;display:grid;place-items:center;width:42px;height:42px;border-radius:12px;border:1px solid var(--line);background:var(--surface);color:var(--ink)}
 .iconbtn[data-n]::after{content:attr(data-n);position:absolute;top:-5px;right:-5px;min-width:18px;height:18px;border-radius:9px;background:var(--danger);color:#fff;font-size:11px;font-weight:700;display:grid;place-items:center;padding:0 4px}
@@ -315,7 +317,7 @@ details.help span{display:block;font-weight:500;font-size:13px;line-height:1.35;
   <div class="col">
     <header class="top">
       <div class="logo" aria-label="OLI">OLI</div>
-      <div class="when"><b id="fecha"></b><small><i class="dot off" id="dot"></i><span id="estado">Abriendo…</span></small></div>
+      <div class="when"><b id="fecha"></b><small><button type="button" class="estado-btn" data-act="verEnvio" aria-label="Estado de envío"><i class="dot off" id="dot"></i><span id="estado">Abriendo…</span></button></small></div>
       <button class="iconbtn" id="searchbtn" data-act="buscar" aria-label="Buscar" hidden><svg class="ic" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/></svg></button>
       <button class="iconbtn" id="bell" data-act="campana" aria-label="Avisos" hidden><svg class="ic" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 17V11a6 6 0 0 1 12 0v6l1.5 2h-15L6 17z"/><path d="M10 21a2 2 0 0 0 4 0"/></svg></button>
       <button class="iconbtn" data-act="ayuda" aria-label="¿Necesitas ayuda?" style="font-weight:700;font-size:18px">?</button>
@@ -331,7 +333,7 @@ details.help span{display:block;font-weight:500;font-size:13px;line-height:1.35;
 <div class="sheet hidden" id="sheet"><div class="bg"></div><div class="panel" role="dialog" aria-modal="true" id="panel"></div></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script>window.OLI_BUILD="3c856a67";</script>
+<script>window.OLI_BUILD="cf59c773";</script>
 <script>
 (function(){
 "use strict";
@@ -633,6 +635,9 @@ function ventaSync(v) {
 const pendientes = () => Object.values(OUT).filter(o => o.estado !== "rechazada");
 const enviables = () => pendientes().filter(o => !o.uid || !DS.uid || o.uid === DS.uid || o.uid === "local");
 const rechazadas = () => Object.values(OUT).filter(o => o.estado === "rechazada");
+/* qué es un cambio, en palabras (para avisar cuando el servidor no lo acepta) */
+const NOM_CAMBIO = {ventas: "Ventas", cajas: "Caja", anulaciones: "Anulación de una venta", confirmaciones: "Confirmación de un pago", mermas: "Pérdidas", checklists: "Lista de la caja", cajashelado: "Cambio de caja de helado", demandaperdida: "Lo que pidieron y no había", dispositivos: "Datos del equipo", audit: "Historial", reaperturas: "Caja reabierta"};
+const descCambio = o => (NOM_CAMBIO[o.col] || o.col) + (/^\d{4}-\d{2}-\d{2}/.test(String(o.id)) ? " del " + diaCorto(String(o.id).slice(0, 10)) : "");
 const ventasPendientes = () => { let n = 0; for (const o of pendientes()) if (o.col === "ventas") { const acked = (DS.acks || {})[o.path] || []; n += (o.ids || []).filter(i => !acked.includes(i)).length; } return n; };
 
 /* ---------- motor de sincronización ---------- */
@@ -646,29 +651,55 @@ function recalcEstado() {
   SYNC.estado = DS.mode !== "db" ? "local" : !SYNC.online ? "offline" : syncing ? "sincronizando" : SYNC.rechazadas ? "error" : p ? "pendiente" : "sincronizado";
 }
 function kickSync(delay = 0) { clearTimeout(syncTimer); syncTimer = setTimeout(syncNow, delay); recalcEstado(); changed(); }
+/* orden de envío: primero las ventas y las cajas; las anulaciones y confirmaciones después, porque el servidor revisa que su venta
+   ya esté allá (el 15 de oct. una anulación hecha sin Internet llegó antes que su venta y el servidor la rechazó) */
+const ORDEN_ENVIO = {ventas: 0, cajas: 1, anulaciones: 3, confirmaciones: 3, dispositivos: 4, audit: 4};
+const turnoEnvio = op => op.col in ORDEN_ENVIO ? ORDEN_ENVIO[op.col] : 2;
+async function marcarRechazo(op, e) {
+  op.estado = "rechazada"; op.error = (e && e.code) || "error"; op.detalle = String((e && e.message) || "").slice(0, 160);
+  if (OUT[op.path] === op) { SYNC.rechazadas = rechazadas().length; await IDB.tx([["outbox", "put", op.path, op]]).catch(() => {}); }   // si ya hay un cambio más nuevo, ese manda
+  audit("SYNC_RECHAZADA", op.path, descCambio(op) + (op.detalle ? " · " + op.detalle : ""));
+}
+/* El servidor recuerda el número de cada envío, también el de los que rechazó, y a uno repetido le contesta "duplicado" (que aquí
+   cuenta como guardado). Antes de volver a mandar algo rechazado se le da un número nuevo: si no, se borraría sin haberse guardado. */
+const numeroNuevo = op => { op.opId = newOpId(op.path); return op; };
 async function syncNow() {
   if (syncing || DS.mode !== "db" || DS.bloqueada || DS.needsLogin) return;                   // en la pantalla de ingreso no se envía: se envía al ingresar
   if (!conRed()) { recalcEstado(); changed(); return; }
   // solo se envía lo que hizo la persona con sesión abierta (lo de otra persona espera a que ella vuelva a ingresar)
-  const ops = enviables().sort((a, b) => a.t - b.t);
+  const ops = enviables().sort((a, b) => turnoEnvio(a) - turnoEnvio(b) || a.t - b.t);
   if (!ops.length) { SYNC.estado = "sincronizado"; recalcEstado(); changed(); return; }
   syncing = true; SYNC.total = ops.length; SYNC.hecho = 0; recalcEstado(); changed();
+  const enviar = async op => {                                                               // null = llegó; "red" = sin respuesta; si no, el rechazo
+    SYNC.enCurso = op.path; changed();
+    try {
+      await withTimeout(REMOTE.apply(op), 12000);
+      const still = OUT[op.path];
+      const acks = DS.acks || (DS.acks = {}); acks[op.path] = (op.ids || []).slice(-600);
+      const ops2 = [["kv", "put", "acks", acks]];
+      if (still && still.t === op.t) { delete OUT[op.path]; ops2.push(["outbox", "del", op.path]); }
+      await IDB.tx(ops2); SYNC.hecho++; SYNC.ultima = Date.now(); netFail = false; return null;
+    } catch (e) {
+      if (!esRechazo(e)) { netFail = true; SYNC.error = "sin respuesta del servidor"; return "red"; }
+      if (OUT[op.path] === op) { numeroNuevo(op); await IDB.tx([["outbox", "put", op.path, op]]).catch(() => {}); }   // ya rechazado: el próximo intento va con número nuevo
+      return e;
+    }
+  };
   try {
+    const dudosas = []; let red = false;
     for (const op of ops) {
-      if (!conRed()) break;
-      SYNC.enCurso = op.path; changed();
-      try {
-        await withTimeout(REMOTE.apply(op), 12000);
-        const still = OUT[op.path];
-        const acks = DS.acks || (DS.acks = {}); acks[op.path] = (op.ids || []).slice(-600);
-        const ops2 = [["kv", "put", "acks", acks]];
-        if (still && still.t === op.t) { delete OUT[op.path]; ops2.push(["outbox", "del", op.path]); }
-        await IDB.tx(ops2); SYNC.hecho++; SYNC.ultima = Date.now(); netFail = false;
-      } catch (e) {
-        if (esRechazo(e)) { op.estado = "rechazada"; op.error = (e && e.code) || "error"; OUT[op.path] = op; SYNC.rechazadas = rechazadas().length; await IDB.tx([["outbox", "put", op.path, op]]).catch(() => {}); audit("SYNC_RECHAZADA", op.path, op.error); }
-        else { netFail = true; SYNC.error = "sin respuesta del servidor"; break; }
-      }
-      changed();
+      if (!conRed()) { red = true; break; }
+      const r = await enviar(op); if (r === "red") { red = true; break; }
+      if (r) dudosas.push([op, r]); changed();
+    }
+    // lo rechazado se prueba otra vez al final de la ronda (lo que le faltaba pudo llegar después); si vuelve a fallar, queda rechazado.
+    // Si se cayó la red, queda pendiente para la próxima ronda.
+    for (const [op, e0] of dudosas) {
+      if (red || !conRed()) break;
+      if (OUT[op.path] !== op) continue;                                                       // cambió mientras tanto: lo nuevo se envía en la próxima ronda
+      let e = e0;
+      if (SYNC.hecho) { e = await enviar(op); if (e === "red") break; if (!e || OUT[op.path] !== op) continue; }
+      await marcarRechazo(op, e); changed();
     }
   } finally { SYNC.enCurso = ""; syncing = false; SYNC.rechazadas = rechazadas().length; recalcEstado(); changed(); }
   if (enviables().length) { clearTimeout(syncTimer); syncTimer = setTimeout(() => { netFail = false; syncNow(); }, 8000); }
@@ -737,14 +768,18 @@ function subscribeAudit(uid) {
   if (!uid || auditSubs.has(uid) || !DS.isAdmin || DS.mode !== "db") return; auditSubs.add(uid);
   DS.subs.push(DS.dbh.collection("audit/" + uid + "/d").onSnapshot(snap => { const m = Object.assign({}, DS.c.audit || {}); snap.docs.forEach(d => { m[uid + "__" + d.id] = d.data(); }); DS.c.audit = m; changed(); }, () => {}));
 }
-function syncAuditSubs() { if (DS.mode !== "db" || DS.backend !== "claude" || !DS.isAdmin) return; if (DS.uid) subscribeAudit(DS.uid); for (const d of Object.values(DS.c.dispositivos || {})) if (d.uid) subscribeAudit(d.uid); for (const d of Object.values(DS.c.ventas || {})) if (d.uid) subscribeAudit(d.uid); }
+function syncAuditSubs() { if (DS.mode !== "db" || DS.backend !== "claude" || !DS.isAdmin) return; if (DS.uid) subscribeAudit(DS.uid); for (const d of Object.values(DS.c.dispositivos || {})) if (d && d.uid) subscribeAudit(d.uid); for (const d of Object.values(DS.c.ventas || {})) if (d.uid) subscribeAudit(d.uid); }
 
 /* ---------- arranque ---------- */
 async function bootData() {
   await IDB.open(); await bootDevice(); await loadAcks();
   const docs = await IDB.getAll("docs"), outbox = await IDB.getAll("outbox"), ident = await IDB.get("kv", "ident");
   for (const x of Object.values(docs)) (DS.c[x.col] = DS.c[x.col] || {})[x.id] = x.data;
-  for (const [p, op] of Object.entries(outbox)) { OUT[p] = op; if (op.estado === "rechazada") SYNC.rechazadas++; if (op.del) { if (DS.c[op.col]) delete DS.c[op.col][op.id]; } else (DS.c[op.col] = DS.c[op.col] || {})[op.id] = op.data; }
+  // lo rechazado antes de esta versión se reintenta una vez, con número nuevo (p. ej. una anulación que llegó antes que su venta);
+  // solo lo de quien tenía la sesión abierta: lo de otra persona sigue a la vista como rechazado
+  const reint = [], yo = ident && ident.uid, mio = op => !op.uid || op.uid === yo || op.uid === "local";
+  for (const [p, op] of Object.entries(outbox)) { if (op.estado === "rechazada" && !op.reint && mio(op)) { op.estado = "pendiente"; op.reint = 1; numeroNuevo(op); reint.push(["outbox", "put", p, op]); } OUT[p] = op; if (op.estado === "rechazada") SYNC.rechazadas++; if (op.del) { if (DS.c[op.col]) delete DS.c[op.col][op.id]; } else (DS.c[op.col] = DS.c[op.col] || {})[op.id] = op.data; }
+  if (reint.length) await IDB.tx(reint).catch(() => {});
   if (window.OLI_CONFIG && window.OLI_CONFIG.supabaseUrl && typeof window.bootSupabase === "function") { await window.bootSupabase(ident); return; }
   const pedir = async () => { try { if (window.claude && typeof window.claude.use === "function") { const r = await Promise.all([window.claude.use("db"), window.claude.use("user")]); return r; } } catch (e) {} return [null, null]; };
   let [db, user] = await pedir();
@@ -782,7 +817,9 @@ let lastHb = 0;
 function heartbeat(force) {
   if (DS.mode !== "db" || !DEV.listo || !DEV.nombre || !conRed() || DS.needsLogin) return;
   if (Date.now() - lastHb < (force ? 15000 : 40000)) return; lastHb = Date.now();
-  put("dispositivos", DEV.id, {dev: DEV.id, nombre: DEV.nombre, uid: DS.uid || "", rol: DS.isAdmin ? "admin" : "empleado", vis: Date.now(), pend: pendientes().length, ventasPend: ventasPendientes(), v: 2}).catch(() => {});
+  const rech = rechazadas();                                                                  // el administrador ve en su equipo lo que el servidor le rechazó a este
+  put("dispositivos", DEV.id, {dev: DEV.id, nombre: DEV.nombre, uid: DS.uid || "", rol: DS.isAdmin ? "admin" : "empleado", vis: Date.now(), pend: pendientes().length, ventasPend: ventasPendientes(),
+    rech: rech.length, rechInfo: rech.slice(0, 5).map(o => ({c: descCambio(o), e: o.detalle || "", t: o.t})), v: 2}).catch(() => {});
 }
 
 /* ---------- conflictos: inventario negativo tras sincronizar ---------- */
@@ -1542,8 +1579,13 @@ function anomalias() {
 const enMin = t => Math.max(0, Math.round((Date.now() - t) / 60000));
 const haceTxt = t => { const m = enMin(t); return m < 1 ? "hace segundos" : m < 60 ? "hace " + m + " min" : m < 1440 ? "hace " + Math.round(m / 60) + " h" : "hace " + Math.round(m / 1440) + " d"; };
 function dispositivosEstado() {
-  const now = Date.now(); return Object.values(col("dispositivos")).map(d => { const dt = now - (d.vis || 0), on = dt < 100000, mine = d.dev === DEV.id; return Object.assign({}, d, {online: mine ? SYNC.online : on, hace: dt, mine, pendMios: mine ? ventasPendientes() : d.ventasPend}); }).sort((a, b) => b.vis - a.vis);
+  const now = Date.now(); return Object.values(col("dispositivos")).filter(d => d && typeof d === "object").map(d => { const dt = now - (d.vis || 0), on = dt < 100000, mine = d.dev === DEV.id;
+    return Object.assign({}, d, {online: mine ? SYNC.online : on, hace: dt, mine, pendMios: mine ? ventasPendientes() : d.ventasPend, rech: mine ? rechazadas().length : Number(d.rech) || 0, rechInfo: mine ? [] : rechInfoDe(d)}); }).sort((a, b) => b.vis - a.vis);
 }
+/* lo que otro equipo cuenta de sus cambios rechazados llega de afuera: se normaliza para que un dato raro no rompa la pantalla */
+const rechInfoDe = d => (Array.isArray(d.rechInfo) ? d.rechInfo : []).filter(x => x && typeof x === "object").slice(0, 5).map(x => ({c: String(x.c || "Un cambio"), e: String(x.e || "")}));
+const rechTxt = d => d.rechInfo.map(x => x.c + (x.e ? " (" + x.e + ")" : "")).join("; ");
+const DIAS_EQUIPO_VIEJO = 3;
 
 /* ---- alertas unificadas (cada rol ve lo que le corresponde) ---- */
 function alertas() {
@@ -1553,8 +1595,13 @@ function alertas() {
     for (const r of riesgosInsumos()) out.push({sev: r.sev, tipo: "inventario", t: r.t, d: r.d, tab: "inventario", pid: r.pid});
     const pend = ventasOk().filter(v => v.pend).length; if (pend) out.push({sev: "warn", tipo: "caja", t: pend + (pend === 1 ? " pago digital por confirmar." : " pagos digitales por confirmar."), d: "Verifica que llegó el dinero.", tab: "caja"});
     const c = cajaHoy(); if (c && cajaEstado(c) === "cerrada") { const ci = c.cierres.slice(-1)[0]; if (ci && Math.abs(ci.dif) >= 1) out.push({sev: "warn", tipo: "caja", t: "Diferencia de caja de " + fmt(ci.dif) + " en " + (col("dispositivos")[c.dev] || {nombre: "la caja"}).nombre + ".", d: ci.obs ? "Observación: " + ci.obs : "Sin observación.", tab: "caja"}); }
-    if (SYNC.rechazadas) out.push({sev: "bad", tipo: "sync", t: SYNC.rechazadas + " operación(es) no se pudieron sincronizar.", d: "El servidor las rechazó; quedan guardadas en este dispositivo.", tab: "ajustes"});
+    if (SYNC.rechazadas) out.push({sev: "bad", tipo: "sync", t: SYNC.rechazadas === 1 ? "Un cambio de este equipo no se pudo enviar: el servidor no lo aceptó." : SYNC.rechazadas + " cambios de este equipo no se pudieron enviar: el servidor no los aceptó.", d: rechazadas().map(descCambio).join("; ") + ". Toca «Hay datos que revisar» (arriba) para ver por qué y reintentar.", tab: "equipo"});
     if (adm) {
+      for (const d of dispositivosEstado()) if (!d.mine && d.rech > 0) { const uno = d.rech === 1, dias = Math.floor(d.hace / 86400000);
+        out.push({sev: "bad", tipo: "sync", t: (d.nombre || "Otro equipo") + ": " + (uno ? "un cambio que el servidor no aceptó." : d.rech + " cambios que el servidor no aceptó."),
+          d: rechTxt(d) + ". " + (dias >= DIAS_EQUIPO_VIEJO
+            ? "Ese equipo no se conecta desde hace " + dias + " días: si se borró o se reemplazó, " + (uno ? "ese cambio se perdió" : "esos cambios se perdieron") + " (no llegaron al servidor). Si ya no existe, quita este aviso en Equipo → «Quitar el aviso»."
+            : (uno ? "Sigue guardado" : "Siguen guardados") + " en ese equipo, no en el servidor: allá toca «Hay datos que revisar» (arriba) y luego «Reintentar el envío». Si vuelve a fallar, ingresa en ese equipo con tu cuenta: como administrador puedes reintentarlo o descartarlo. Última conexión de ese equipo: " + haceTxt(d.vis) + "."), tab: "equipo"}); }
       for (const a of anomalias()) out.push({sev: a.sev, tipo: "anomalia", t: a.t, d: a.d, tab: a.ir === "hoy" ? "hoy" : a.ir === "compras" ? "compras" : a.ir === "inventario" ? "inventario" : a.ir === "cierres" ? "reportes" : "reportes", anom: true});
       for (const a of alertasCostos()) out.push({sev: a.tipo === "sube" ? "warn" : "ok", tipo: "costo", t: (a.insumo ? "El costo de " : "El costo de ") + a.p.nombre + (a.tipo === "sube" ? " aumentó " : " bajó ") + Math.round(Math.abs(a.ch) * 100) + "%.", d: a.insumo ? "Costo anterior " + fmt(a.prev) + ", nuevo " + fmt(a.nuevo) + ". Revisa precio o receta." : "Margen de " + pct(a.mPrev) + " a " + pct(a.mNuevo) + ". Revisa precio o receta.", tab: "productos", pid: a.p.id});
       const pp = proximoPuente(7); if (pp) out.push({sev: "warn", tipo: "compra", t: "Se viene fin de semana largo: " + rangoFechasTxt(pp.fechas) + ".", d: (pp.nombres.join(", ") || "Festivo") + ". Haz el pedido para los " + pp.fechas.length + " días: OLI ya pide " + Math.round(colchonFestivo() * 100) + " % más para esos días.", tab: "compras"});
@@ -2042,13 +2089,48 @@ function connPill() { const c = connInfo(); return `<button class="pill ${c.cls}
 const ventaSyncTxt = e => ({pendiente: "Pendiente de enviar", sincronizando: "Enviando…", sincronizada: "Enviada ✓", error: "Necesita revisión", local: "Guardada"}[e] || e);
 ACT.verEnvio = () => abrir(() => {
   const c = connInfo(), mias = ventasOk().filter(v => v.dev === DEV.id && v.fecha >= addDays(S.today, -1)).slice(-12).reverse(), pend = pendientes().length;
-  return head("Estado de envío") + `<div class="notice ${c.cls === "ok" ? "ok" : c.cls === "bad" ? "bad" : ""}"><b>${esc(c.txt)}</b><br>${DS.mode === "local" ? "Los datos se guardan solo en este equipo." : c.k === "offline" ? "Trabajando sin conexión. Las ventas se guardan en este equipo y se enviarán solas cuando vuelva Internet." : pend ? "Hay " + pend + " cambios por enviar. Se envían solos." : "Todo está al día con el servidor."}</div>
+  return head("Estado de envío") + `<div class="notice ${c.cls === "ok" ? "ok" : c.cls === "bad" ? "bad" : ""}"><b>${esc(c.txt)}</b><br>${DS.mode === "local" ? "Los datos se guardan solo en este equipo." : c.k === "offline" ? "Trabajando sin conexión. Las ventas se guardan en este equipo y se enviarán solas cuando vuelva Internet." : pend ? (pend === 1 ? "Hay 1 cambio por enviar. Se envía solo." : "Hay " + pend + " cambios por enviar. Se envían solos.") : rechazadas().length ? "El servidor no aceptó algo de este equipo: míralo abajo." : "Todo está al día con el servidor."}</div>
     ${SYNC.ultima ? `<p class="small muted">Último envío: ${haceTxt(SYNC.ultima)}</p>` : ""}
     <h3>Mis últimas ventas</h3>${mias.length ? mias.map(v => `<div class="row"><div class="l"><b>${esc(v.num || "Venta")}</b> · ${hora(v.t)}<div class="small muted">${fmt(v.total)} · ${esc(v.m)}</div></div><div class="r"><span class="pill ${ventaSync(v) === "sincronizada" || ventaSync(v) === "local" ? "ok" : ventaSync(v) === "error" ? "bad" : "warn"}">${esc(ventaSyncTxt(ventaSync(v)))}</span></div></div>`).join("") : '<p class="muted">Todavía no hay ventas en este equipo.</p>'}
     ${c.k === "offline" && DS.backend === "supabase" && esAdmin() && conRedNavegador() ? `<div class="notice" style="margin-top:12px"><b>El servidor de OLI no responde.</b> Abre cualquier página (por ejemplo google.com): si no abre, el problema es el Internet del local. Si abre y esto dura más de unos minutos, entra a <b>supabase.com</b> → proyecto <b>OLI</b>: si dice que está en pausa, toca <b>Restore</b> (reactivar). Mientras tanto se puede seguir vendiendo.</div>` : ""}
-    ${rechazadas().length ? `<div class="notice bad" style="margin-top:12px">${rechazadas().length} cambio(s) no se pudieron enviar porque el servidor no los aceptó. Siguen guardados aquí. Avísale al administrador.</div>` : ""}
+    ${rechazadasHTML()}
     <div class="small muted" style="margin-top:12px">Este equipo: <b>${esc(DEV.nombre || DEV.id)}</b></div>`;
 }, {live: true});
+/* lo que el servidor no aceptó: qué es, por qué, y reintentar (o, el administrador, descartarlo y quedarse con lo del servidor) */
+function rechazadasHTML() {
+  const r = rechazadas(); if (!r.length) return "";
+  const descartar = esAdmin() && DS.backend === "supabase";
+  return `<div class="notice bad" style="margin-top:12px;display:block"><b>${r.length === 1 ? "Un cambio no se pudo enviar: el servidor no lo aceptó." : r.length + " cambios no se pudieron enviar: el servidor no los aceptó."}</b> ${r.length === 1 ? "Sigue guardado" : "Siguen guardados"} en este equipo${esAdmin() ? "" : ". Avísale al administrador"}.
+    ${r.map(o => `<div class="row"><div class="l"><b>${esc(descCambio(o))}</b>${o.detalle ? `<div class="small">${esc(o.detalle)}</div>` : ""}${sinEnviarTxt(o) ? `<div class="small muted">${esc(sinEnviarTxt(o))}</div>` : ""}</div>${descartar ? `<div class="r"><button class="btn ghost sm" data-act="descartarCambio" data-p="${esc(o.path)}">Descartar</button></div>` : ""}</div>`).join("")}
+    <button class="btn sm" style="margin-top:8px" data-act="reintentarEnvio">Reintentar el envío</button>${esAdmin() ? '<div class="small" style="margin-top:6px">Como administrador, al reintentar se envía con tu cuenta (también lo que hizo otra persona).</div>' : ""}</div>`;
+}
+/* lo que ese cambio tiene que el servidor todavía no recibió (lo que se perdería al descartarlo) */
+const registrosDe = d => [].concat((d && d.ventas) || [], (d && d.items) || [], (d && d.movs) || [], (d && d.cierres) || []).filter(x => x && x.id);
+function sinEnviar(o) { const ack = (DS.acks || {})[o.path] || []; return registrosDe(o.data).filter(x => !ack.includes(x.id)); }
+function sinEnviarTxt(o) {
+  const xs = sinEnviar(o); if (!xs.length) return registrosDe(o.data).length ? "Todo lo que trae ya estaba en el servidor." : "";
+  const total = xs.reduce((s, x) => s + (Number(x.total) || Number(x.monto) || 0), 0), quien = uniq(xs.map(x => x.uid).filter(Boolean)).map(u => nombreDe(u) || "otra persona");
+  return (xs.length === 1 ? "1 registro que no llegó" : xs.length + " registros que no llegaron") + " al servidor" + (total ? " por " + fmt(total) : "") + (quien.length ? ", de " + quien.join(" y ") : "") + ".";
+}
+ACT.reintentarEnvio = async () => {
+  // solo se envía lo de quien tiene la sesión abierta; el administrador puede enviar también lo de otra persona (el servidor se lo acepta)
+  const todas = rechazadas(), propio = o => !o.uid || !DS.uid || o.uid === DS.uid || o.uid === "local", r = esAdmin() ? todas : todas.filter(propio);
+  const otraTxt = "Los cambios de otra persona los reintenta esa persona o el administrador: que ingrese en este equipo y toque «Reintentar el envío».";
+  if (!r.length) { if (todas.length) toast(otraTxt, true); return; }
+  for (const o of r) { o.estado = "pendiente"; o.error = ""; o.detalle = ""; if (!propio(o)) o.uid = DS.uid; numeroNuevo(o); }
+  await IDB.tx(r.map(o => ["outbox", "put", o.path, o])).catch(() => {});
+  SYNC.rechazadas = rechazadas().length; netFail = false; kickSync(100);
+  toast(r.length < todas.length ? "Reintentando lo tuyo. " + otraTxt : "Reintentando el envío…");
+};
+ACT.descartarCambio = async (el, d) => {
+  const o = OUT[d.p]; if (!o || o.estado !== "rechazada" || !esAdmin() || DS.backend !== "supabase") return;
+  if (!(await confirmar({titulo: "¿Descartar este cambio?", texto: "<b>" + esc(descCambio(o)) + "</b>. " + esc(sinEnviarTxt(o)) + " Se borra de este equipo y queda lo que tiene el servidor: lo que no llegó se pierde. No se puede deshacer. Si se puede, mejor toca «Reintentar el envío».", si: "Sí, descartar", no: "No", peligro: true}))) return;
+  if (OUT[o.path] !== o) return;                                                              // se reintentó o cambió mientras tanto
+  delete OUT[o.path]; const m = Object.assign({}, DS.c[o.col]); delete m[o.id]; DS.c[o.col] = m;   // sin la copia local, al recargar no se "restaura" lo descartado
+  await IDB.tx([["outbox", "del", o.path], ["docs", "del", o.path]]).catch(() => {});
+  SYNC.rechazadas = rechazadas().length; recalcEstado(); audit("CAMBIO_DESCARTADO", o.path, descCambio(o) + (o.detalle ? " · " + o.detalle : ""));
+  sbCargarTodo([o.col]); changed(); toast("Listo: quedó lo que tiene el servidor.");
+};
 
 /* ---------- ayuda y bienvenida ---------- */
 const btnSalir = (cls = "btn ghost") => DS.backend === "supabase" ? `<button class="${cls}" data-act="logout">${ic("salir", 18)} Cerrar sesión${SB.email ? " (" + esc(SB.email) + ")" : ""}</button>` : "";
@@ -3332,7 +3414,7 @@ ACT.doNuevaCuenta = async () => {
 /* ============ 73 · equipo, auditoría y ajustes (administrador) ============ */
 S.audFiltro = "todo";
 function personasConocidas() {
-  const m = {}; for (const d of Object.values(col("dispositivos"))) if (d.uid) m[d.uid] = Object.assign(m[d.uid] || {}, {uid: d.uid, vis: Math.max((m[d.uid] || {}).vis || 0, d.vis || 0), devs: ((m[d.uid] || {}).devs || []).concat([d.nombre])});
+  const m = {}; for (const d of Object.values(col("dispositivos"))) if (d && d.uid) m[d.uid] = Object.assign(m[d.uid] || {}, {uid: d.uid, vis: Math.max((m[d.uid] || {}).vis || 0, d.vis || 0), devs: ((m[d.uid] || {}).devs || []).concat([d.nombre])});
   for (const v of ventasOk()) if (v.uid) { const o = m[v.uid] = m[v.uid] || {uid: v.uid, devs: []}; o.ventas = (o.ventas || 0) + 1; o.total = (o.total || 0) + v.total; }
   return Object.values(m);
 }
@@ -3340,16 +3422,23 @@ VIEWS.equipo = () => {
   const dv = dispositivosEstado(), pe = personasConocidas(); pedirNombres(pe.map(x => x.uid));
   const aud = auditList().filter(a => S.audFiltro === "todo" || (S.audFiltro === "conflictos" ? /CONFLICTO|SYNC/.test(a.a) : S.audFiltro === "precios" ? /PRECIO|COSTO/.test(a.a) : S.audFiltro === "inventario" ? /INVENTARIO|MERMA|PRODUCCION/.test(a.a) : /CAJA/.test(a.a))).slice(0, 60);
   return cabecera("Equipo y dispositivos", "Quién está operando, desde dónde y qué cambió.") +
-  `<div class="card"><h3>Dispositivos</h3>${dv.length ? dv.map(d => `<div class="row" style="align-items:flex-start"><span class="dot ${d.online ? "" : "off"}" style="margin-top:8px;${d.online ? "" : "background:var(--warn)"}"></span><div class="l" style="flex:1"><b>${esc(d.nombre)}</b>${d.mine ? ' <span class="pill">Este equipo</span>' : ""}<div class="small muted">${d.online ? "En línea · última sincronización " + haceTxt(d.vis) : "Sin conexión · última conexión " + haceTxt(d.vis)}</div>${(d.mine ? ventasPendientes() : d.ventasPend) ? `<div class="small" style="color:var(--warn)">Ventas pendientes de enviar: ${d.mine ? ventasPendientes() : d.ventasPend}</div>` : ""}<div class="xs muted">${d.rol === "admin" ? "Administrador" : "Empleado"}</div></div></div>`).join("") : '<p class="muted">Todavía no se ha conectado ningún dispositivo.</p>'}
+  `<div class="card"><h3>Dispositivos</h3>${dv.length ? dv.map(d => `<div class="row" style="align-items:flex-start"><span class="dot ${d.online ? "" : "off"}" style="margin-top:8px;${d.online ? "" : "background:var(--warn)"}"></span><div class="l" style="flex:1"><b>${esc(d.nombre)}</b>${d.mine ? ' <span class="pill">Este equipo</span>' : ""}<div class="small muted">${d.online ? "En línea · última sincronización " + haceTxt(d.vis) : "Sin conexión · última conexión " + haceTxt(d.vis)}</div>${(d.mine ? ventasPendientes() : d.ventasPend) ? `<div class="small" style="color:var(--warn)">Ventas pendientes de enviar: ${d.mine ? ventasPendientes() : d.ventasPend}</div>` : ""}${d.rech ? `<div class="small" style="color:var(--danger)">${d.rech === 1 ? "Un cambio que el servidor no aceptó" : d.rech + " cambios que el servidor no aceptó"}${d.mine ? "" : ": " + esc(rechTxt(d))}</div>${!d.mine && d.hace >= DIAS_EQUIPO_VIEJO * 86400000 ? `<button class="btn ghost sm" style="margin-top:6px" data-act="quitarAvisoEquipo" data-dev="${esc(d.dev)}">Quitar el aviso (ese equipo ya no existe)</button>` : ""}` : ""}<div class="xs muted">${d.rol === "admin" ? "Administrador" : "Empleado"}</div></div></div>`).join("") : '<p class="muted">Todavía no se ha conectado ningún dispositivo.</p>'}
     <button class="btn ghost sm" style="margin-top:8px" data-act="renombrarDev">Cambiar nombre de este equipo</button></div>
   <div class="card"><h3>Personas</h3>${pe.length ? pe.map(x => `<div class="row"><div class="l"><b>${esc(nombreDe(x.uid) || "Persona")}</b><div class="small muted">${x.ventas || 0} ventas · ${fmtK(x.total || 0)}${x.vis ? " · visto " + haceTxt(x.vis) : ""}</div></div></div>`).join("") : '<p class="muted">Cuando tu equipo use OLI, aparecerá aquí.</p>'}
     ${accesoHTML()}</div>
   <div class="card"><h3>Historial de cambios</h3><div class="seg" style="margin-bottom:10px">${[["todo", "Todo"], ["precios", "Precios y costos"], ["inventario", "Inventario"], ["caja", "Caja"], ["conflictos", "Para revisar"]].map(([k, l]) => `<button data-act="audFiltro" data-v="${k}" aria-pressed="${S.audFiltro === k}">${l}</button>`).join("")}</div>
     ${aud.length ? aud.map(a => { pedirNombres([a.u]); return `<div class="row" style="align-items:flex-start;padding:8px 0"><div class="l"><b>${esc(audTxt(a.a))}</b><div class="small muted">${esc(a.d || "")}</div></div><div style="text-align:right" class="xs muted">${diaCorto(ymd(new Date(a.t)))} ${hora(a.t)}<br>${esc(nombreDe(a.u) || "")}</div></div>`; }).join("") : '<p class="muted">No hay registros.</p>'}</div>
-  ${rechazadas().length ? `<div class="card"><h3>Operaciones que el servidor rechazó</h3>${rechazadas().map(o => `<div class="row"><div class="l"><b>${esc(o.path)}</b><div class="small muted">${esc(o.error || "")}</div></div></div>`).join("")}<p class="small muted">Siguen guardadas en este equipo. Si necesitas recuperarlas, no borres los datos del navegador.</p></div>` : ""}`;
+  ${rechazadas().length ? `<div class="card"><h3>Cambios de este equipo que el servidor no aceptó</h3>${rechazadasHTML()}<p class="small muted">No borres los datos del navegador: se perderían.</p></div>` : ""}`;
 };
-const AUD_TXT = {LUZ_AFUERA: "Prendió la luz de afuera", PLATA_CONTADA: "Anotó la plata que tienen", PLATA_CONTADA_QUITADA: "Quitó la plata anotada", APERTURA_CAJA: "Caja abierta", CIERRE_CAJA: "Caja cerrada", REABRIR_CAJA: "Caja reabierta", CAJA_RETIRO: "Salió dinero de caja", CAJA_INGRESO: "Entró dinero a caja", CAJA_GASTO: "Pago desde caja", ANULACION: "Venta anulada", DESCUENTO: "Descuento aplicado", MERMA: "Pérdida anotada", AJUSTE_INVENTARIO: "Inventario ajustado", CAMBIO_PRECIO: "Cambio de precio", CAMBIO_COSTO: "Cambio de costo", PRODUCTO_CREADO: "Producto creado", PRODUCTO_EDITADO: "Producto editado", PRODUCTO_DESACTIVADO: "Producto desactivado", PRODUCTO_REACTIVADO: "Producto reactivado", GASTO: "Gasto registrado", GASTO_BORRADO: "Gasto borrado", COMPRA_PEDIDO: "Compra creada", COMPRA_RECIBIDA: "Compra recibida", PRODUCCION: "Producción registrada", RECETA: "Receta guardada", CONFIG: "Configuración", TERCERO: "Tercero guardado", CONFLICTO_INVENTARIO: "Venta que necesita revisión", SYNC_RECHAZADA: "Envío rechazado"};
+const AUD_TXT = {LUZ_AFUERA: "Prendió la luz de afuera", PLATA_CONTADA: "Anotó la plata que tienen", PLATA_CONTADA_QUITADA: "Quitó la plata anotada", APERTURA_CAJA: "Caja abierta", CIERRE_CAJA: "Caja cerrada", REABRIR_CAJA: "Caja reabierta", CAJA_RETIRO: "Salió dinero de caja", CAJA_INGRESO: "Entró dinero a caja", CAJA_GASTO: "Pago desde caja", ANULACION: "Venta anulada", DESCUENTO: "Descuento aplicado", MERMA: "Pérdida anotada", AJUSTE_INVENTARIO: "Inventario ajustado", CAMBIO_PRECIO: "Cambio de precio", CAMBIO_COSTO: "Cambio de costo", PRODUCTO_CREADO: "Producto creado", PRODUCTO_EDITADO: "Producto editado", PRODUCTO_DESACTIVADO: "Producto desactivado", PRODUCTO_REACTIVADO: "Producto reactivado", GASTO: "Gasto registrado", GASTO_BORRADO: "Gasto borrado", COMPRA_PEDIDO: "Compra creada", COMPRA_RECIBIDA: "Compra recibida", PRODUCCION: "Producción registrada", RECETA: "Receta guardada", CONFIG: "Configuración", TERCERO: "Tercero guardado", CONFLICTO_INVENTARIO: "Venta que necesita revisión", SYNC_RECHAZADA: "Envío rechazado", CAMBIO_DESCARTADO: "Cambio rechazado descartado", AVISO_EQUIPO_QUITADO: "Quitó el aviso de un equipo que ya no existe"};
 const audTxt = a => AUD_TXT[a] || a;
+/* un equipo que se borró o se cambió deja para siempre su último aviso de cambios rechazados: el administrador lo puede quitar
+   (no borra el equipo, para que las ventas viejas sigan mostrando su nombre; si ese equipo vuelve a conectarse, el aviso vuelve) */
+ACT.quitarAvisoEquipo = async (el, d) => {
+  const dv = col("dispositivos")[d.dev]; if (!dv || !esAdmin() || d.dev === DEV.id) return;
+  if (!(await confirmar({titulo: "¿Quitar el aviso de " + (dv.nombre || "ese equipo") + "?", texto: "Úsalo solo si ese equipo ya no existe (se borró o se cambió): lo que no llegó al servidor ya no se puede recuperar. Si el equipo vuelve a conectarse, el aviso vuelve a salir.", si: "Sí, quitar el aviso", no: "No"}))) return;
+  await guardar(async () => { await put("dispositivos", d.dev, Object.assign({}, dv, {rech: 0, rechInfo: [], avisoQuitado: Date.now()})); audit("AVISO_EQUIPO_QUITADO", d.dev, (dv.nombre || d.dev) + ": " + rechTxt({rechInfo: rechInfoDe(dv)})); }, "Aviso quitado");
+};
 ACT.audFiltro = (el, d) => { S.audFiltro = d.v; draw(); };
 ACT.renombrarDev = () => abrir(() => head("Nombre de este equipo") + `<p class="muted" style="margin-top:0">Así lo verá el administrador.</p>${sel("dv-n", ["Caja 1", "Caja 2", "Caja 3", "Celular del administrador"], DEV.nombre)}<label class="f" for="dv-o">Otro nombre</label><input class="in plain" id="dv-o" value=""><button class="btn pri xl wide" style="margin-top:14px" data-act="doRenombrar">GUARDAR</button>`);
 ACT.doRenombrar = async () => { const n = ($("#dv-o").value.trim() || selVal("dv-n")); if (!n) { toast("Elige un nombre.", true); return; } await setDevNombre(n); heartbeat(true); cerrar(); draw(); toast("Listo"); };

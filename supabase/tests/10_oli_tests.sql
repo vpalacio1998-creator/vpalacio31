@@ -275,6 +275,24 @@ begin
   reset role;
   perform t_assert(r->0->>'status' = 'applied' and (select qty from inventory_current where product_id = 'h-vaini') = 3, 'vender conos de antes no resta cajas de helado en el servidor (son bolas)');
   perform t_assert((select qty from inventory_current where product_id = 'i-cucu') = 47, 'pero sí resta los cucuruchos de esos conos (3)');
+  -- T31: el caso del 15 de oct.: la anulación llega antes que su venta y se rechaza; reenviada con el mismo op_id sigue rechazada
+  -- (no "duplicate", que la app toma como guardado); con un op_id nuevo, ya con la venta en el servidor, entra
+  reset role; set role authenticated; perform t_as(e1);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','inc1','col','anulaciones','id','2026-10-04_d1','t',96100,'data', jsonb_build_object('fecha','2026-10-04','dev','d1','items', jsonb_build_array(
+         jsonb_build_object('id','an-inc','ventaId','d1-inc-1','t',96009,'uid',e1::text,'motivo','Error al marcar','total',9000))))), 'd1', '1.0');
+  perform t_assert(r->0->>'status' = 'rejected', 'una anulación que llega antes que su venta se rechaza');
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','inc2','col','ventas','id','2026-10-04_d1','t',96500,'data', jsonb_build_object('fecha','2026-10-04','dev','d1','ventas', jsonb_build_array(
+         jsonb_build_object('id','d1-inc-1','n',72,'num','Caja 1 #72','t',96000,'fecha','2026-10-04','uid',e1::text,'dev','d1','m','Efectivo','total',9000,'sub',9000,'desc',0,'estado','confirmada','items','[{"pid":"p-mango","n":"Paleta Mango","q":1,"p":9000,"d":0}]'::jsonb))))), 'd1', '1.0');
+  perform t_assert(r->0->>'status' = 'applied', 'después llega la venta');
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','inc1','col','anulaciones','id','2026-10-04_d1','t',96100,'data', jsonb_build_object('fecha','2026-10-04','dev','d1','items', jsonb_build_array(
+         jsonb_build_object('id','an-inc','ventaId','d1-inc-1','t',96009,'uid',e1::text,'motivo','Error al marcar','total',9000))))), 'd1', '1.0');
+  perform t_assert(r->0->>'status' = 'rejected' and coalesce(r->0->>'detail','') <> '', 'reenviada con el mismo op_id sigue rechazada, con su motivo (no "duplicate")');
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','inc2','col','ventas','id','2026-10-04_d1','t',96500,'data','{}'::jsonb)), 'd1', '1.0');
+  perform t_assert(r->0->>'status' = 'duplicate', 'lo que sí se aplicó, repetido, sigue siendo "duplicate"');
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','inc3','col','anulaciones','id','2026-10-04_d1','t',96100,'data', jsonb_build_object('fecha','2026-10-04','dev','d1','items', jsonb_build_array(
+         jsonb_build_object('id','an-inc','ventaId','d1-inc-1','t',96009,'uid',e1::text,'motivo','Error al marcar','total',9000))))), 'd1', '1.0');
+  reset role;
+  perform t_assert(r->0->>'status' = 'applied' and exists (select 1 from sale_voids where id = 'an-inc' and sale_id = 'd1-inc-1'), 'con un op_id nuevo y la venta ya en el servidor, la anulación entra');
   -- T29: la plata contada (config/saldos) la guarda solo el administrador y el empleado no la puede leer ni cambiar
   reset role; set role authenticated; perform t_as(a);
   r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','sl1','col','config','id','saldos','t',90000,'data','{"efectivo":500000,"cuentas":1200000,"desde":"2026-10-17","t":90000,"uid":"x"}'::jsonb)), 'dA', '1.0');

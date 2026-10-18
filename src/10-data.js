@@ -153,6 +153,9 @@ function ventaSync(v) {
 const pendientes = () => Object.values(OUT).filter(o => o.estado !== "rechazada");
 const enviables = () => pendientes().filter(o => !o.uid || !DS.uid || o.uid === DS.uid || o.uid === "local");
 const rechazadas = () => Object.values(OUT).filter(o => o.estado === "rechazada");
+/* qué es un cambio, en palabras (para avisar cuando el servidor no lo acepta) */
+const NOM_CAMBIO = {ventas: "Ventas", cajas: "Caja", anulaciones: "Anulación de una venta", confirmaciones: "Confirmación de un pago", mermas: "Pérdidas", checklists: "Lista de la caja", cajashelado: "Cambio de caja de helado", demandaperdida: "Lo que pidieron y no había", dispositivos: "Datos del equipo", audit: "Historial", reaperturas: "Caja reabierta"};
+const descCambio = o => (NOM_CAMBIO[o.col] || o.col) + (/^\d{4}-\d{2}-\d{2}/.test(String(o.id)) ? " del " + diaCorto(String(o.id).slice(0, 10)) : "");
 const ventasPendientes = () => { let n = 0; for (const o of pendientes()) if (o.col === "ventas") { const acked = (DS.acks || {})[o.path] || []; n += (o.ids || []).filter(i => !acked.includes(i)).length; } return n; };
 
 /* ---------- motor de sincronización ---------- */
@@ -166,29 +169,55 @@ function recalcEstado() {
   SYNC.estado = DS.mode !== "db" ? "local" : !SYNC.online ? "offline" : syncing ? "sincronizando" : SYNC.rechazadas ? "error" : p ? "pendiente" : "sincronizado";
 }
 function kickSync(delay = 0) { clearTimeout(syncTimer); syncTimer = setTimeout(syncNow, delay); recalcEstado(); changed(); }
+/* orden de envío: primero las ventas y las cajas; las anulaciones y confirmaciones después, porque el servidor revisa que su venta
+   ya esté allá (el 15 de oct. una anulación hecha sin Internet llegó antes que su venta y el servidor la rechazó) */
+const ORDEN_ENVIO = {ventas: 0, cajas: 1, anulaciones: 3, confirmaciones: 3, dispositivos: 4, audit: 4};
+const turnoEnvio = op => op.col in ORDEN_ENVIO ? ORDEN_ENVIO[op.col] : 2;
+async function marcarRechazo(op, e) {
+  op.estado = "rechazada"; op.error = (e && e.code) || "error"; op.detalle = String((e && e.message) || "").slice(0, 160);
+  if (OUT[op.path] === op) { SYNC.rechazadas = rechazadas().length; await IDB.tx([["outbox", "put", op.path, op]]).catch(() => {}); }   // si ya hay un cambio más nuevo, ese manda
+  audit("SYNC_RECHAZADA", op.path, descCambio(op) + (op.detalle ? " · " + op.detalle : ""));
+}
+/* El servidor recuerda el número de cada envío, también el de los que rechazó, y a uno repetido le contesta "duplicado" (que aquí
+   cuenta como guardado). Antes de volver a mandar algo rechazado se le da un número nuevo: si no, se borraría sin haberse guardado. */
+const numeroNuevo = op => { op.opId = newOpId(op.path); return op; };
 async function syncNow() {
   if (syncing || DS.mode !== "db" || DS.bloqueada || DS.needsLogin) return;                   // en la pantalla de ingreso no se envía: se envía al ingresar
   if (!conRed()) { recalcEstado(); changed(); return; }
   // solo se envía lo que hizo la persona con sesión abierta (lo de otra persona espera a que ella vuelva a ingresar)
-  const ops = enviables().sort((a, b) => a.t - b.t);
+  const ops = enviables().sort((a, b) => turnoEnvio(a) - turnoEnvio(b) || a.t - b.t);
   if (!ops.length) { SYNC.estado = "sincronizado"; recalcEstado(); changed(); return; }
   syncing = true; SYNC.total = ops.length; SYNC.hecho = 0; recalcEstado(); changed();
+  const enviar = async op => {                                                               // null = llegó; "red" = sin respuesta; si no, el rechazo
+    SYNC.enCurso = op.path; changed();
+    try {
+      await withTimeout(REMOTE.apply(op), 12000);
+      const still = OUT[op.path];
+      const acks = DS.acks || (DS.acks = {}); acks[op.path] = (op.ids || []).slice(-600);
+      const ops2 = [["kv", "put", "acks", acks]];
+      if (still && still.t === op.t) { delete OUT[op.path]; ops2.push(["outbox", "del", op.path]); }
+      await IDB.tx(ops2); SYNC.hecho++; SYNC.ultima = Date.now(); netFail = false; return null;
+    } catch (e) {
+      if (!esRechazo(e)) { netFail = true; SYNC.error = "sin respuesta del servidor"; return "red"; }
+      if (OUT[op.path] === op) { numeroNuevo(op); await IDB.tx([["outbox", "put", op.path, op]]).catch(() => {}); }   // ya rechazado: el próximo intento va con número nuevo
+      return e;
+    }
+  };
   try {
+    const dudosas = []; let red = false;
     for (const op of ops) {
-      if (!conRed()) break;
-      SYNC.enCurso = op.path; changed();
-      try {
-        await withTimeout(REMOTE.apply(op), 12000);
-        const still = OUT[op.path];
-        const acks = DS.acks || (DS.acks = {}); acks[op.path] = (op.ids || []).slice(-600);
-        const ops2 = [["kv", "put", "acks", acks]];
-        if (still && still.t === op.t) { delete OUT[op.path]; ops2.push(["outbox", "del", op.path]); }
-        await IDB.tx(ops2); SYNC.hecho++; SYNC.ultima = Date.now(); netFail = false;
-      } catch (e) {
-        if (esRechazo(e)) { op.estado = "rechazada"; op.error = (e && e.code) || "error"; OUT[op.path] = op; SYNC.rechazadas = rechazadas().length; await IDB.tx([["outbox", "put", op.path, op]]).catch(() => {}); audit("SYNC_RECHAZADA", op.path, op.error); }
-        else { netFail = true; SYNC.error = "sin respuesta del servidor"; break; }
-      }
-      changed();
+      if (!conRed()) { red = true; break; }
+      const r = await enviar(op); if (r === "red") { red = true; break; }
+      if (r) dudosas.push([op, r]); changed();
+    }
+    // lo rechazado se prueba otra vez al final de la ronda (lo que le faltaba pudo llegar después); si vuelve a fallar, queda rechazado.
+    // Si se cayó la red, queda pendiente para la próxima ronda.
+    for (const [op, e0] of dudosas) {
+      if (red || !conRed()) break;
+      if (OUT[op.path] !== op) continue;                                                       // cambió mientras tanto: lo nuevo se envía en la próxima ronda
+      let e = e0;
+      if (SYNC.hecho) { e = await enviar(op); if (e === "red") break; if (!e || OUT[op.path] !== op) continue; }
+      await marcarRechazo(op, e); changed();
     }
   } finally { SYNC.enCurso = ""; syncing = false; SYNC.rechazadas = rechazadas().length; recalcEstado(); changed(); }
   if (enviables().length) { clearTimeout(syncTimer); syncTimer = setTimeout(() => { netFail = false; syncNow(); }, 8000); }
@@ -257,14 +286,18 @@ function subscribeAudit(uid) {
   if (!uid || auditSubs.has(uid) || !DS.isAdmin || DS.mode !== "db") return; auditSubs.add(uid);
   DS.subs.push(DS.dbh.collection("audit/" + uid + "/d").onSnapshot(snap => { const m = Object.assign({}, DS.c.audit || {}); snap.docs.forEach(d => { m[uid + "__" + d.id] = d.data(); }); DS.c.audit = m; changed(); }, () => {}));
 }
-function syncAuditSubs() { if (DS.mode !== "db" || DS.backend !== "claude" || !DS.isAdmin) return; if (DS.uid) subscribeAudit(DS.uid); for (const d of Object.values(DS.c.dispositivos || {})) if (d.uid) subscribeAudit(d.uid); for (const d of Object.values(DS.c.ventas || {})) if (d.uid) subscribeAudit(d.uid); }
+function syncAuditSubs() { if (DS.mode !== "db" || DS.backend !== "claude" || !DS.isAdmin) return; if (DS.uid) subscribeAudit(DS.uid); for (const d of Object.values(DS.c.dispositivos || {})) if (d && d.uid) subscribeAudit(d.uid); for (const d of Object.values(DS.c.ventas || {})) if (d.uid) subscribeAudit(d.uid); }
 
 /* ---------- arranque ---------- */
 async function bootData() {
   await IDB.open(); await bootDevice(); await loadAcks();
   const docs = await IDB.getAll("docs"), outbox = await IDB.getAll("outbox"), ident = await IDB.get("kv", "ident");
   for (const x of Object.values(docs)) (DS.c[x.col] = DS.c[x.col] || {})[x.id] = x.data;
-  for (const [p, op] of Object.entries(outbox)) { OUT[p] = op; if (op.estado === "rechazada") SYNC.rechazadas++; if (op.del) { if (DS.c[op.col]) delete DS.c[op.col][op.id]; } else (DS.c[op.col] = DS.c[op.col] || {})[op.id] = op.data; }
+  // lo rechazado antes de esta versión se reintenta una vez, con número nuevo (p. ej. una anulación que llegó antes que su venta);
+  // solo lo de quien tenía la sesión abierta: lo de otra persona sigue a la vista como rechazado
+  const reint = [], yo = ident && ident.uid, mio = op => !op.uid || op.uid === yo || op.uid === "local";
+  for (const [p, op] of Object.entries(outbox)) { if (op.estado === "rechazada" && !op.reint && mio(op)) { op.estado = "pendiente"; op.reint = 1; numeroNuevo(op); reint.push(["outbox", "put", p, op]); } OUT[p] = op; if (op.estado === "rechazada") SYNC.rechazadas++; if (op.del) { if (DS.c[op.col]) delete DS.c[op.col][op.id]; } else (DS.c[op.col] = DS.c[op.col] || {})[op.id] = op.data; }
+  if (reint.length) await IDB.tx(reint).catch(() => {});
   if (window.OLI_CONFIG && window.OLI_CONFIG.supabaseUrl && typeof window.bootSupabase === "function") { await window.bootSupabase(ident); return; }
   const pedir = async () => { try { if (window.claude && typeof window.claude.use === "function") { const r = await Promise.all([window.claude.use("db"), window.claude.use("user")]); return r; } } catch (e) {} return [null, null]; };
   let [db, user] = await pedir();
@@ -302,7 +335,9 @@ let lastHb = 0;
 function heartbeat(force) {
   if (DS.mode !== "db" || !DEV.listo || !DEV.nombre || !conRed() || DS.needsLogin) return;
   if (Date.now() - lastHb < (force ? 15000 : 40000)) return; lastHb = Date.now();
-  put("dispositivos", DEV.id, {dev: DEV.id, nombre: DEV.nombre, uid: DS.uid || "", rol: DS.isAdmin ? "admin" : "empleado", vis: Date.now(), pend: pendientes().length, ventasPend: ventasPendientes(), v: 2}).catch(() => {});
+  const rech = rechazadas();                                                                  // el administrador ve en su equipo lo que el servidor le rechazó a este
+  put("dispositivos", DEV.id, {dev: DEV.id, nombre: DEV.nombre, uid: DS.uid || "", rol: DS.isAdmin ? "admin" : "empleado", vis: Date.now(), pend: pendientes().length, ventasPend: ventasPendientes(),
+    rech: rech.length, rechInfo: rech.slice(0, 5).map(o => ({c: descCambio(o), e: o.detalle || "", t: o.t})), v: 2}).catch(() => {});
 }
 
 /* ---------- conflictos: inventario negativo tras sincronizar ---------- */

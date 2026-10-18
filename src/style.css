@@ -45,6 +45,8 @@ h3{font-size:18px;margin:0 0 10px}
 .top .when{flex:1;min-width:0}
 .top .when b{display:block;font-size:14px}
 .top .when small{display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.top .when .estado-btn{display:flex;align-items:center;gap:6px;min-width:0;max-width:100%;min-height:28px;padding:0;border:0;background:none;font:inherit;color:inherit;cursor:pointer;text-align:left}
+.top .when .estado-btn span{overflow:hidden;text-overflow:ellipsis}
 .dot{width:7px;height:7px;border-radius:50%;background:var(--ok);flex:none}.dot.off{background:var(--muted)}.dot.bad{background:var(--danger)}
 .iconbtn{position:relative;display:grid;place-items:center;width:42px;height:42px;border-radius:12px;border:1px solid var(--line);background:var(--surface);color:var(--ink)}
 .iconbtn[data-n]::after{content:attr(data-n);position:absolute;top:-5px;right:-5px;min-width:18px;height:18px;border-radius:9px;background:var(--danger);color:#fff;font-size:11px;font-weight:700;display:grid;place-items:center;padding:0 4px}

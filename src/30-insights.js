@@ -248,8 +248,13 @@ function anomalias() {
 const enMin = t => Math.max(0, Math.round((Date.now() - t) / 60000));
 const haceTxt = t => { const m = enMin(t); return m < 1 ? "hace segundos" : m < 60 ? "hace " + m + " min" : m < 1440 ? "hace " + Math.round(m / 60) + " h" : "hace " + Math.round(m / 1440) + " d"; };
 function dispositivosEstado() {
-  const now = Date.now(); return Object.values(col("dispositivos")).map(d => { const dt = now - (d.vis || 0), on = dt < 100000, mine = d.dev === DEV.id; return Object.assign({}, d, {online: mine ? SYNC.online : on, hace: dt, mine, pendMios: mine ? ventasPendientes() : d.ventasPend}); }).sort((a, b) => b.vis - a.vis);
+  const now = Date.now(); return Object.values(col("dispositivos")).filter(d => d && typeof d === "object").map(d => { const dt = now - (d.vis || 0), on = dt < 100000, mine = d.dev === DEV.id;
+    return Object.assign({}, d, {online: mine ? SYNC.online : on, hace: dt, mine, pendMios: mine ? ventasPendientes() : d.ventasPend, rech: mine ? rechazadas().length : Number(d.rech) || 0, rechInfo: mine ? [] : rechInfoDe(d)}); }).sort((a, b) => b.vis - a.vis);
 }
+/* lo que otro equipo cuenta de sus cambios rechazados llega de afuera: se normaliza para que un dato raro no rompa la pantalla */
+const rechInfoDe = d => (Array.isArray(d.rechInfo) ? d.rechInfo : []).filter(x => x && typeof x === "object").slice(0, 5).map(x => ({c: String(x.c || "Un cambio"), e: String(x.e || "")}));
+const rechTxt = d => d.rechInfo.map(x => x.c + (x.e ? " (" + x.e + ")" : "")).join("; ");
+const DIAS_EQUIPO_VIEJO = 3;
 
 /* ---- alertas unificadas (cada rol ve lo que le corresponde) ---- */
 function alertas() {
@@ -259,8 +264,13 @@ function alertas() {
     for (const r of riesgosInsumos()) out.push({sev: r.sev, tipo: "inventario", t: r.t, d: r.d, tab: "inventario", pid: r.pid});
     const pend = ventasOk().filter(v => v.pend).length; if (pend) out.push({sev: "warn", tipo: "caja", t: pend + (pend === 1 ? " pago digital por confirmar." : " pagos digitales por confirmar."), d: "Verifica que llegó el dinero.", tab: "caja"});
     const c = cajaHoy(); if (c && cajaEstado(c) === "cerrada") { const ci = c.cierres.slice(-1)[0]; if (ci && Math.abs(ci.dif) >= 1) out.push({sev: "warn", tipo: "caja", t: "Diferencia de caja de " + fmt(ci.dif) + " en " + (col("dispositivos")[c.dev] || {nombre: "la caja"}).nombre + ".", d: ci.obs ? "Observación: " + ci.obs : "Sin observación.", tab: "caja"}); }
-    if (SYNC.rechazadas) out.push({sev: "bad", tipo: "sync", t: SYNC.rechazadas + " operación(es) no se pudieron sincronizar.", d: "El servidor las rechazó; quedan guardadas en este dispositivo.", tab: "ajustes"});
+    if (SYNC.rechazadas) out.push({sev: "bad", tipo: "sync", t: SYNC.rechazadas === 1 ? "Un cambio de este equipo no se pudo enviar: el servidor no lo aceptó." : SYNC.rechazadas + " cambios de este equipo no se pudieron enviar: el servidor no los aceptó.", d: rechazadas().map(descCambio).join("; ") + ". Toca «Hay datos que revisar» (arriba) para ver por qué y reintentar.", tab: "equipo"});
     if (adm) {
+      for (const d of dispositivosEstado()) if (!d.mine && d.rech > 0) { const uno = d.rech === 1, dias = Math.floor(d.hace / 86400000);
+        out.push({sev: "bad", tipo: "sync", t: (d.nombre || "Otro equipo") + ": " + (uno ? "un cambio que el servidor no aceptó." : d.rech + " cambios que el servidor no aceptó."),
+          d: rechTxt(d) + ". " + (dias >= DIAS_EQUIPO_VIEJO
+            ? "Ese equipo no se conecta desde hace " + dias + " días: si se borró o se reemplazó, " + (uno ? "ese cambio se perdió" : "esos cambios se perdieron") + " (no llegaron al servidor). Si ya no existe, quita este aviso en Equipo → «Quitar el aviso»."
+            : (uno ? "Sigue guardado" : "Siguen guardados") + " en ese equipo, no en el servidor: allá toca «Hay datos que revisar» (arriba) y luego «Reintentar el envío». Si vuelve a fallar, ingresa en ese equipo con tu cuenta: como administrador puedes reintentarlo o descartarlo. Última conexión de ese equipo: " + haceTxt(d.vis) + "."), tab: "equipo"}); }
       for (const a of anomalias()) out.push({sev: a.sev, tipo: "anomalia", t: a.t, d: a.d, tab: a.ir === "hoy" ? "hoy" : a.ir === "compras" ? "compras" : a.ir === "inventario" ? "inventario" : a.ir === "cierres" ? "reportes" : "reportes", anom: true});
       for (const a of alertasCostos()) out.push({sev: a.tipo === "sube" ? "warn" : "ok", tipo: "costo", t: (a.insumo ? "El costo de " : "El costo de ") + a.p.nombre + (a.tipo === "sube" ? " aumentó " : " bajó ") + Math.round(Math.abs(a.ch) * 100) + "%.", d: a.insumo ? "Costo anterior " + fmt(a.prev) + ", nuevo " + fmt(a.nuevo) + ". Revisa precio o receta." : "Margen de " + pct(a.mPrev) + " a " + pct(a.mNuevo) + ". Revisa precio o receta.", tab: "productos", pid: a.p.id});
       const pp = proximoPuente(7); if (pp) out.push({sev: "warn", tipo: "compra", t: "Se viene fin de semana largo: " + rangoFechasTxt(pp.fechas) + ".", d: (pp.nombres.join(", ") || "Festivo") + ". Haz el pedido para los " + pp.fechas.length + " días: OLI ya pide " + Math.round(colchonFestivo() * 100) + " % más para esos días.", tab: "compras"});
