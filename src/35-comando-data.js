@@ -90,7 +90,7 @@ function preparacion(fecha) {
   return {fecha, rows: rows.sort((a, b) => b.rec - a.rec), insumos: insRows, cuellos: insRows.filter(i => i.falta)};
 }
 function compraResumen() {
-  const rec = recomendarCompra(fechasHorizonte("3")).filter(r => r.comprar > 0 && r.riesgo !== "ok" || (r.comprar > 0 && r.st != null && r.st <= (r.p.min || 0)));
+  const rec = recomendarCompra(fechasHorizonte("3")).filter(r => !r.semanal && (r.comprar > 0 && r.riesgo !== "ok" || (r.comprar > 0 && r.st != null && r.st <= (r.p.min || 0))));   // lo del pedido semanal va aparte (bCompra)
   const costo = sum(rec, r => (costoActual(r.pid) || 0) * r.comprar);
   return {rows: rec, total: sum(rec, r => r.comprar), costo, sinCosto: rec.filter(r => costoActual(r.pid) == null).length};
 }

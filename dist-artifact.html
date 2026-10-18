@@ -333,7 +333,7 @@ details.help span{display:block;font-weight:500;font-size:13px;line-height:1.35;
 <div class="sheet hidden" id="sheet"><div class="bg"></div><div class="panel" role="dialog" aria-modal="true" id="panel"></div></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script>window.OLI_BUILD="5bdc6dad";</script>
+<script>window.OLI_BUILD="43dd4e3b";</script>
 <script>
 (function(){
 "use strict";
@@ -1545,6 +1545,42 @@ function fechasHorizonte(k) {
 const HORIZONTES = [["hoy", "Hoy"], ["3", "3 días"], ["7", "Semana"], ["finde", "Fin de semana"], ["custom", "Rango"]];
 const comprasPend = () => memo("cpend", () => { const m = {}; for (const c of Object.values(col("compras"))) if (c.estado === "pedido") for (const l of (c.lineas || [])) m[l.pid] = (m[l.pid] || 0) + (l.q || 0); return m; });
 
+/* ---- pedido semanal: productos que solo llegan un día de la semana (p. ej. las paletas: llegan el martes, se piden hasta el lunes a las 12 m.,
+   vienen en paquetes de 10). Para esos no sirve pedir "para 3 días": lo que se pide hoy llega el próximo día de llegada y tiene que alcanzar
+   hasta el siguiente. A pedir = demanda de esa semana (del día de llegada a la víspera del siguiente) + seguridad − lo que quedará al llegar
+   (inventario + lo ya pedido − lo que se venda antes), redondeado a paquetes. Configuración: config.negocio.pedidoSemanal. ---- */
+const pedidoSemanalCfg = () => { const c = configNeg().pedidoSemanal; return c && c.activo !== false && Array.isArray(c.cats) && c.cats.length ? c : null; };
+const esSemanal = p => { const c = pedidoSemanalCfg(); return !!(c && p && c.cats.includes(p.cat)); };
+// la próxima llegada que todavía se alcanza a pedir: {llega, cierre (día límite), lim (ms), sig (la llegada siguiente)}
+function proximaLlegada(ahora = Date.now()) {
+  const c = pedidoSemanalCfg(); if (!c) return null;
+  for (let i = 1; i <= 14; i++) {
+    const f = addDays(S.today, i); if (dowOf(f) !== Number(c.llega)) continue;
+    let dc = f; for (let k = 0; k < 7 && dowOf(dc) !== Number(c.cierreDia); k++) dc = addDays(dc, -1);
+    const lim = parse(dc).getTime() + (Number(c.cierreHora) || 0) * 3600000;
+    if (ahora < lim) return {llega: f, cierre: dc, lim, sig: addDays(f, 7)};
+  }
+  return null;
+}
+const horaTxt = h => { h = Number(h) || 0; return h === 12 ? "12 m." : (h % 12 || 12) + (h < 12 ? " a. m." : " p. m."); };
+function planSemanal(p, st, pend) {
+  const L = proximaLlegada(); if (!L) return null; const c = pedidoSemanalCfg();
+  const antes = []; for (let d = S.today; d < L.llega; d = addDays(d, 1)) antes.push(d);
+  const semana = Array.from({length: 7}, (_, i) => addDays(L.llega, i)), demAntes = demanda(p.id, antes), demSem = demanda(p.id, semana);
+  const pack = (p.pack || 1) > 1 ? p.pack : Math.max(1, Number(c.paquete) || 1);
+  const alLlegar = st == null || demAntes == null ? null : st + pend - demAntes;          // negativo: se acaba antes de que llegue el pedido
+  const need = demSem == null ? null : demSem + (p.seg || 0) - Math.max(alLlegar == null ? 0 : alLlegar, 0);
+  const comprar = need == null ? null : Math.ceil(Math.max(0, Math.ceil(need - 1e-9)) / pack) * pack;
+  return {L, antes, semana, demAntes, demSem, pack, alLlegar, need, comprar, paquetes: comprar == null ? null : comprar / pack};
+}
+
+// para Inicio y los recordatorios: cuánto pedir en el próximo pedido semanal y si ya se hizo
+function pedidoSemanalResumen() {
+  const c = pedidoSemanalCfg(), L = c && proximaLlegada(); if (!L) return null;
+  const todas = recomendarCompra([S.today]).filter(r => r.semanal), rows = todas.filter(r => r.comprar > 0), hecho = Object.values(col("compras")).some(x => x && x.estado === "pedido" && x.llega === L.llega);
+  return {L, cats: c.cats.join(", "), cierreHora: c.cierreHora, rows, hecho, paquetes: sum(rows, r => r.semanal.paquetes || 0), unidades: sum(rows, r => r.comprar), horas: (L.lim - Date.now()) / 3600000, agotan: todas.filter(r => r.semanal.alLlegar != null && r.semanal.alLlegar < 0)};
+}
+
 /* ---- cuándo se agota ---- */
 function agotaEn(pid) {
   const p = prod(pid), st = stockDe(pid); if (st == null || p.controla === false) return null; if (st <= 0) return {dias: 0, fecha: S.today};
@@ -1558,10 +1594,12 @@ function recomendarCompra(fechas) {
   return terminados().filter(p => p.activo !== false && p.controla !== false && !p.combo).map(p => {
     const st = stockDe(p.id), avg = avgDaily(p.id), dem = demanda(p.id, fechas), seg = p.seg || 0, pend = comprasPend()[p.id] || 0, cov = cobertura(p.id), tp = tendencia(p.id);
     const u7 = unidadesVent(p.id, 7);
-    const need = dem == null ? null : dem + seg - Math.max(st == null ? 0 : st, 0) - pend;
-    let comprar = need == null ? null : Math.max(0, Math.ceil(need)); const pack = p.pack || 1; if (comprar && pack > 1) comprar = Math.ceil(comprar / pack) * pack;
+    const sem = esSemanal(p) ? planSemanal(p, st, pend) : null;   // llega un solo día de la semana: se calcula para esa semana, sin importar el periodo elegido
+    const need = sem ? sem.need : dem == null ? null : dem + seg - Math.max(st == null ? 0 : st, 0) - pend;
+    let comprar = sem ? sem.comprar : need == null ? null : Math.max(0, Math.ceil(need)); const pack = sem ? sem.pack : p.pack || 1; if (!sem && comprar && pack > 1) comprar = Math.ceil(comprar / pack) * pack;
     const ag = agotaEn(p.id), riesgo = st != null && st <= 0 ? "bad" : (ag && ag.dias <= 2) ? "bad" : (ag && ag.dias <= 5) ? "warn" : st != null && st <= (p.min || 0) ? "warn" : "ok";
-    return {pid: p.id, p, st, avg, dem, seg, pend, cov, comprar, riesgo, ag, why: {avg, u7: u7.u, dias7: u7.dias, tend: tp, st, cov, dem, seg, pend, comprar, fechas, pack, fac: fechas.map(f => factorDia(f).fac), esp: fechas.map(f => ({f, x: factorDia(f)})).filter(o => o.x.esp)}};
+    const ds = sem ? sem.demSem : dem, fs = sem ? sem.semana : fechas;
+    return {pid: p.id, p, st, avg, dem: ds, seg, pend, cov, comprar, riesgo, ag, semanal: sem, why: {avg, u7: u7.u, dias7: u7.dias, tend: tp, st, cov, dem: ds, seg, pend, comprar, fechas: fs, pack, fac: fs.map(f => factorDia(f).fac), esp: fs.map(f => ({f, x: factorDia(f)})).filter(o => o.x.esp)}};
   }).sort((a, b) => ({bad: 0, warn: 1, ok: 2}[a.riesgo] - {bad: 0, warn: 1, ok: 2}[b.riesgo]) || (b.comprar || 0) - (a.comprar || 0));
 }
 function explicarCompra(r) {
@@ -1570,8 +1608,11 @@ function explicarCompra(r) {
     ["Tendencia", w.tend == null ? "sin datos" : (w.tend >= 1 ? "+" : "") + Math.round((w.tend - 1) * 100) + "%"], ["Inventario actual", r.st == null ? "sin contar" : String(Math.max(0, r.st))],
     ["Cobertura", w.cov == null ? "sin datos" : w.cov === Infinity ? "sin ventas" : fmtN(w.cov, 1) + " días"], ["Demanda estimada", w.dem == null ? "sin datos" : fmtN(w.dem, 0)],
     ["Stock de seguridad", String(w.seg)], ["Pedidos por llegar", String(w.pend)]);
+  const sm = r.semanal; if (sm) l.push(["Llega el pedido", diaCorto(sm.L.llega) + " (se pide hasta el " + diaCorto(sm.L.cierre) + ", " + horaTxt(pedidoSemanalCfg().cierreHora) + ")"],
+    ["Se venderán antes de que llegue", sm.demAntes == null ? "sin datos" : fmtN(sm.demAntes, 0)], ["Quedarán al llegar", sm.alLlegar == null ? "sin contar" : sm.alLlegar < 0 ? "0 (se acaba antes: faltarían ~" + fmtN(-sm.alLlegar, 0) + ")" : fmtN(sm.alLlegar, 0)],
+    ["Demanda de la semana del pedido", (sm.demSem == null ? "sin datos" : fmtN(sm.demSem, 0)) + " (" + diaCorto(sm.semana[0]) + " a " + diaCorto(sm.semana[6]) + ")"], ["Viene en paquetes de", String(sm.pack)]);
   for (const o of w.esp || []) l.push([diaCorto(o.f) + " · " + o.x.esp.n, (o.x.esp.tipo === "festivo" ? "Festivo" : o.x.esp.tipo === "temporada" ? "Semana Santa" : "Puente") + ": " + o.x.fuente]);
-  l.push(["Cantidad recomendada", w.comprar == null ? "—" : String(w.comprar)]);
+  l.push(["Cantidad recomendada", w.comprar == null ? "—" : String(w.comprar) + (sm && w.comprar ? " (" + sm.paquetes + (sm.paquetes === 1 ? " paquete)" : " paquetes)") : "")]);
   return l;
 }
 function riesgosStock() {
@@ -1593,7 +1634,7 @@ function prepararFinde() {
   const basico = !hi.ok || !(df.ok[6] && df.ok[0]);
   const rows = recomendarCompra(fechas).map(r => {
     const disp = r.st == null ? 0 : Math.max(0, r.st), dem = r.dem, deficit = dem == null ? null : Math.max(0, dem + r.seg - disp);
-    return Object.assign({}, r, {disp, deficit, riesgoF: dem == null ? "sin" : dem + r.seg > disp ? (disp < dem ? "bad" : "warn") : "ok"});
+    return Object.assign({}, r, {disp, deficit, riesgoF: dem == null ? "sin" : dem + r.seg > disp ? (disp < dem ? "bad" : "warn") : "ok"}, r.semanal ? {comprar: 0} : {});   // lo que llega un solo día se pide en su pedido semanal
   });
   const ventasEsp = sum(vendibles(), p => (demandaVendida(p.id, fechas) || 0) * (p.precio || 0)), enRiesgo = rows.filter(r => r.riesgoF === "bad" || r.riesgoF === "warn");
   return {fechas, rows, ventasEsp, enRiesgo, basico, datosOk: hi.ok};
@@ -1787,7 +1828,9 @@ function decisionesHoy() {
   return memo("decisiones", () => {
     const urg = [], imp = [], opo = [], t = S.today;
     for (const r of riesgosStock()) { const p = prod(r.pid); const rec = recomendarCompra(fechasHorizonte("3")).find(x => x.pid === r.pid);
+      if (rec && rec.semanal) { if (rec.semanal.alLlegar != null && rec.semanal.alLlegar < 0) imp.push({t: p.nombre + " se puede acabar antes del " + DOW[dowOf(rec.semanal.L.llega)] + ".", d: r.d + " El pedido llega el " + diaCorto(rec.semanal.L.llega) + ".", tab: "compras"}); continue; }   // va en el pedido semanal
       const acc = rec && rec.comprar ? "Comprar " + rec.comprar + " de " + p.nombre + "." : r.t; (r.sev === "bad" ? urg : imp).push({t: acc, d: r.d, tab: "compras"}); }
+    const ps = pedidoSemanalResumen(); if (ps && !ps.hecho && ps.paquetes > 0 && ps.horas <= 36) (ps.horas <= 6 ? urg : imp).unshift({t: "Hacer el pedido de " + ps.cats + ": " + ps.paquetes + (ps.paquetes === 1 ? " paquete" : " paquetes") + ".", d: "Se puede pedir hasta el " + diaCorto(ps.L.cierre) + " a las " + horaTxt(ps.cierreHora) + " (llega el " + diaCorto(ps.L.llega) + ").", tab: "compras"});
     for (const r of riesgosInsumos()) (r.sev === "bad" ? urg : imp).push({t: "Reponer " + prod(r.pid).nombre + ".", d: r.d, tab: "compras"});
     // cajas de días anteriores que siguen abiertas (de cualquier equipo): RESOLVER abre el cierre de esa caja
     for (const c of cajasAll().filter(c => c.fecha < t && c.fecha >= addDays(t, -7) && c.apertura && cajaEstado(c) === "abierta").sort((a, b) => b.fecha.localeCompare(a.fecha))) urg.push({t: "Cerrar la caja " + (c.fecha === addDays(t, -1) ? "de ayer" : "del " + diaCorto(c.fecha)) + " (" + ((col("dispositivos")[c.dev] || {}).nombre || c.devNombre || "caja") + ").", d: "Quedó abierta. Cuenta el efectivo de esa caja y ciérrala.", tab: "caja", act: "cerrarCaja", id: c.id});
@@ -1809,8 +1852,9 @@ function decisionesHoy() {
 function resumenDia(fecha = S.today) {
   const f = finanzas(fecha, fecha), rent = rentabilidad(fecha, fecha).sort((a, b) => b.uds - a.uds), est = rent[0], ago = prods().filter(p => p.activo !== false && p.controla !== false && estadoProd(p).k === "agotado");
   const cajas = cajasAll().filter(c => c.fecha === fecha && cajaEstado(c) === "cerrada"), dif = sum(cajas, difFinal), al = alertas().length;   // una caja reabierta no cuenta su cierre viejo
-  const rec = recomendarCompra(fechasHorizonte("finde")).filter(r => r.comprar > 0 && r.riesgo !== "ok").slice(0, 2);
-  const recTxt = rec.length ? "Comprar " + rec.map(r => r.comprar + " " + r.p.nombre.replace(/^Paleta /, "")).join(" y ") + " antes del " + DOW[6] + "." : (ago.length ? "Reponer " + ago.map(p => p.nombre).slice(0, 2).join(" y ") + "." : "Todo en orden. Sigue así.");
+  const rec = recomendarCompra(fechasHorizonte("finde")).filter(r => r.comprar > 0 && r.riesgo !== "ok" && !r.semanal).slice(0, 2), ps = pedidoSemanalResumen();
+  const psTxt = ps && !ps.hecho && ps.paquetes > 0 && ps.horas <= 72 ? "Pedido de " + ps.cats + " (hasta el " + diaCorto(ps.L.cierre) + ", " + horaTxt(ps.cierreHora) + "): " + ps.paquetes + " paquetes." : "";
+  const recTxt = rec.length ? "Comprar " + rec.map(r => r.comprar + " " + r.p.nombre.replace(/^Paleta /, "")).join(" y ") + " antes del " + DOW[6] + "." + (psTxt ? " " + psTxt : "") : psTxt || (ago.length ? "Reponer " + ago.map(p => p.nombre).slice(0, 2).join(" y ") + "." : "Todo en orden. Sigue así.");
   return {f, fecha, uds: sum(rent, r => r.uds), est, ago, dif, al, rec: recTxt, txt: ""};
 }
 function resumenTexto(r) {
@@ -1911,7 +1955,7 @@ function preparacion(fecha) {
   return {fecha, rows: rows.sort((a, b) => b.rec - a.rec), insumos: insRows, cuellos: insRows.filter(i => i.falta)};
 }
 function compraResumen() {
-  const rec = recomendarCompra(fechasHorizonte("3")).filter(r => r.comprar > 0 && r.riesgo !== "ok" || (r.comprar > 0 && r.st != null && r.st <= (r.p.min || 0)));
+  const rec = recomendarCompra(fechasHorizonte("3")).filter(r => !r.semanal && (r.comprar > 0 && r.riesgo !== "ok" || (r.comprar > 0 && r.st != null && r.st <= (r.p.min || 0))));   // lo del pedido semanal va aparte (bCompra)
   const costo = sum(rec, r => (costoActual(r.pid) || 0) * r.comprar);
   return {rows: rec, total: sum(rec, r => r.comprar), costo, sinCosto: rec.filter(r => costoActual(r.pid) == null).length};
 }
@@ -3573,9 +3617,15 @@ function bInventario() {
     ${c.sin ? `<div class="small muted">${c.sin} sin contar</div>` : ""}${rs.length ? `<div class="small" style="font-weight:700;margin:8px 0 2px">Riesgo de agotarse pronto</div>${rs.map(x => `<div class="row" style="padding:8px 0"><span>${esc(x.p.nombre)}</span><b>${x.rh ? fmtN(x.rh.horas, 1) + " horas" : x.cov < 1 ? "menos de 1 día" : fmtN(x.cov, 1) + " días"}</b></div>`).join("")}` : '<p class="small muted">Nada en riesgo de agotarse pronto.</p>'}
     <button class="btn ghost sm" style="margin-top:8px" data-act="ir" data-r="inventario">VER INVENTARIO</button></div>`;
 }
+function bSemanal() {
+  const ps = pedidoSemanalResumen(); if (!ps) return "";
+  return `<div class="${ps.horas <= 24 && !ps.hecho && ps.paquetes ? "notice warn" : "card flat"}" style="margin:0 0 10px"><b>Pedido de ${esc(ps.cats)} · llega el ${esc(diaCorto(ps.L.llega))}</b>
+    <div class="small">${ps.hecho ? "Ya está pedido." : ps.paquetes ? ps.paquetes + (ps.paquetes === 1 ? " paquete" : " paquetes") + " (" + ps.unidades + " unidades) · pídelo hasta el " + esc(diaCorto(ps.L.cierre)) + ", " + horaTxt(ps.cierreHora) : "Con lo que hay alcanza hasta la llegada siguiente."}</div>
+    ${ps.agotan.length ? `<div class="small" style="color:var(--danger)">Se pueden acabar antes de que llegue: ${esc(ps.agotan.slice(0, 3).map(r => r.p.nombre).join(", "))}${ps.agotan.length > 3 ? " y " + (ps.agotan.length - 3) + " más" : ""}.</div>` : ""}</div>`;
+}
 function bCompra() {
-  const cr = compraResumen(); if (!cr.rows.length) return `<div class="card"><h3>${ic("compras", 18)} Compra recomendada</h3><p class="muted" style="margin:0">Por ahora no hace falta comprar. El inventario cubre la demanda de los próximos días.</p></div>`;
-  return `<div class="card"><h3>${ic("compras", 18)} Compra recomendada</h3><p class="small muted" style="margin-top:-4px">${cr.rows.length} productos críticos · fecha recomendada: <b>HOY</b></p>
+  const cr = compraResumen(), sem = bSemanal(); if (!cr.rows.length) return `<div class="card"><h3>${ic("compras", 18)} Compra recomendada</h3>${sem}${sem ? `<button class="btn ghost sm" data-act="ir" data-r="compras">VER EL PEDIDO</button>` : `<p class="muted" style="margin:0">Por ahora no hace falta comprar. El inventario cubre la demanda de los próximos días.</p>`}</div>`;
+  return `<div class="card"><h3>${ic("compras", 18)} Compra recomendada</h3>${sem}<p class="small muted" style="margin-top:-4px">${cr.rows.length} productos críticos · fecha recomendada: <b>HOY</b></p>
     ${cr.rows.slice(0, 5).map(r => `<div class="row" style="padding:8px 0"><span>${esc(r.p.nombre)}</span><b>${r.comprar}</b></div>`).join("")}${cr.rows.length > 5 ? `<div class="small muted">y ${cr.rows.length - 5} más</div>` : ""}
     <div class="row" style="border:0"><b>Total</b><b>${cr.total} unidades${cr.costo ? " · " + fmt(cr.costo) : ""}</b></div><p class="xs muted" style="margin:0 0 10px">Calculado según ventas históricas, inventario actual, demanda esperada y stock de seguridad.${cr.sinCosto ? " " + cr.sinCosto + " productos sin costo: el total es incompleto." : ""}</p>
     <button class="btn pri" data-act="ir" data-r="compras">VER LISTA DE COMPRA</button></div>`;
@@ -3680,20 +3730,58 @@ VIEWS.compras = () => {
 };
 ACT.comprasTab = (el, d) => { S.comprasTab = d.v; draw(); };
 function vPedir() {
-  const hi = histInfo(), fechas = fechasHorizonte(S.horiz), rows = recomendarCompra(fechas), con = rows.filter(r => r.comprar > 0), sinHist = !hi.ok;
-  if (!S.sel) S.sel = new Set(con.filter(r => r.riesgo !== "ok" || (r.st != null && r.st <= (r.p.min || 0))).map(r => r.pid));
-  const total = sum(rows.filter(r => S.sel.has(r.pid)), r => (costoActual(r.pid) || 0) * r.comprar), uds = sum(rows.filter(r => S.sel.has(r.pid)), r => r.comprar);
-  return `<div class="seg" style="margin-bottom:12px">${HORIZONTES.map(([k, l]) => `<button data-act="horiz" data-v="${k}" aria-pressed="${S.horiz === k}">${l}</button>`).join("")}</div>
+  const hi = histInfo(), fechas = fechasHorizonte(S.horiz), rows = recomendarCompra(fechas), sem = rows.filter(r => r.semanal), otros = rows.filter(r => !r.semanal), sinHist = !hi.ok;
+  if (!S.sel) S.sel = new Set(sem.filter(r => r.comprar > 0).concat(otros.filter(r => r.comprar > 0 && (r.riesgo !== "ok" || (r.st != null && r.st <= (r.p.min || 0))))).map(r => r.pid));
+  const elegidas = otros.filter(r => S.sel.has(r.pid)), total = sum(elegidas, r => (costoActual(r.pid) || 0) * r.comprar), uds = sum(elegidas, r => r.comprar);
+  return `${bloqueSemanal(sem)}
+  ${sem.length ? `<h3 style="margin:18px 0 8px">Lo demás</h3>` : ""}<div class="seg" style="margin-bottom:12px">${HORIZONTES.map(([k, l]) => `<button data-act="horiz" data-v="${k}" aria-pressed="${S.horiz === k}">${l}</button>`).join("")}</div>
   ${S.horiz === "custom" ? `<div class="split" style="margin-bottom:10px"><div><label class="f" for="f-desde">Desde</label><input class="in" type="date" id="f-desde" value="${esc(S.desde || S.today)}" data-act-change="fechas"></div><div><label class="f" for="f-hasta">Hasta</label><input class="in" type="date" id="f-hasta" value="${esc(S.hasta || addDays(S.today, 6))}" data-act-change="fechas"></div></div>` : ""}
   ${avisoFestivos(fechas)}
   ${sinHist ? `<div class="notice">Todavía hay pocos días de ventas (${hi.n} de ${MIN_DIAS}). Las cantidades usan lo que hay y pueden cambiar mucho. Con más historia serán más confiables.</div>` : ""}
   ${rows.length ? "" : vacio("inventario", "No hay productos con inventario", "Activa el control de inventario en tus productos.")}
-  ${rows.map(r => `<div class="card" style="padding:14px"><div style="display:flex;gap:12px;align-items:center"><label class="check" style="flex:none;min-height:48px"><input type="checkbox" data-act-change="selCompra" data-id="${esc(r.pid)}" ${S.sel.has(r.pid) ? "checked" : ""} ${r.comprar > 0 ? "" : "disabled"} aria-label="Incluir ${esc(r.p.nombre)}"></label>
-    <div style="flex:1;min-width:0"><b>${esc(r.p.nombre)}</b><div class="small muted"><span class="sev ${r.riesgo === "ok" ? "" : r.riesgo}" style="display:inline-block;margin-right:6px"></span>${r.riesgo === "bad" ? "Urgente" : r.riesgo === "warn" ? "Pronto" : "Normal"} · hay ${r.st == null ? "?" : Math.max(0, r.st)}${r.cov != null && r.cov !== Infinity ? " · alcanza " + fmtN(r.cov, 1) + " días" : ""}</div></div>
-    <div style="text-align:right"><div class="small muted">Comprar</div><div class="big" style="font-size:30px">${r.comprar == null ? "–" : r.comprar}</div></div></div>
-    <button class="btn ghost sm" style="margin-top:8px" data-act="porque" data-id="${esc(r.pid)}" data-h="${esc(S.horiz)}">¿Por qué?</button></div>`).join("")}
-  ${rows.length ? `<div class="card" style="position:sticky;bottom:${isWide() ? 12 : 72}px;box-shadow:0 8px 24px rgba(0,0,0,.12)"><div class="row" style="padding-top:0"><div><b>${S.sel.size} productos · ${uds} unidades</b><div class="small muted">${total ? "Costo estimado " + fmt(total) : "Sin costo registrado"}</div></div></div><button class="btn pri xl wide" data-act="generarPedido" ${S.sel.size ? "" : "disabled"}>${ic("compras", 20)} GENERAR PEDIDO</button></div>` : ""}`;
+  ${otros.map(filaCompra).join("")}
+  ${otros.length ? `<div class="card" style="position:sticky;bottom:${isWide() ? 12 : 72}px;box-shadow:0 8px 24px rgba(0,0,0,.12)"><div class="row" style="padding-top:0"><div><b>${elegidas.length} productos · ${uds} unidades</b><div class="small muted">${total ? "Costo estimado " + fmt(total) : "Sin costo registrado"}</div></div></div><button class="btn pri xl wide" data-act="generarPedido" ${elegidas.length ? "" : "disabled"}>${ic("compras", 20)} GENERAR PEDIDO</button></div>` : ""}
+  ${pedidoSemanalCfg() ? "" : `<p class="small muted" style="margin-top:14px">¿Algunos productos llegan un solo día de la semana (por ejemplo, las paletas)? <button class="btn ghost sm" data-act="cfgSemanal">Configurar pedido semanal</button></p>`}`;
 }
+function filaCompra(r) {
+  const sm = r.semanal, sub = sm ? (sm.alLlegar == null ? "" : sm.alLlegar < 0 ? ` · <span style="color:var(--danger)">se acaba antes del ${DOW[dowOf(sm.L.llega)]}</span>` : " · quedarán ~" + fmtN(sm.alLlegar, 0) + " al llegar") : (r.cov != null && r.cov !== Infinity ? " · alcanza " + fmtN(r.cov, 1) + " días" : "");
+  return `<div class="card" style="padding:14px"><div style="display:flex;gap:12px;align-items:center"><label class="check" style="flex:none;min-height:48px"><input type="checkbox" data-act-change="selCompra" data-id="${esc(r.pid)}" ${S.sel.has(r.pid) ? "checked" : ""} ${r.comprar > 0 ? "" : "disabled"} aria-label="Incluir ${esc(r.p.nombre)}"></label>
+    <div style="flex:1;min-width:0"><b>${esc(r.p.nombre)}</b><div class="small muted"><span class="sev ${r.riesgo === "ok" ? "" : r.riesgo}" style="display:inline-block;margin-right:6px"></span>${r.riesgo === "bad" ? "Urgente" : r.riesgo === "warn" ? "Pronto" : "Normal"} · hay ${r.st == null ? "?" : Math.max(0, r.st)}${sub}</div></div>
+    <div style="text-align:right"><div class="small muted">Comprar</div><div class="big" style="font-size:30px">${r.comprar == null ? "–" : r.comprar}</div>${sm && r.comprar ? `<div class="xs muted">${sm.paquetes} ${sm.paquetes === 1 ? "paquete" : "paquetes"}</div>` : ""}</div></div>
+    <button class="btn ghost sm" style="margin-top:8px" data-act="porque" data-id="${esc(r.pid)}" data-h="${esc(S.horiz)}">¿Por qué?</button></div>`;
+}
+// los productos que llegan un solo día de la semana: su pedido, para cuándo y hasta cuándo se puede pedir
+function bloqueSemanal(sem) {
+  const c = pedidoSemanalCfg(); if (!c) return ""; const L = proximaLlegada(); if (!L) return "";
+  const ya = Object.values(col("compras")).filter(x => x && x.estado === "pedido" && x.llega === L.llega), elegidas = sem.filter(r => S.sel.has(r.pid) && r.comprar > 0);
+  const horas = (L.lim - Date.now()) / 3600000, faltan = horas < 1 ? "faltan " + Math.max(1, Math.round(horas * 60)) + " minutos" : horas < 48 ? "faltan " + Math.floor(horas) + " horas" : "";
+  const paq = sum(elegidas, r => r.semanal.paquetes || 0), costo = sum(elegidas, r => (costoActual(r.pid) || 0) * r.comprar);
+  return `<div class="card" style="border-left:4px solid ${horas < 24 && !ya.length ? "var(--warn)" : "var(--marca)"}"><div class="row" style="padding-top:0;border:0;align-items:flex-start"><div class="l"><b>Pedido de ${esc(c.cats.join(", "))} · llega el ${esc(diaLargo(L.llega))}</b>
+      <div class="small muted">Pídelo hasta el ${esc(diaCorto(L.cierre))} a las ${horaTxt(c.cierreHora)}${faltan ? " · " + faltan : ""}. Tiene que alcanzar del ${esc(diaCorto(L.llega))} al ${esc(diaCorto(addDays(L.sig, -1)))}.</div></div><button class="btn ghost sm" data-act="cfgSemanal">Configurar</button></div>
+    ${ya.length ? `<div class="notice ok" style="margin:8px 0 0">Ya hay ${ya.length === 1 ? "un pedido" : ya.length + " pedidos"} para esa llegada. Lo de abajo ya lo descuenta.</div>` : ""}</div>
+  ${sem.length ? sem.map(filaCompra).join("") : `<p class="muted small">No hay productos de ${esc(c.cats.join(", "))} con control de inventario.</p>`}
+  ${sem.length ? `<div class="card"><div class="row" style="padding-top:0"><div><b>${elegidas.length} productos · ${paq} ${paq === 1 ? "paquete" : "paquetes"} (${sum(elegidas, r => r.comprar)} unidades)</b><div class="small muted">${costo ? "Costo estimado " + fmt(costo) : "Sin costo registrado"}</div></div></div><button class="btn pri xl wide" data-act="generarPedido" data-v="semanal" ${elegidas.length ? "" : "disabled"}>${ic("compras", 20)} GENERAR PEDIDO DEL ${esc(DOW[dowOf(L.llega)].toUpperCase())}</button></div>` : ""}`;
+}
+ACT.cfgSemanal = () => {
+  const c = configNeg().pedidoSemanal || {}, act = pedidoSemanalCfg(), cats = uniq(terminados().filter(p => !p.combo && p.activo !== false).map(p => p.cat || "Otros")).sort(), DIAS = DOW.map(d => d[0].toUpperCase() + d.slice(1));
+  abrir(() => head("Pedido semanal") + `<p class="muted" style="margin-top:0">Para productos que el proveedor trae un solo día de la semana. OLI calcula cuánto pedir para que alcance hasta la llegada siguiente y te recuerda pedir a tiempo.</p>
+    <label class="f">¿Qué productos?</label>${cats.map(k => `<label class="check" style="padding:4px 0"><input type="checkbox" class="ps-cat" value="${esc(k)}" ${(c.cats || ["Paletas"]).includes(k) ? "checked" : ""}> ${esc(k)}</label>`).join("")}
+    <label class="f">¿Qué día llega el pedido?</label>${sel("ps-llega", DIAS, DIAS[c.llega != null ? c.llega : 2])}
+    <label class="f">¿Hasta qué día se puede pedir?</label>${sel("ps-cierre", DIAS, DIAS[c.cierreDia != null ? c.cierreDia : 1])}
+    <div class="split"><div><label class="f" for="ps-hora">¿Hasta qué hora? (0 a 23)</label><input class="in plain" id="ps-hora" inputmode="numeric" value="${esc(c.cierreHora != null ? c.cierreHora : 12)}"></div>
+      <div><label class="f" for="ps-paq">Viene en paquetes de</label><input class="in plain" id="ps-paq" inputmode="numeric" value="${esc(c.paquete || 10)}"></div></div>
+    <p class="xs muted">Si un producto tiene su propio «Viene en cajas de», se usa ese.</p>
+    <button class="btn pri xl wide" style="margin-top:12px" data-act="guardarSemanal">GUARDAR</button>
+    ${act ? `<button class="btn ghost wide" style="margin-top:8px" data-act="quitarSemanal">Ya no llega un solo día</button>` : ""}`);
+};
+ACT.guardarSemanal = () => guardar(async () => {
+  const cats = [...document.querySelectorAll(".ps-cat")].filter(x => x.checked).map(x => x.value), DIAS = DOW.map(d => d[0].toUpperCase() + d.slice(1));
+  const llega = DIAS.indexOf(selVal("ps-llega")), cierreDia = DIAS.indexOf(selVal("ps-cierre")), hora = numCant(($("#ps-hora") || {}).value), paquete = numCant(($("#ps-paq") || {}).value);
+  if (!cats.length) throw new Error("Elige qué productos llegan así."); if (llega < 0 || cierreDia < 0) throw new Error("Elige los días.");
+  if (!(hora >= 0 && hora <= 23) || Math.round(hora) !== hora) throw new Error("La hora va de 0 a 23 (12 = mediodía)."); if (!(paquete >= 1) || Math.round(paquete) !== paquete) throw new Error("Escribe cuántas unidades trae cada paquete.");
+  await guardarConfig({pedidoSemanal: {activo: true, cats, llega, cierreDia, cierreHora: hora, paquete}}); S.sel = null; cerrar();
+}, "Guardado");
+ACT.quitarSemanal = () => guardar(async () => { await guardarConfig({pedidoSemanal: Object.assign({}, configNeg().pedidoSemanal, {activo: false})}); S.sel = null; cerrar(); }, "Listo");
 /* aviso de festivos: los que caen en las fechas del pedido y, si no están, el próximo fin de semana largo */
 function avisoFestivos(fechas) {
   const esp = fechas.map(f => ({f, e: diaEspecial(f)})).filter(o => o.e), pp = proximoPuente(10), pc = Math.round(colchonFestivo() * 100);
@@ -3707,15 +3795,17 @@ document.addEventListener("change", e => {
   if (t.dataset.actChange === "selCompra") { if (t.checked) S.sel.add(t.dataset.id); else S.sel.delete(t.dataset.id); draw(); }
   if (t.dataset.actChange === "fechas") { S.desde = ($("#f-desde") || {}).value || S.desde; S.hasta = ($("#f-hasta") || {}).value || S.hasta; S.sel = null; draw(); }
 });
-ACT.generarPedido = () => {
-  const rows = recomendarCompra(fechasHorizonte(S.horiz)).filter(r => S.sel.has(r.pid) && r.comprar > 0); if (!rows.length) return;
-  abrir(() => head("Generar pedido") + `<p style="margin-top:0">${rows.length} productos · ${sum(rows, r => r.comprar)} unidades. Quedará como pedido pendiente. Cuando llegue, lo registras y el inventario se actualiza.</p>
+// el pedido semanal (data-v="semanal") va aparte: es de otro proveedor y tiene día de llegada
+const filasPedido = sem => recomendarCompra(fechasHorizonte(S.horiz)).filter(r => S.sel.has(r.pid) && r.comprar > 0 && !!r.semanal === !!sem);
+ACT.generarPedido = (el, d) => {
+  S.pedSem = !!(d && d.v === "semanal"); const rows = filasPedido(S.pedSem); if (!rows.length) return;
+  abrir(() => head(S.pedSem ? "Pedido del " + DOW[dowOf(rows[0].semanal.L.llega)] : "Generar pedido") + `<p style="margin-top:0">${rows.length} productos · ${sum(rows, r => r.comprar)} unidades${S.pedSem ? " (" + sum(rows, r => r.semanal.paquetes || 0) + " paquetes)" : ""}. Quedará como pedido pendiente${S.pedSem ? " para el " + esc(diaLargo(rows[0].semanal.L.llega)) : ""}. Cuando llegue, lo registras y el inventario se actualiza.</p>
     <label class="f" for="gp-prov">Proveedor (opcional)</label><input class="in plain" id="gp-prov" value="${esc(S.ultimoProv)}" placeholder="Ej: Distribuidora de paletas">
     <button class="btn pri xl wide" style="margin-top:14px" data-act="doPedido">CREAR PEDIDO</button>`);
 };
 ACT.doPedido = async () => {
-  const rows = recomendarCompra(fechasHorizonte(S.horiz)).filter(r => S.sel.has(r.pid) && r.comprar > 0), prov = $("#gp-prov").value.trim(); S.ultimoProv = prov;
-  await guardar(async () => { await crearCompra({proveedor: prov, lineas: rows.map(r => ({pid: r.pid, q: r.comprar, costo: costoActual(r.pid), ok: false})), motivo: "Recomendación OLI (" + (HORIZONTES.find(h => h[0] === S.horiz) || ["", ""])[1] + ")"}); cerrar(); S.comprasTab = "lista"; S.sel = null; draw(); }, "Pedido creado");
+  const rows = filasPedido(S.pedSem), prov = $("#gp-prov").value.trim(), L = S.pedSem ? proximaLlegada() : null; S.ultimoProv = prov; if (!rows.length) return;
+  await guardar(async () => { await crearCompra(Object.assign({proveedor: prov, lineas: rows.map(r => ({pid: r.pid, q: r.comprar, costo: costoActual(r.pid), ok: false})), motivo: L ? "Pedido semanal (llega el " + diaCorto(L.llega) + ")" : "Recomendación OLI (" + (HORIZONTES.find(h => h[0] === S.horiz) || ["", ""])[1] + ")"}, L ? {llega: L.llega} : {})); cerrar(); S.comprasTab = "lista"; S.sel = null; draw(); }, "Pedido creado");
 };
 function vFinde() {
   const pf = prepararFinde(), r = pf.rows.filter(x => x.comprar > 0 || x.riesgoF !== "ok");
@@ -3743,7 +3833,7 @@ function insumosFaltantes() {
 }
 function vLista() {
   const cs = Object.entries(col("compras")).map(([id, c]) => Object.assign({id}, c)).sort((a, b) => b.t - a.t), ab = cs.filter(c => c.estado === "pedido"), hist = cs.filter(c => c.estado !== "pedido").slice(0, 10), ins = insumosFaltantes(), cats = uniq(ins.map(x => x.p.cat || "Otros"));
-  const card = c => `<div class="card"><div class="row" style="padding-top:0"><div class="l"><b>${esc(c.proveedor || "Sin proveedor")}</b><div class="small muted">${diaCorto(c.fecha)} · ${(c.lineas || []).length} productos${c.factura ? " · factura " + esc(c.factura) : ""}</div></div><span class="pill ${c.estado === "recibido" ? "ok" : c.estado === "cancelado" ? "bad" : "warn"}">${c.estado === "pedido" ? "Pendiente" : c.estado === "recibido" ? "Recibida" : "Cancelada"}</span></div>
+  const card = c => `<div class="card"><div class="row" style="padding-top:0"><div class="l"><b>${esc(c.proveedor || "Sin proveedor")}</b><div class="small muted">${diaCorto(c.fecha)} · ${(c.lineas || []).length} productos${c.llega ? " · llega el " + esc(diaCorto(c.llega)) : ""}${c.factura ? " · factura " + esc(c.factura) : ""}</div></div><span class="pill ${c.estado === "recibido" ? "ok" : c.estado === "cancelado" ? "bad" : "warn"}">${c.estado === "pedido" ? "Pendiente" : c.estado === "recibido" ? "Recibida" : "Cancelada"}</span></div>
     ${(c.lineas || []).map((l, i) => `<label class="check" style="width:100%;padding:4px 0"><input type="checkbox" data-act-change="lineaOk" data-id="${esc(c.id)}" data-i="${i}" ${l.ok ? "checked" : ""} ${c.estado === "pedido" ? "" : "disabled"}> <span style="flex:1">${esc((prod(l.pid) || {nombre: l.n || "?"}).nombre)}</span><b>${l.q}</b></label>`).join("")}
     ${c.estado === "pedido" ? `<div class="btns" style="margin-top:10px"><button class="btn pri" style="flex:1" data-act="recibir" data-id="${esc(c.id)}">REGISTRAR LLEGADA</button><button class="btn ghost" data-act="cancelarCompra" data-id="${esc(c.id)}">Cancelar pedido</button></div>` : c.estado === "recibido" ? `<div class="small muted" style="margin-top:6px">Total ${fmt(sum(c.lineas, l => (l.costo || 0) * (l.q || 0)))}${c.soporte && c.soporte.ref ? " · soporte " + esc(c.soporte.ref) : ' · <span style="color:var(--warn)">sin soporte</span>'}</div>` : ""}</div>`;
   return `<div class="btns" style="margin-bottom:12px"><button class="btn pri" data-act="nuevaCompra">${ic("plus", 18)} Nueva compra</button></div>

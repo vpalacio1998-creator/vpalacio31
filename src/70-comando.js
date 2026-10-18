@@ -129,9 +129,15 @@ function bInventario() {
     ${c.sin ? `<div class="small muted">${c.sin} sin contar</div>` : ""}${rs.length ? `<div class="small" style="font-weight:700;margin:8px 0 2px">Riesgo de agotarse pronto</div>${rs.map(x => `<div class="row" style="padding:8px 0"><span>${esc(x.p.nombre)}</span><b>${x.rh ? fmtN(x.rh.horas, 1) + " horas" : x.cov < 1 ? "menos de 1 día" : fmtN(x.cov, 1) + " días"}</b></div>`).join("")}` : '<p class="small muted">Nada en riesgo de agotarse pronto.</p>'}
     <button class="btn ghost sm" style="margin-top:8px" data-act="ir" data-r="inventario">VER INVENTARIO</button></div>`;
 }
+function bSemanal() {
+  const ps = pedidoSemanalResumen(); if (!ps) return "";
+  return `<div class="${ps.horas <= 24 && !ps.hecho && ps.paquetes ? "notice warn" : "card flat"}" style="margin:0 0 10px"><b>Pedido de ${esc(ps.cats)} · llega el ${esc(diaCorto(ps.L.llega))}</b>
+    <div class="small">${ps.hecho ? "Ya está pedido." : ps.paquetes ? ps.paquetes + (ps.paquetes === 1 ? " paquete" : " paquetes") + " (" + ps.unidades + " unidades) · pídelo hasta el " + esc(diaCorto(ps.L.cierre)) + ", " + horaTxt(ps.cierreHora) : "Con lo que hay alcanza hasta la llegada siguiente."}</div>
+    ${ps.agotan.length ? `<div class="small" style="color:var(--danger)">Se pueden acabar antes de que llegue: ${esc(ps.agotan.slice(0, 3).map(r => r.p.nombre).join(", "))}${ps.agotan.length > 3 ? " y " + (ps.agotan.length - 3) + " más" : ""}.</div>` : ""}</div>`;
+}
 function bCompra() {
-  const cr = compraResumen(); if (!cr.rows.length) return `<div class="card"><h3>${ic("compras", 18)} Compra recomendada</h3><p class="muted" style="margin:0">Por ahora no hace falta comprar. El inventario cubre la demanda de los próximos días.</p></div>`;
-  return `<div class="card"><h3>${ic("compras", 18)} Compra recomendada</h3><p class="small muted" style="margin-top:-4px">${cr.rows.length} productos críticos · fecha recomendada: <b>HOY</b></p>
+  const cr = compraResumen(), sem = bSemanal(); if (!cr.rows.length) return `<div class="card"><h3>${ic("compras", 18)} Compra recomendada</h3>${sem}${sem ? `<button class="btn ghost sm" data-act="ir" data-r="compras">VER EL PEDIDO</button>` : `<p class="muted" style="margin:0">Por ahora no hace falta comprar. El inventario cubre la demanda de los próximos días.</p>`}</div>`;
+  return `<div class="card"><h3>${ic("compras", 18)} Compra recomendada</h3>${sem}<p class="small muted" style="margin-top:-4px">${cr.rows.length} productos críticos · fecha recomendada: <b>HOY</b></p>
     ${cr.rows.slice(0, 5).map(r => `<div class="row" style="padding:8px 0"><span>${esc(r.p.nombre)}</span><b>${r.comprar}</b></div>`).join("")}${cr.rows.length > 5 ? `<div class="small muted">y ${cr.rows.length - 5} más</div>` : ""}
     <div class="row" style="border:0"><b>Total</b><b>${cr.total} unidades${cr.costo ? " · " + fmt(cr.costo) : ""}</b></div><p class="xs muted" style="margin:0 0 10px">Calculado según ventas históricas, inventario actual, demanda esperada y stock de seguridad.${cr.sinCosto ? " " + cr.sinCosto + " productos sin costo: el total es incompleto." : ""}</p>
     <button class="btn pri" data-act="ir" data-r="compras">VER LISTA DE COMPRA</button></div>`;

@@ -75,6 +75,42 @@ function fechasHorizonte(k) {
 const HORIZONTES = [["hoy", "Hoy"], ["3", "3 días"], ["7", "Semana"], ["finde", "Fin de semana"], ["custom", "Rango"]];
 const comprasPend = () => memo("cpend", () => { const m = {}; for (const c of Object.values(col("compras"))) if (c.estado === "pedido") for (const l of (c.lineas || [])) m[l.pid] = (m[l.pid] || 0) + (l.q || 0); return m; });
 
+/* ---- pedido semanal: productos que solo llegan un día de la semana (p. ej. las paletas: llegan el martes, se piden hasta el lunes a las 12 m.,
+   vienen en paquetes de 10). Para esos no sirve pedir "para 3 días": lo que se pide hoy llega el próximo día de llegada y tiene que alcanzar
+   hasta el siguiente. A pedir = demanda de esa semana (del día de llegada a la víspera del siguiente) + seguridad − lo que quedará al llegar
+   (inventario + lo ya pedido − lo que se venda antes), redondeado a paquetes. Configuración: config.negocio.pedidoSemanal. ---- */
+const pedidoSemanalCfg = () => { const c = configNeg().pedidoSemanal; return c && c.activo !== false && Array.isArray(c.cats) && c.cats.length ? c : null; };
+const esSemanal = p => { const c = pedidoSemanalCfg(); return !!(c && p && c.cats.includes(p.cat)); };
+// la próxima llegada que todavía se alcanza a pedir: {llega, cierre (día límite), lim (ms), sig (la llegada siguiente)}
+function proximaLlegada(ahora = Date.now()) {
+  const c = pedidoSemanalCfg(); if (!c) return null;
+  for (let i = 1; i <= 14; i++) {
+    const f = addDays(S.today, i); if (dowOf(f) !== Number(c.llega)) continue;
+    let dc = f; for (let k = 0; k < 7 && dowOf(dc) !== Number(c.cierreDia); k++) dc = addDays(dc, -1);
+    const lim = parse(dc).getTime() + (Number(c.cierreHora) || 0) * 3600000;
+    if (ahora < lim) return {llega: f, cierre: dc, lim, sig: addDays(f, 7)};
+  }
+  return null;
+}
+const horaTxt = h => { h = Number(h) || 0; return h === 12 ? "12 m." : (h % 12 || 12) + (h < 12 ? " a. m." : " p. m."); };
+function planSemanal(p, st, pend) {
+  const L = proximaLlegada(); if (!L) return null; const c = pedidoSemanalCfg();
+  const antes = []; for (let d = S.today; d < L.llega; d = addDays(d, 1)) antes.push(d);
+  const semana = Array.from({length: 7}, (_, i) => addDays(L.llega, i)), demAntes = demanda(p.id, antes), demSem = demanda(p.id, semana);
+  const pack = (p.pack || 1) > 1 ? p.pack : Math.max(1, Number(c.paquete) || 1);
+  const alLlegar = st == null || demAntes == null ? null : st + pend - demAntes;          // negativo: se acaba antes de que llegue el pedido
+  const need = demSem == null ? null : demSem + (p.seg || 0) - Math.max(alLlegar == null ? 0 : alLlegar, 0);
+  const comprar = need == null ? null : Math.ceil(Math.max(0, Math.ceil(need - 1e-9)) / pack) * pack;
+  return {L, antes, semana, demAntes, demSem, pack, alLlegar, need, comprar, paquetes: comprar == null ? null : comprar / pack};
+}
+
+// para Inicio y los recordatorios: cuánto pedir en el próximo pedido semanal y si ya se hizo
+function pedidoSemanalResumen() {
+  const c = pedidoSemanalCfg(), L = c && proximaLlegada(); if (!L) return null;
+  const todas = recomendarCompra([S.today]).filter(r => r.semanal), rows = todas.filter(r => r.comprar > 0), hecho = Object.values(col("compras")).some(x => x && x.estado === "pedido" && x.llega === L.llega);
+  return {L, cats: c.cats.join(", "), cierreHora: c.cierreHora, rows, hecho, paquetes: sum(rows, r => r.semanal.paquetes || 0), unidades: sum(rows, r => r.comprar), horas: (L.lim - Date.now()) / 3600000, agotan: todas.filter(r => r.semanal.alLlegar != null && r.semanal.alLlegar < 0)};
+}
+
 /* ---- cuándo se agota ---- */
 function agotaEn(pid) {
   const p = prod(pid), st = stockDe(pid); if (st == null || p.controla === false) return null; if (st <= 0) return {dias: 0, fecha: S.today};
@@ -88,10 +124,12 @@ function recomendarCompra(fechas) {
   return terminados().filter(p => p.activo !== false && p.controla !== false && !p.combo).map(p => {
     const st = stockDe(p.id), avg = avgDaily(p.id), dem = demanda(p.id, fechas), seg = p.seg || 0, pend = comprasPend()[p.id] || 0, cov = cobertura(p.id), tp = tendencia(p.id);
     const u7 = unidadesVent(p.id, 7);
-    const need = dem == null ? null : dem + seg - Math.max(st == null ? 0 : st, 0) - pend;
-    let comprar = need == null ? null : Math.max(0, Math.ceil(need)); const pack = p.pack || 1; if (comprar && pack > 1) comprar = Math.ceil(comprar / pack) * pack;
+    const sem = esSemanal(p) ? planSemanal(p, st, pend) : null;   // llega un solo día de la semana: se calcula para esa semana, sin importar el periodo elegido
+    const need = sem ? sem.need : dem == null ? null : dem + seg - Math.max(st == null ? 0 : st, 0) - pend;
+    let comprar = sem ? sem.comprar : need == null ? null : Math.max(0, Math.ceil(need)); const pack = sem ? sem.pack : p.pack || 1; if (!sem && comprar && pack > 1) comprar = Math.ceil(comprar / pack) * pack;
     const ag = agotaEn(p.id), riesgo = st != null && st <= 0 ? "bad" : (ag && ag.dias <= 2) ? "bad" : (ag && ag.dias <= 5) ? "warn" : st != null && st <= (p.min || 0) ? "warn" : "ok";
-    return {pid: p.id, p, st, avg, dem, seg, pend, cov, comprar, riesgo, ag, why: {avg, u7: u7.u, dias7: u7.dias, tend: tp, st, cov, dem, seg, pend, comprar, fechas, pack, fac: fechas.map(f => factorDia(f).fac), esp: fechas.map(f => ({f, x: factorDia(f)})).filter(o => o.x.esp)}};
+    const ds = sem ? sem.demSem : dem, fs = sem ? sem.semana : fechas;
+    return {pid: p.id, p, st, avg, dem: ds, seg, pend, cov, comprar, riesgo, ag, semanal: sem, why: {avg, u7: u7.u, dias7: u7.dias, tend: tp, st, cov, dem: ds, seg, pend, comprar, fechas: fs, pack, fac: fs.map(f => factorDia(f).fac), esp: fs.map(f => ({f, x: factorDia(f)})).filter(o => o.x.esp)}};
   }).sort((a, b) => ({bad: 0, warn: 1, ok: 2}[a.riesgo] - {bad: 0, warn: 1, ok: 2}[b.riesgo]) || (b.comprar || 0) - (a.comprar || 0));
 }
 function explicarCompra(r) {
@@ -100,8 +138,11 @@ function explicarCompra(r) {
     ["Tendencia", w.tend == null ? "sin datos" : (w.tend >= 1 ? "+" : "") + Math.round((w.tend - 1) * 100) + "%"], ["Inventario actual", r.st == null ? "sin contar" : String(Math.max(0, r.st))],
     ["Cobertura", w.cov == null ? "sin datos" : w.cov === Infinity ? "sin ventas" : fmtN(w.cov, 1) + " días"], ["Demanda estimada", w.dem == null ? "sin datos" : fmtN(w.dem, 0)],
     ["Stock de seguridad", String(w.seg)], ["Pedidos por llegar", String(w.pend)]);
+  const sm = r.semanal; if (sm) l.push(["Llega el pedido", diaCorto(sm.L.llega) + " (se pide hasta el " + diaCorto(sm.L.cierre) + ", " + horaTxt(pedidoSemanalCfg().cierreHora) + ")"],
+    ["Se venderán antes de que llegue", sm.demAntes == null ? "sin datos" : fmtN(sm.demAntes, 0)], ["Quedarán al llegar", sm.alLlegar == null ? "sin contar" : sm.alLlegar < 0 ? "0 (se acaba antes: faltarían ~" + fmtN(-sm.alLlegar, 0) + ")" : fmtN(sm.alLlegar, 0)],
+    ["Demanda de la semana del pedido", (sm.demSem == null ? "sin datos" : fmtN(sm.demSem, 0)) + " (" + diaCorto(sm.semana[0]) + " a " + diaCorto(sm.semana[6]) + ")"], ["Viene en paquetes de", String(sm.pack)]);
   for (const o of w.esp || []) l.push([diaCorto(o.f) + " · " + o.x.esp.n, (o.x.esp.tipo === "festivo" ? "Festivo" : o.x.esp.tipo === "temporada" ? "Semana Santa" : "Puente") + ": " + o.x.fuente]);
-  l.push(["Cantidad recomendada", w.comprar == null ? "—" : String(w.comprar)]);
+  l.push(["Cantidad recomendada", w.comprar == null ? "—" : String(w.comprar) + (sm && w.comprar ? " (" + sm.paquetes + (sm.paquetes === 1 ? " paquete)" : " paquetes)") : "")]);
   return l;
 }
 function riesgosStock() {
@@ -123,7 +164,7 @@ function prepararFinde() {
   const basico = !hi.ok || !(df.ok[6] && df.ok[0]);
   const rows = recomendarCompra(fechas).map(r => {
     const disp = r.st == null ? 0 : Math.max(0, r.st), dem = r.dem, deficit = dem == null ? null : Math.max(0, dem + r.seg - disp);
-    return Object.assign({}, r, {disp, deficit, riesgoF: dem == null ? "sin" : dem + r.seg > disp ? (disp < dem ? "bad" : "warn") : "ok"});
+    return Object.assign({}, r, {disp, deficit, riesgoF: dem == null ? "sin" : dem + r.seg > disp ? (disp < dem ? "bad" : "warn") : "ok"}, r.semanal ? {comprar: 0} : {});   // lo que llega un solo día se pide en su pedido semanal
   });
   const ventasEsp = sum(vendibles(), p => (demandaVendida(p.id, fechas) || 0) * (p.precio || 0)), enRiesgo = rows.filter(r => r.riesgoF === "bad" || r.riesgoF === "warn");
   return {fechas, rows, ventasEsp, enRiesgo, basico, datosOk: hi.ok};
@@ -317,7 +358,9 @@ function decisionesHoy() {
   return memo("decisiones", () => {
     const urg = [], imp = [], opo = [], t = S.today;
     for (const r of riesgosStock()) { const p = prod(r.pid); const rec = recomendarCompra(fechasHorizonte("3")).find(x => x.pid === r.pid);
+      if (rec && rec.semanal) { if (rec.semanal.alLlegar != null && rec.semanal.alLlegar < 0) imp.push({t: p.nombre + " se puede acabar antes del " + DOW[dowOf(rec.semanal.L.llega)] + ".", d: r.d + " El pedido llega el " + diaCorto(rec.semanal.L.llega) + ".", tab: "compras"}); continue; }   // va en el pedido semanal
       const acc = rec && rec.comprar ? "Comprar " + rec.comprar + " de " + p.nombre + "." : r.t; (r.sev === "bad" ? urg : imp).push({t: acc, d: r.d, tab: "compras"}); }
+    const ps = pedidoSemanalResumen(); if (ps && !ps.hecho && ps.paquetes > 0 && ps.horas <= 36) (ps.horas <= 6 ? urg : imp).unshift({t: "Hacer el pedido de " + ps.cats + ": " + ps.paquetes + (ps.paquetes === 1 ? " paquete" : " paquetes") + ".", d: "Se puede pedir hasta el " + diaCorto(ps.L.cierre) + " a las " + horaTxt(ps.cierreHora) + " (llega el " + diaCorto(ps.L.llega) + ").", tab: "compras"});
     for (const r of riesgosInsumos()) (r.sev === "bad" ? urg : imp).push({t: "Reponer " + prod(r.pid).nombre + ".", d: r.d, tab: "compras"});
     // cajas de días anteriores que siguen abiertas (de cualquier equipo): RESOLVER abre el cierre de esa caja
     for (const c of cajasAll().filter(c => c.fecha < t && c.fecha >= addDays(t, -7) && c.apertura && cajaEstado(c) === "abierta").sort((a, b) => b.fecha.localeCompare(a.fecha))) urg.push({t: "Cerrar la caja " + (c.fecha === addDays(t, -1) ? "de ayer" : "del " + diaCorto(c.fecha)) + " (" + ((col("dispositivos")[c.dev] || {}).nombre || c.devNombre || "caja") + ").", d: "Quedó abierta. Cuenta el efectivo de esa caja y ciérrala.", tab: "caja", act: "cerrarCaja", id: c.id});
@@ -339,8 +382,9 @@ function decisionesHoy() {
 function resumenDia(fecha = S.today) {
   const f = finanzas(fecha, fecha), rent = rentabilidad(fecha, fecha).sort((a, b) => b.uds - a.uds), est = rent[0], ago = prods().filter(p => p.activo !== false && p.controla !== false && estadoProd(p).k === "agotado");
   const cajas = cajasAll().filter(c => c.fecha === fecha && cajaEstado(c) === "cerrada"), dif = sum(cajas, difFinal), al = alertas().length;   // una caja reabierta no cuenta su cierre viejo
-  const rec = recomendarCompra(fechasHorizonte("finde")).filter(r => r.comprar > 0 && r.riesgo !== "ok").slice(0, 2);
-  const recTxt = rec.length ? "Comprar " + rec.map(r => r.comprar + " " + r.p.nombre.replace(/^Paleta /, "")).join(" y ") + " antes del " + DOW[6] + "." : (ago.length ? "Reponer " + ago.map(p => p.nombre).slice(0, 2).join(" y ") + "." : "Todo en orden. Sigue así.");
+  const rec = recomendarCompra(fechasHorizonte("finde")).filter(r => r.comprar > 0 && r.riesgo !== "ok" && !r.semanal).slice(0, 2), ps = pedidoSemanalResumen();
+  const psTxt = ps && !ps.hecho && ps.paquetes > 0 && ps.horas <= 72 ? "Pedido de " + ps.cats + " (hasta el " + diaCorto(ps.L.cierre) + ", " + horaTxt(ps.cierreHora) + "): " + ps.paquetes + " paquetes." : "";
+  const recTxt = rec.length ? "Comprar " + rec.map(r => r.comprar + " " + r.p.nombre.replace(/^Paleta /, "")).join(" y ") + " antes del " + DOW[6] + "." + (psTxt ? " " + psTxt : "") : psTxt || (ago.length ? "Reponer " + ago.map(p => p.nombre).slice(0, 2).join(" y ") + "." : "Todo en orden. Sigue así.");
   return {f, fecha, uds: sum(rent, r => r.uds), est, ago, dif, al, rec: recTxt, txt: ""};
 }
 function resumenTexto(r) {
