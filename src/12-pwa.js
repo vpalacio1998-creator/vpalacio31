@@ -10,10 +10,16 @@ function registrarSW() {
     setInterval(() => reg.update().catch(() => {}), 30 * 60 * 1000);
   }).catch(() => {});
   // Solo se recarga cuando OLI pidió aplicar una versión nueva. La primera instalación (clients.claim) no recarga: cortaría un ingreso en curso.
-  navigator.serviceWorker.addEventListener("controllerchange", () => { if (!PWA.reloading || PWA.recargado) return; PWA.recargado = true; location.reload(); });
+  // Si la nueva versión la activó otra ventana de este equipo, esta también recarga apenas no haya una operación en curso.
+  navigator.serviceWorker.addEventListener("controllerchange", () => { if (PWA.recargado) return; if (PWA.reloading || (PWA.hay && !DS.bloqueada && !operacionEnCurso())) { PWA.recargado = true; location.reload(); } else if (PWA.hay) PWA.activa = true; });
 }
 const operacionEnCurso = () => S.cart.length > 0 || !!sheetFn || (typeof cobrando !== "undefined" && cobrando) || ((DS.needsLogin || DS.needsOrg) && document.activeElement && /INPUT/.test(document.activeElement.tagName));
-function aplicarActualizacion(forzar) { if (!PWA.worker) return false; if (!forzar && operacionEnCurso()) return false; PWA.reloading = true; PWA.worker.postMessage("SKIP_WAITING"); return true; }
+function aplicarActualizacion(forzar) {
+  if (!PWA.worker || DS.bloqueada) return false;                      // la ventana en pausa no aplica la actualización (la aplica la que trabaja)
+  if (!forzar && operacionEnCurso()) return false;
+  if (PWA.activa || PWA.worker.state === "activated") { if (!PWA.recargado) { PWA.recargado = true; location.reload(); } return true; }   // ya la activó otra ventana
+  PWA.reloading = true; PWA.worker.postMessage("SKIP_WAITING"); return true;
+}
 setInterval(() => { if (PWA.hay) aplicarActualizacion(false); }, 20000);
 window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); PWA.evento = e; changed(); });
 window.addEventListener("appinstalled", () => { PWA.instalada = true; PWA.evento = null; toast("OLI quedó instalada en este equipo"); changed(); });

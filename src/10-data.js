@@ -135,7 +135,8 @@ function patchItem(colName, id, field, itemId, patch) { const cur = (DS.c[colNam
 /* ---------- auditoría ---------- */
 function audit(accion, ref, det) {
   if (!DS.uid && DS.mode === "db") return;
-  const f = S.today, uid = DS.uid || "local", id = uid + "__audit_" + f, cur = (DS.c.audit || {})[id] || {fecha: f, items: []};
+  // la base es lo que está en la cola si hay algo sin enviar (un empleado no lee el historial: sin esto, el registro nuevo pisaría los pendientes)
+  const f = S.today, uid = DS.uid || "local", id = uid + "__audit_" + f, enCola = OUT[pathOf("audit", id)], cur = (enCola && !enCola.del && enCola.data) || (DS.c.audit || {})[id] || {fecha: f, items: []};
   put("audit", id, {fecha: f, items: cur.items.concat([{t: Date.now(), u: uid, dev: DEV.id, a: accion, r: ref || "", d: det || ""}])}).catch(() => {});
 }
 const auditList = () => memo("audit", () => { if (!DS.isAdmin) return []; const out = []; for (const d of Object.values(DS.c.audit || {})) for (const it of (d.items || [])) out.push(it); return out.sort((a, b) => b.t - a.t); });
@@ -157,6 +158,8 @@ function ventaSync(v) {
 const pendientes = () => Object.values(OUT).filter(o => o.estado !== "rechazada");
 const enviables = () => pendientes().filter(o => !o.uid || !DS.uid || o.uid === DS.uid || o.uid === "local");
 const rechazadas = () => Object.values(OUT).filter(o => o.estado === "rechazada");
+// pendiente de OTRA cuenta que usó este equipo: no se envía solo (espera a que esa persona ingrese aquí, o a que el administrador lo envíe con su cuenta)
+const pendientesAjenos = () => pendientes().filter(o => o.uid && DS.uid && o.uid !== DS.uid && o.uid !== "local");
 /* qué es un cambio, en palabras (para avisar cuando el servidor no lo acepta) */
 const NOM_CAMBIO = {ventas: "Ventas", cajas: "Caja", anulaciones: "Anulación de una venta", confirmaciones: "Confirmación de un pago", mermas: "Pérdidas", checklists: "Lista de la caja", cajashelado: "Cambio de caja de helado", demandaperdida: "Lo que pidieron y no había", dispositivos: "Datos del equipo", audit: "Historial", reaperturas: "Caja reabierta"};
 const descCambio = o => (NOM_CAMBIO[o.col] || o.col) + (/^\d{4}-\d{2}-\d{2}/.test(String(o.id)) ? " del " + diaCorto(String(o.id).slice(0, 10)) : "");
@@ -168,7 +171,7 @@ const conRed = () => (typeof navigator === "undefined" || navigator.onLine !== f
 function withTimeout(p, ms) { return Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error("timeout"), {code: "timeout"})), ms))]); }
 const esRechazo = e => e && (e.code === "invalid_argument" || e.code === "denied" || e.code === "transform_error" || e.code === "quota_exceeded");
 function recalcEstado() {
-  const p = pendientes().length;
+  const p = enviables().length;                                   // lo de otra cuenta no "se envía solo": se muestra aparte en Estado de envío
   SYNC.online = DS.mode === "db" && conRed();
   SYNC.estado = DS.mode !== "db" ? "local" : !SYNC.online ? "offline" : syncing ? "sincronizando" : SYNC.rechazadas ? "error" : p ? "pendiente" : "sincronizado";
 }
@@ -200,12 +203,13 @@ async function syncNow() {
   const enviar = async op => {                                                               // null = llegó; "red" = sin respuesta; si no, el rechazo
     SYNC.enCurso = op.path; changed();
     try {
-      await withTimeout(REMOTE.apply(op), 12000);
+      const res = await withTimeout(REMOTE.apply(op), 12000);
+      if (res && res.status === "purged" && !op.del) avisarPurgado(op, res);                 // el servidor no lo guardó (fecha de datos borrados): no se calla
       const still = OUT[op.path];
       const acks = DS.acks || (DS.acks = {}); acks[op.path] = (op.del ? [] : idsDe(op.data)).slice(-600);   // de lo que se envió (también ops guardados por una versión anterior)
       const ops2 = [["kv", "put", "acks", acks]];
       if (still && still.t === op.t) { delete OUT[op.path]; ops2.push(["outbox", "del", op.path]); }
-      await IDB.tx(ops2); SYNC.hecho++; SYNC.ultima = Date.now(); netFail = false; return null;
+      await IDB.tx(ops2); SYNC.hecho++; SYNC.ultima = Date.now(); (SYNC.ackT || (SYNC.ackT = {}))[op.col] = Date.now(); netFail = false; return null;
     } catch (e) {
       if (!esRechazo(e)) { netFail = true; SYNC.error = "sin respuesta del servidor"; return "red"; }
       if (OUT[op.path] === op) { numeroNuevo(op); await IDB.tx([["outbox", "put", op.path, op]]).catch(() => {}); }   // ya rechazado: el próximo intento va con número nuevo
@@ -253,6 +257,21 @@ const UNION = {ventas: ["ventas"], cajas: ["movs", "cierres"], mermas: ["items"]
 /* Datos que el administrador borró (meta/purgas: por colección, la fecha desde la que se conservan; p. ej. ventas de prueba
    antes de abrir). No se muestran, no se restauran y lo pendiente de esas fechas se descarta: el servidor tampoco lo guarda. */
 const cortesPurga = () => ((((DS.c.meta || {}).purgas) || {}).cortes) || {};
+// un envío que el servidor no guardó porque su fecha es de datos que el administrador borró (de prueba): queda en el historial y se avisa.
+// Si eran ventas de hoy, casi seguro el reloj del equipo estaba mal.
+function avisarPurgado(op, res) {
+  const xs = registrosDe(op.data), tot = sum(xs, x => Number(x.total) || Number(x.monto) || 0), f = (op.data && op.data.fecha) || "";
+  audit("ENVIO_PURGADO", op.path, descCambio(op) + " · " + xs.length + (xs.length === 1 ? " registro" : " registros") + (tot ? " por " + fmt(tot) : "") + " · " + (res.detail || "fecha de datos borrados"));
+  if (op.col === "ventas" || op.col === "cajas") toast("El servidor no guardó " + (op.col === "ventas" ? "ventas" : "una caja") + " con fecha " + (f ? diaCorto(f) : "vieja") + ": esa fecha es de datos borrados. Revisa la fecha del equipo y avisa al administrador.", true);
+}
+// ¿la fecha del equipo está mal? Con Internet, frente a la hora del servidor; sin Internet, si es anterior a un borrado de datos de prueba
+// (todo lo de esas fechas el servidor lo descarta). Devuelve el texto para la persona, o "".
+function relojMalo() {
+  const hoy = ymd(), dif = typeof RELOJ_EQ !== "undefined" ? RELOJ_EQ.dif : 0, real = Math.abs(dif) > 15 * 60000 ? ymd(new Date(Date.now() - dif)) : hoy;
+  if (real !== hoy) return "La fecha de este equipo está mal: dice " + diaCorto(hoy) + " y hoy es " + diaCorto(real) + ". Corrígela (Ajustes del equipo → Fecha y hora automáticas) y vuelve a abrir OLI antes de vender.";
+  const cv = cortesPurga().ventas; if (DS.mode === "db" && typeof cv === "string" && cv && hoy < cv) return "La fecha de este equipo está mal: dice " + diaCorto(hoy) + ", antes del " + diaCorto(cv) + ". Corrígela (Ajustes del equipo → Fecha y hora automáticas) y vuelve a abrir OLI antes de vender.";
+  return "";
+}
 const purgado = (n, doc) => { const c = cortesPurga()[n]; return !!(typeof c === "string" && c && doc && typeof doc.fecha === "string" && doc.fecha < c); };
 function descartarPurgados() {
   const cortes = cortesPurga(); if (!Object.keys(cortes).length) return;

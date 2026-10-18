@@ -31,6 +31,7 @@ function banners() {
   if (DS.mode === "db" && !SYNC.online) h += `<div class="notice" style="margin:0 0 12px;display:flex;gap:10px;align-items:center">${ic("info", 20)}<span><b>Trabajando sin conexión.</b> Las ventas se enviarán solas cuando vuelva Internet.${ventasPendientes() ? " Pendientes: <b>" + ventasPendientes() + "</b>." : ""}</span></div>`;
   else if (SYNC.estado === "sincronizando" && SYNC.total > 1) h += `<div class="notice ok" style="margin:0 0 12px">Enviando ${Math.min(SYNC.hecho + 1, SYNC.total)}/${SYNC.total}…</div>`;
   if (DS.error) h += `<div class="notice bad" style="margin:0 0 12px">${esc(DS.error)}</div>`;
+  const rm = relojMalo(); if (rm) h += `<div class="notice bad" style="margin:0 0 12px"><b>${esc(rm)}</b></div>`;
   if (PWA.hay) h += `<div class="notice ok" style="margin:0 0 12px;display:flex;gap:10px;align-items:center;justify-content:space-between"><span><b>Hay una versión nueva de OLI.</b> Se aplica sola cuando no haya un pedido abierto.</span><button class="btn pri sm" data-act="actualizarYa">ACTUALIZAR</button></div>`;
   el.innerHTML = h;
 }
@@ -169,13 +170,18 @@ function tomarCandado(robar) {
   if (!navigator.locks || typeof navigator.locks.request !== "function") return Promise.resolve(true);
   return new Promise(res => {
     navigator.locks.request("oli-escritor", robar ? {steal: true} : {ifAvailable: true}, lock => { if (!lock) { res(false); return; } res(true); return new Promise(() => {}); })
-      .catch(() => { DS.bloqueada = true; cerrar(); pausaHTML(); });       // otra ventana tomó el control
+      .catch(() => { DS.bloqueada = true; cerrar(); pausaHTML(); setTimeout(() => location.reload(), 300); });   // otra ventana tomó el control: esta vuelve a abrir en pausa (sin servidor ni temporizadores que escriban encima)
   });
 }
 function pausaHTML() {
   $("#app").classList.add("gate-mode"); ["#ticket", "#cartbar", "#tabs", "#rail", "#banners"].forEach(x => { const el = $(x); if (el) el.innerHTML = ""; });
   $("#view").innerHTML = `<div class="gate"><div class="box"><div class="logo">OLI</div><h2>OLI está abierta en otra ventana</h2><p>Para no duplicar ni perder ventas, en este equipo OLI trabaja en una sola ventana a la vez. Usa la otra ventana o continúa aquí.</p><button class="btn pri xl wide" data-act="usarAqui">USAR OLI EN ESTA VENTANA</button></div></div>`;
 }
+function sinLibreriaHTML() {
+  $("#app").classList.add("gate-mode"); ["#ticket", "#cartbar", "#tabs", "#rail", "#banners"].forEach(x => { const el = $(x); if (el) el.innerHTML = ""; });
+  $("#view").innerHTML = `<div class="gate"><div class="box"><div class="logo">OLI</div><h2>Falta una parte de OLI</h2><p>No se pudo abrir la conexión con el servidor en este equipo. Lo que tienes guardado aquí sigue guardado. Conéctate a Internet: OLI se recarga sola. Si ya hay Internet, toca Recargar.</p><button class="btn pri xl wide" data-act="recargar">RECARGAR</button></div></div>`;
+}
+ACT.recargar = () => location.reload();
 ACT.usarAqui = () => { try { sessionStorage.setItem("oli-robar", "1"); } catch (e) {} location.reload(); };
 /* ---------- boot ---------- */
 (async function boot() {
@@ -183,6 +189,8 @@ ACT.usarAqui = () => { try { sessionStorage.setItem("oli-robar", "1"); } catch (
   try {
     let robar = false; try { robar = sessionStorage.getItem("oli-robar") === "1"; sessionStorage.removeItem("oli-robar"); } catch (e) {}
     if (!(await tomarCandado(robar))) { DS.bloqueada = true; pausaHTML(); return; }
+    // que el navegador no borre los datos de OLI (ventas sin enviar) si le falta espacio
+    try { if (navigator.storage && navigator.storage.persist) navigator.storage.persisted().then(p => p || navigator.storage.persist()).then(p => { DS.persistente = !!p; }).catch(() => {}); } catch (e) {}
     await bootData(); await restoreCart();
     S.tab = leerHash() || (esAdmin() ? "hoy" : "vender"); if (!rutaOk(S.tab)) S.tab = "vender";
     changed(); setTimeout(() => heartbeat(true), 1500); setTimeout(() => rebaseStockViejo().catch(() => {}), 20000);

@@ -41,7 +41,9 @@ async function olvidarIdentidad() {
 
 async function bootSupabase(ident) {
   const cfg = window.OLI_CONFIG;
-  if (!window.supabase || !window.supabase.createClient) { DS.mode = "local"; DS.error = "No se pudo cargar la conexión con el servidor."; changed(); return; }
+  // sin la librería del servidor (no se guardó al actualizar y no hay Internet) no se pasa a "solo este equipo": eso borraría de la cola lo que
+  // se escriba. Se para todo (nada se escribe) y se recarga sola cuando vuelva Internet; lo guardado en el equipo sigue ahí.
+  if (!window.supabase || !window.supabase.createClient) { DS.bloqueada = true; sinLibreriaHTML(); window.addEventListener("online", () => location.reload()); return; }
   const habiaSesion = haySesionGuardada();                                                 // antes de crear el cliente: al arrancar, la librería puede borrarla sin avisar por qué
   SB.client = window.supabase.createClient(cfg.supabaseUrl, cfg.supabaseAnonKey, {auth: Object.assign({persistSession: true, autoRefreshToken: true, detectSessionInUrl: false}, lsOk() ? {storage: ALMACEN_SESION} : {}), realtime: {params: {eventsPerSecond: 20}}});
   DS.mode = "db"; DS.backend = "supabase"; REMOTE.kind = "supabase"; REMOTE.desc = "Supabase"; REMOTE.apply = sbApply;
@@ -129,8 +131,9 @@ function sbIniciar() {
   for (const n of (SB.sinVerificar ? cols : SHARED_COLS)) if (SB.sinVerificar || Object.keys(DS.c[n] || {}).length) DS.ready[n] = true;   // sin servidor no llega nada más: se usa lo guardado
   sbCargarTodo(cols); if (!SB.sinVerificar) sbRealtime();                                  // sin sesión verificada no se pide nada al servidor: se espera a que la sesión se renueve
   const gen = SB.gen; setTimeout(() => { if (gen !== SB.gen) return; for (const n of cols) DS.ready[n] = true; DS.fromCache = false; changed(); }, 6000);   // no marca nada de una sesión que ya se cerró
-  recalcEstado(); changed(); kickSync(500);
+  recalcEstado(); changed(); kickSync(500); RELOJ_EQ.t = 0; revisarReloj();
   if (!SB.subs) { SB.subs = true;
+    setInterval(() => revisarReloj(), 10 * 60000);
     setInterval(() => { if (pendientes().length) { netFail = false; kickSync(); } }, 20000);
     setInterval(() => heartbeat(), 45000);
     setInterval(() => { if (SB.rtWasDown && conRed()) sbCargarTodo(); }, 20000);                                  // respaldo SOLO si el tiempo real está caído
@@ -138,8 +141,16 @@ function sbIniciar() {
   }
 }
 const sbCols = () => SHARED_COLS.concat(DS.isAdmin ? SB_ADMIN_COLS : []);
+/* reloj del equipo: con Internet se compara con la hora del servidor (oli_ping). Si la FECHA no coincide, las ventas quedarían con otro día
+   (y si es anterior a un borrado de datos de prueba, el servidor las descartaría): no se deja abrir caja ni vender hasta corregirla. */
+const RELOJ_EQ = {dif: 0, t: 0};
+async function revisarReloj() {
+  if (!SB.client || SB.sinVerificar || !conRed() || (RELOJ_EQ.t && Date.now() - RELOJ_EQ.t < 5 * 60000)) return; RELOJ_EQ.t = Date.now();
+  try { const t0 = Date.now(), r = await withTimeout(Promise.resolve(SB.client.rpc("oli_ping")), 8000), t1 = Date.now();
+    const srv = r && !r.error && r.data ? new Date(r.data).getTime() : NaN; if (isFinite(srv)) { const d = Math.round((t0 + t1) / 2 - srv); if (Math.abs(d - RELOJ_EQ.dif) > 60000) { RELOJ_EQ.dif = d; changed(); } } } catch (e) {}
+}
 async function sbCargar(name, gen) {
-  const desde = addDays(S.today, -HIST_DIAS), m = {}; let from = 0;
+  const desde = addDays(S.today, -HIST_DIAS), m = {}, t0 = Date.now(); let from = 0;
   for (;;) {
     let q = SB.client.from("oli_docs").select("doc_id,data").eq("org_id", SB.org).eq("collection", name).range(from, from + 999);
     if (RANGED.has(name)) q = q.gte("data->>fecha", desde);
@@ -149,6 +160,8 @@ async function sbCargar(name, gen) {
     for (const x of r.data) m[x.doc_id] = x.data; if (r.data.length < 1000) break; from += 1000;
   }
   if (gen !== SB.gen || !puede(name, "read")) return;                                       // se cerró sesión o cambió quién está: lo que llegó tarde no se usa
+  // si mientras se leía llegó al servidor un envío de esta colección, la lectura puede ser de antes (sin ese cambio): no se usa y se vuelve a leer
+  if (((SYNC.ackT || {})[name] || 0) >= t0) { SB.recargar = true; return; }
   aplicarSnapshot(name, m);
 }
 /* Un solo pase a la vez. Si un pedido no responde, el pase se corta y no empieza otro mientras ese siga en camino:

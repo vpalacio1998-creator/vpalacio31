@@ -41,6 +41,7 @@ function impLinea(p, precioTotalLinea) {
 }
 async function registrarVenta(opts) {
   if (!DS.canWrite) throw Object.assign(new Error("denied"), {code: "denied"});
+  const rm = relojMalo(); if (rm) throw new Error(rm);
   if (!S.cart.length) throw new Error("El pedido está vacío.");
   const caja = cajaHoy();
   if (!caja || !caja.apertura) { const e = new Error("Primero abre la caja."); e.abrirCaja = true; throw e; }
@@ -72,6 +73,7 @@ async function confirmarPago(v) { const id = cajaId(v.fecha, DEV.id), cur = col(
 
 /* ---------- caja ---------- */
 async function abrirCaja(monto) {
+  const rm = relojMalo(); if (rm) throw new Error(rm);
   const f = S.today, id = cajaId(f), cur = col("cajas")[id];
   const vieja = cajasAll().find(x => x.dev === DEV.id && x.fecha < f && x.apertura && cajaEstado(x) === "abierta"); if (vieja) throw new Error("Primero cierra la caja del " + diaCorto(vieja.fecha) + ".");
   if (cur && cur.apertura && cajaEstado(Object.assign({id}, cur)) !== "cerrada") throw new Error("La caja ya está abierta.");

@@ -99,12 +99,12 @@ const conRedNavegador = () => typeof navigator === "undefined" || navigator.onLi
 function connPill() { const c = connInfo(); return `<button class="pill ${c.cls}" data-act="verEnvio" style="min-height:36px;border:0" aria-label="Estado de conexión: ${esc(c.txt)}"><span class="dot ${c.cls === "ok" ? "" : c.cls === "bad" ? "bad" : "off"}" style="${c.cls === "warn" ? "background:var(--warn)" : ""}"></span>${esc(c.txt)}</button>`; }
 const ventaSyncTxt = e => ({pendiente: "Pendiente de enviar", sincronizando: "Enviando…", sincronizada: "Enviada ✓", error: "Necesita revisión", local: "Guardada"}[e] || e);
 ACT.verEnvio = () => abrir(() => {
-  const c = connInfo(), mias = ventasOk().filter(v => v.dev === DEV.id && v.fecha >= addDays(S.today, -1)).slice(-12).reverse(), pend = pendientes().length;
+  const c = connInfo(), mias = ventasOk().filter(v => v.dev === DEV.id && v.fecha >= addDays(S.today, -1)).slice(-12).reverse(), pend = enviables().length;
   return head("Estado de envío") + `<div class="notice ${c.cls === "ok" ? "ok" : c.cls === "bad" ? "bad" : ""}"><b>${esc(c.txt)}</b><br>${DS.mode === "local" ? "Los datos se guardan solo en este equipo." : c.k === "offline" ? "Trabajando sin conexión. Las ventas se guardan en este equipo y se enviarán solas cuando vuelva Internet." : pend ? (pend === 1 ? "Hay 1 cambio por enviar. Se envía solo." : "Hay " + pend + " cambios por enviar. Se envían solos.") : rechazadas().length ? "El servidor no aceptó algo de este equipo: míralo abajo." : "Todo está al día con el servidor."}</div>
     ${SYNC.ultima ? `<p class="small muted">Último envío: ${haceTxt(SYNC.ultima)}</p>` : ""}
     <h3>Mis últimas ventas</h3>${mias.length ? mias.map(v => `<div class="row"><div class="l"><b>${esc(v.num || "Venta")}</b> · ${hora(v.t)}<div class="small muted">${fmt(v.total)} · ${esc(v.m)}</div></div><div class="r"><span class="pill ${ventaSync(v) === "sincronizada" || ventaSync(v) === "local" ? "ok" : ventaSync(v) === "error" ? "bad" : "warn"}">${esc(ventaSyncTxt(ventaSync(v)))}</span></div></div>`).join("") : '<p class="muted">Todavía no hay ventas en este equipo.</p>'}
     ${c.k === "offline" && DS.backend === "supabase" && esAdmin() && conRedNavegador() ? `<div class="notice" style="margin-top:12px"><b>El servidor de OLI no responde.</b> Abre cualquier página (por ejemplo google.com): si no abre, el problema es el Internet del local. Si abre y esto dura más de unos minutos, entra a <b>supabase.com</b> → proyecto <b>OLI</b>: si dice que está en pausa, toca <b>Restore</b> (reactivar). Mientras tanto se puede seguir vendiendo.</div>` : ""}
-    ${rechazadasHTML()}
+    ${rechazadasHTML()}${ajenosHTML()}
     <div class="small muted" style="margin-top:12px">Este equipo: <b>${esc(DEV.nombre || DEV.id)}</b></div>`;
 }, {live: true});
 /* lo que el servidor no aceptó: qué es, por qué, y reintentar (o, el administrador, descartarlo y quedarse con lo del servidor) */
@@ -119,6 +119,24 @@ function rechazadasHTML() {
     ${r.map(o => `<div class="row"><div class="l"><b>${esc(descCambio(o))}</b>${o.detalle ? `<div class="small">${esc(o.detalle)}</div>` : ""}${sinEnviarTxt(o) ? `<div class="small muted">${esc(sinEnviarTxt(o))}</div>` : ""}</div>${descartar ? `<div class="r"><button class="btn ghost sm" data-act="descartarCambio" data-p="${esc(o.path)}">Descartar</button></div>` : ""}</div>`).join("")}
     ${ya ? `<button class="btn sm" style="margin-top:8px" data-act="reintentarEnvio">Reintentar el envío</button>` : '<div class="small" style="margin-top:8px">Para reintentar, primero ingresa con tu cuenta.</div>'}${ya && ajenos ? '<div class="small" style="margin-top:6px">Lo que hizo otra persona se puede enviar con tu cuenta de administrador: antes te preguntamos.</div>' : ""}</div>`;
 }
+/* pendiente de otra cuenta que usó este equipo: no se envía solo. Se dice de quién es; el administrador lo puede enviar con su cuenta */
+function ajenosHTML() {
+  const xs = pendientesAjenos(); if (!xs.length) return "";
+  const quien = uniq(xs.map(o => o.uid)).map(u => nombreDe(u) || "otra persona"), tom = xs.filter(o => o.col !== "audit");
+  return `<div class="notice" style="margin-top:12px;display:block"><b>${xs.length === 1 ? "1 cambio" : xs.length + " cambios"} de ${esc(uniq(quien).join(" y "))} ${xs.length === 1 ? "está guardado" : "están guardados"} en este equipo sin enviar.</b> Se ${xs.length === 1 ? "envía" : "envían"} cuando esa persona vuelva a ingresar aquí.
+    ${xs.map(o => `<div class="small">• ${esc(descCambio(o))}${sinEnviarTxt(o) ? " · " + esc(sinEnviarTxt(o)) : ""}</div>`).join("")}
+    ${esAdmin() && tom.length && sesionLista() ? `<button class="btn sm" style="margin-top:8px" data-act="enviarAjenos">Enviarlo con mi cuenta</button><div class="small muted" style="margin-top:4px">Su historial solo lo puede enviar esa persona.</div>` : !esAdmin() ? '<div class="small" style="margin-top:6px">Si esa persona ya no usa este equipo, avísale al administrador.</div>' : ""}</div>`;
+}
+ACT.enviarAjenos = async () => {
+  if (!esAdmin() || !sesionLista()) return; if (DS.mode === "db" && !conRed()) { toast("Sin conexión: hazlo cuando vuelva Internet.", true); return; }
+  const yo = DS.uid, xs = pendientesAjenos().filter(o => o.col !== "audit"); if (!xs.length) return;
+  if (!(await confirmar({titulo: "¿Enviar con tu cuenta lo de otra persona?", texto: xs.map(o => "• <b>" + esc(descCambio(o)) + "</b>").join("<br>") + "<br>Quedan con lo que hizo esa persona (quién vendió, quién abrió la caja). En el historial queda que lo enviaste tú.", si: "Sí, enviar", no: "No"}))) return;
+  if (DS.uid !== yo || !esAdmin()) return;
+  const r = xs.filter(o => OUT[o.path] === o && o.estado !== "rechazada" && o.uid !== yo);
+  for (const o of r) { o.uidOrig = o.uidOrig || o.uid; audit("REINTENTO_ADMIN", o.path, descCambio(o) + " de " + (nombreDe(o.uid) || "otra persona") + " · estaba pendiente en este equipo"); o.uid = yo; }
+  await IDB.tx(r.map(o => ["outbox", "put", o.path, o])).catch(() => {});
+  netFail = false; recalcEstado(); kickSync(100); toast("Enviando…");
+};
 /* lo que ese cambio tiene que el servidor todavía no recibió (lo que se perdería al descartarlo) */
 const registrosDe = d => [].concat((d && d.ventas) || [], (d && d.items) || [], (d && d.movs) || [], (d && d.cierres) || []).filter(x => x && x.id);
 function sinEnviar(o) { const ack = (DS.acks || {})[o.path] || []; return registrosDe(o.data).filter(x => !ack.includes(x.id)); }

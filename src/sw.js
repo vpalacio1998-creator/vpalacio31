@@ -5,8 +5,9 @@
 const VERSION = "__BUILD__";
 const SHELL_CACHE = "oli-shell-" + VERSION, RUNTIME = "oli-runtime-v1";
 const SHELL = __SHELL__;
-// lo crítico (página, app, estilos, configuración) DEBE quedar guardado; si falla, la versión anterior sigue funcionando sin Internet
-const CRITICOS = SHELL.filter(u => /^(index\.html|app\..*\.js|styles\..*\.css|config\.js)$/.test(u));
+// lo crítico (página, app, estilos, configuración y la librería del servidor) DEBE quedar guardado; si falla, la versión anterior sigue
+// funcionando sin Internet (sin la librería del servidor, la app no arranca)
+const CRITICOS = SHELL.filter(u => /^(index\.html|app\..*\.js|styles\..*\.css|config\.js|vendor\/supabase\.js)$/.test(u));
 self.addEventListener("install", e => { e.waitUntil(caches.open(SHELL_CACHE).then(c => Promise.all(SHELL.map(u => { const p = c.add(new Request(u, {cache: "reload"})); return CRITICOS.includes(u) ? p : p.catch(() => {}); })))); });
 self.addEventListener("activate", e => { e.waitUntil((async () => { for (const k of await caches.keys()) if (k.startsWith("oli-shell-") && k !== SHELL_CACHE) await caches.delete(k); await self.clients.claim(); })()); });
 self.addEventListener("message", e => { if (e.data === "SKIP_WAITING") self.skipWaiting(); });
