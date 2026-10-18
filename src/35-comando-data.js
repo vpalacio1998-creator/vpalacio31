@@ -146,4 +146,4 @@ function avisos() {
   const lent = productosLentos()[0]; if (lent) out.push(`${lent.p.nombre} tiene baja rotación (${lent.u30} vendidas en 30 días).`);
   return out.slice(0, 4);
 }
-const hoyTareas = () => { const d = decisionesHoy(); return {urg: d.urgente.length, imp: d.importante.length, opo: d.oportunidad.length}; };
+const hoyTareas = () => decisionesHoy().total;   // cuántas hay en total (la lista muestra las primeras)
