@@ -137,18 +137,32 @@ function sbIniciar() {
     setInterval(() => { if (pendientes().length) { netFail = false; kickSync(); } }, 20000);
     setInterval(() => heartbeat(), 45000);
     setInterval(() => { if (SB.rtWasDown && conRed()) sbCargarTodo(); }, 20000);                                  // respaldo SOLO si el tiempo real está caído
-    window.addEventListener("online", () => { if (SB.sinVerificar) probarSesion(); else sbCargarTodo(); });
+    window.addEventListener("online", () => { if (SB.sinVerificar) probarSesion(); else { sbCargarTodo(); revisarReloj(true); } });
   }
 }
 const sbCols = () => SHARED_COLS.concat(DS.isAdmin ? SB_ADMIN_COLS : []);
 /* reloj del equipo: con Internet se compara con la hora del servidor (oli_ping). Si la FECHA no coincide, las ventas quedarían con otro día
-   (y si es anterior a un borrado de datos de prueba, el servidor las descartaría): no se deja abrir caja ni vender hasta corregirla. */
-const RELOJ_EQ = {dif: 0, t: 0};
-async function revisarReloj() {
-  if (!SB.client || SB.sinVerificar || !conRed() || (RELOJ_EQ.t && Date.now() - RELOJ_EQ.t < 5 * 60000)) return; RELOJ_EQ.t = Date.now();
+   (y si es anterior a un borrado de datos de prueba, el servidor las descartaría): no se deja abrir caja ni vender hasta corregirla.
+   Cuando alguien corrige la fecha en el equipo, OLI lo nota solo (el reloj del equipo salta y el cronómetro del navegador no) y vuelve a
+   preguntar la hora al servidor: se desbloquea sin cerrar la app. Mientras la fecha esté mal, pregunta cada 30 s. */
+const RELOJ_EQ = {dif: 0, t: 0, w: Date.now(), p: performance.now()};
+async function revisarReloj(ya) {
+  const espera = Math.abs(RELOJ_EQ.dif) > 15 * 60000 ? 30000 : 5 * 60000;
+  if (!SB.client || SB.sinVerificar || !conRed() || (!ya && RELOJ_EQ.t && Math.abs(Date.now() - RELOJ_EQ.t) < espera)) return; RELOJ_EQ.t = Date.now();
   try { const t0 = Date.now(), r = await withTimeout(Promise.resolve(SB.client.rpc("oli_ping")), 8000), t1 = Date.now();
     const srv = r && !r.error && r.data ? new Date(r.data).getTime() : NaN; if (isFinite(srv)) { const d = Math.round((t0 + t1) / 2 - srv); if (Math.abs(d - RELOJ_EQ.dif) > 60000) { RELOJ_EQ.dif = d; changed(); } } } catch (e) {}
 }
+function vigilarReloj() {
+  const w = Date.now(), p = performance.now(), salto = (w - RELOJ_EQ.w) - (p - RELOJ_EQ.p); RELOJ_EQ.w = w; RELOJ_EQ.p = p; hoyAlDia();
+  if (Math.abs(RELOJ_EQ.dif) > 15 * 60000 && conRed()) revisarReloj();                       // fecha mal: se vuelve a preguntar (cada 30 s)
+  if (Math.abs(salto) < 2 * 60000) return;                                                    // el reloj del equipo cambió (o el equipo estuvo dormido)
+  if (SB.client && !SB.sinVerificar && conRed()) { revisarReloj(true); return; }
+  // sin Internet, con la fecha marcada mal: el salto es alguien cambiando la fecha (se desbloquea si la deja bien). Con la fecha bien no se toca:
+  // un equipo que estuvo dormido también "salta" y no se debe bloquear por eso
+  if (Math.abs(RELOJ_EQ.dif) > 15 * 60000) { RELOJ_EQ.dif += salto; changed(); }
+}
+setInterval(vigilarReloj, 5000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) vigilarReloj(); });
 async function sbCargar(name, gen) {
   const desde = addDays(S.today, -HIST_DIAS), m = {}, t0 = Date.now(); let from = 0;
   for (;;) {

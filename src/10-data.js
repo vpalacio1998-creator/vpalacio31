@@ -271,10 +271,12 @@ function avisarPurgado(op, res) {
 // (todo lo de esas fechas el servidor lo descarta). Devuelve el texto para la persona, o "".
 function relojMalo() {
   const hoy = ymd(), dif = typeof RELOJ_EQ !== "undefined" ? RELOJ_EQ.dif : 0, real = Math.abs(dif) > 15 * 60000 ? ymd(new Date(Date.now() - dif)) : hoy;
-  if (real !== hoy) return "La fecha de este equipo está mal: dice " + diaCorto(hoy) + " y hoy es " + diaCorto(real) + ". Corrígela (Ajustes del equipo → Fecha y hora automáticas) y vuelve a abrir OLI antes de vender.";
-  const cv = cortesPurga().ventas; if (DS.mode === "db" && typeof cv === "string" && cv && hoy < cv) return "La fecha de este equipo está mal: dice " + diaCorto(hoy) + ", antes del " + diaCorto(cv) + ". Corrígela (Ajustes del equipo → Fecha y hora automáticas) y vuelve a abrir OLI antes de vender.";
+  if (real !== hoy) return "La fecha de este equipo está mal: dice " + diaCorto(hoy) + " y hoy es " + diaCorto(real) + ". Corrígela en los ajustes de la tablet (Fecha y hora → activar «Fecha y hora automáticas»). Apenas quede bien, OLI deja vender solo.";
+  const cv = cortesPurga().ventas; if (DS.mode === "db" && typeof cv === "string" && cv && hoy < cv) return "La fecha de este equipo está mal: dice " + diaCorto(hoy) + ", antes del " + diaCorto(cv) + ". Corrígela en los ajustes de la tablet (Fecha y hora → activar «Fecha y hora automáticas»). Apenas quede bien, OLI deja vender solo.";
   return "";
 }
+// el día de la app (S.today) al día con el reloj del equipo: si acaban de corregir la fecha, una venta no queda con el día viejo
+function hoyAlDia() { const t = ymd(); if (t !== S.today) { S.today = t; changed(); } }
 const purgado = (n, doc) => { const c = cortesPurga()[n]; return !!(typeof c === "string" && c && doc && typeof doc.fecha === "string" && doc.fecha < c); };
 function descartarPurgados() {
   const cortes = cortesPurga(); if (!Object.keys(cortes).length) return;

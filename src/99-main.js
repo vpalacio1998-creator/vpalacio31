@@ -31,10 +31,16 @@ function banners() {
   if (DS.mode === "db" && !SYNC.online) h += `<div class="notice" style="margin:0 0 12px;display:flex;gap:10px;align-items:center">${ic("info", 20)}<span><b>Trabajando sin conexión.</b> Las ventas se enviarán solas cuando vuelva Internet.${ventasPendientes() ? " Pendientes: <b>" + ventasPendientes() + "</b>." : ""}</span></div>`;
   else if (SYNC.estado === "sincronizando" && SYNC.total > 1) h += `<div class="notice ok" style="margin:0 0 12px">Enviando ${Math.min(SYNC.hecho + 1, SYNC.total)}/${SYNC.total}…</div>`;
   if (DS.error) h += `<div class="notice bad" style="margin:0 0 12px">${esc(DS.error)}</div>`;
-  const rm = relojMalo(); if (rm) h += `<div class="notice bad" style="margin:0 0 12px"><b>${esc(rm)}</b></div>`;
+  const rm = relojMalo(); if (rm) h += `<div class="notice bad" style="margin:0 0 12px"><b>${esc(rm)}</b>${DS.mode === "db" ? `<div style="margin-top:8px"><button class="btn ghost sm" data-act="revisarFecha">YA LA CORREGÍ</button></div>` : ""}</div>`;
+  else if (DS.mode === "db" && new Date().getTimezoneOffset() !== 300) h += `<div class="notice" style="margin:0 0 12px">La zona horaria de este equipo no es la de Colombia: las ventas de la noche pueden quedar con el día siguiente. Cámbiala en los ajustes de la tablet (Fecha y hora → Zona horaria → Bogotá).</div>`;   // UTC−5 todo el año
   if (PWA.hay) h += `<div class="notice ok" style="margin:0 0 12px;display:flex;gap:10px;align-items:center;justify-content:space-between"><span><b>Hay una versión nueva de OLI.</b> Se aplica sola cuando no haya un pedido abierto.</span><button class="btn pri sm" data-act="actualizarYa">ACTUALIZAR</button></div>`;
   el.innerHTML = h;
 }
+// después de corregir la fecha en la tablet: se comprueba ya con el servidor (OLI también lo hace solo)
+ACT.revisarFecha = async () => {
+  if (!conRed()) { toast("Sin Internet no se puede comprobar la fecha. Conéctate y vuelve a tocar.", true); return; }
+  await revisarReloj(true); hoyAlDia(); toast(relojMalo() ? "La fecha sigue mal: revísala en los ajustes de la tablet." : "Listo: la fecha está bien. Ya puedes vender.", !!relojMalo()); draw();
+};
 function loginHTML() {
   return `<div class="gate"><div class="box"><div class="logo">OLI</div><h2>Bienvenido</h2><p>Ingresa para empezar.</p>
     <label class="f" for="lg-mail" style="text-align:left">Correo</label><input class="in plain" id="lg-mail" type="email" autocomplete="username" inputmode="email" placeholder="tucorreo@ejemplo.com">

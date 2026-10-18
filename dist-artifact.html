@@ -333,7 +333,7 @@ details.help span{display:block;font-weight:500;font-size:13px;line-height:1.35;
 <div class="sheet hidden" id="sheet"><div class="bg"></div><div class="panel" role="dialog" aria-modal="true" id="panel"></div></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script>window.OLI_BUILD="59bc888e";</script>
+<script>window.OLI_BUILD="5bdc6dad";</script>
 <script>
 (function(){
 "use strict";
@@ -756,10 +756,12 @@ function avisarPurgado(op, res) {
 // (todo lo de esas fechas el servidor lo descarta). Devuelve el texto para la persona, o "".
 function relojMalo() {
   const hoy = ymd(), dif = typeof RELOJ_EQ !== "undefined" ? RELOJ_EQ.dif : 0, real = Math.abs(dif) > 15 * 60000 ? ymd(new Date(Date.now() - dif)) : hoy;
-  if (real !== hoy) return "La fecha de este equipo está mal: dice " + diaCorto(hoy) + " y hoy es " + diaCorto(real) + ". Corrígela (Ajustes del equipo → Fecha y hora automáticas) y vuelve a abrir OLI antes de vender.";
-  const cv = cortesPurga().ventas; if (DS.mode === "db" && typeof cv === "string" && cv && hoy < cv) return "La fecha de este equipo está mal: dice " + diaCorto(hoy) + ", antes del " + diaCorto(cv) + ". Corrígela (Ajustes del equipo → Fecha y hora automáticas) y vuelve a abrir OLI antes de vender.";
+  if (real !== hoy) return "La fecha de este equipo está mal: dice " + diaCorto(hoy) + " y hoy es " + diaCorto(real) + ". Corrígela en los ajustes de la tablet (Fecha y hora → activar «Fecha y hora automáticas»). Apenas quede bien, OLI deja vender solo.";
+  const cv = cortesPurga().ventas; if (DS.mode === "db" && typeof cv === "string" && cv && hoy < cv) return "La fecha de este equipo está mal: dice " + diaCorto(hoy) + ", antes del " + diaCorto(cv) + ". Corrígela en los ajustes de la tablet (Fecha y hora → activar «Fecha y hora automáticas»). Apenas quede bien, OLI deja vender solo.";
   return "";
 }
+// el día de la app (S.today) al día con el reloj del equipo: si acaban de corregir la fecha, una venta no queda con el día viejo
+function hoyAlDia() { const t = ymd(); if (t !== S.today) { S.today = t; changed(); } }
 const purgado = (n, doc) => { const c = cortesPurga()[n]; return !!(typeof c === "string" && c && doc && typeof doc.fecha === "string" && doc.fecha < c); };
 function descartarPurgados() {
   const cortes = cortesPurga(); if (!Object.keys(cortes).length) return;
@@ -1019,18 +1021,32 @@ function sbIniciar() {
     setInterval(() => { if (pendientes().length) { netFail = false; kickSync(); } }, 20000);
     setInterval(() => heartbeat(), 45000);
     setInterval(() => { if (SB.rtWasDown && conRed()) sbCargarTodo(); }, 20000);                                  // respaldo SOLO si el tiempo real está caído
-    window.addEventListener("online", () => { if (SB.sinVerificar) probarSesion(); else sbCargarTodo(); });
+    window.addEventListener("online", () => { if (SB.sinVerificar) probarSesion(); else { sbCargarTodo(); revisarReloj(true); } });
   }
 }
 const sbCols = () => SHARED_COLS.concat(DS.isAdmin ? SB_ADMIN_COLS : []);
 /* reloj del equipo: con Internet se compara con la hora del servidor (oli_ping). Si la FECHA no coincide, las ventas quedarían con otro día
-   (y si es anterior a un borrado de datos de prueba, el servidor las descartaría): no se deja abrir caja ni vender hasta corregirla. */
-const RELOJ_EQ = {dif: 0, t: 0};
-async function revisarReloj() {
-  if (!SB.client || SB.sinVerificar || !conRed() || (RELOJ_EQ.t && Date.now() - RELOJ_EQ.t < 5 * 60000)) return; RELOJ_EQ.t = Date.now();
+   (y si es anterior a un borrado de datos de prueba, el servidor las descartaría): no se deja abrir caja ni vender hasta corregirla.
+   Cuando alguien corrige la fecha en el equipo, OLI lo nota solo (el reloj del equipo salta y el cronómetro del navegador no) y vuelve a
+   preguntar la hora al servidor: se desbloquea sin cerrar la app. Mientras la fecha esté mal, pregunta cada 30 s. */
+const RELOJ_EQ = {dif: 0, t: 0, w: Date.now(), p: performance.now()};
+async function revisarReloj(ya) {
+  const espera = Math.abs(RELOJ_EQ.dif) > 15 * 60000 ? 30000 : 5 * 60000;
+  if (!SB.client || SB.sinVerificar || !conRed() || (!ya && RELOJ_EQ.t && Math.abs(Date.now() - RELOJ_EQ.t) < espera)) return; RELOJ_EQ.t = Date.now();
   try { const t0 = Date.now(), r = await withTimeout(Promise.resolve(SB.client.rpc("oli_ping")), 8000), t1 = Date.now();
     const srv = r && !r.error && r.data ? new Date(r.data).getTime() : NaN; if (isFinite(srv)) { const d = Math.round((t0 + t1) / 2 - srv); if (Math.abs(d - RELOJ_EQ.dif) > 60000) { RELOJ_EQ.dif = d; changed(); } } } catch (e) {}
 }
+function vigilarReloj() {
+  const w = Date.now(), p = performance.now(), salto = (w - RELOJ_EQ.w) - (p - RELOJ_EQ.p); RELOJ_EQ.w = w; RELOJ_EQ.p = p; hoyAlDia();
+  if (Math.abs(RELOJ_EQ.dif) > 15 * 60000 && conRed()) revisarReloj();                       // fecha mal: se vuelve a preguntar (cada 30 s)
+  if (Math.abs(salto) < 2 * 60000) return;                                                    // el reloj del equipo cambió (o el equipo estuvo dormido)
+  if (SB.client && !SB.sinVerificar && conRed()) { revisarReloj(true); return; }
+  // sin Internet, con la fecha marcada mal: el salto es alguien cambiando la fecha (se desbloquea si la deja bien). Con la fecha bien no se toca:
+  // un equipo que estuvo dormido también "salta" y no se debe bloquear por eso
+  if (Math.abs(RELOJ_EQ.dif) > 15 * 60000) { RELOJ_EQ.dif += salto; changed(); }
+}
+setInterval(vigilarReloj, 5000);
+document.addEventListener("visibilitychange", () => { if (!document.hidden) vigilarReloj(); });
 async function sbCargar(name, gen) {
   const desde = addDays(S.today, -HIST_DIAS), m = {}, t0 = Date.now(); let from = 0;
   for (;;) {
@@ -1997,7 +2013,7 @@ function impLinea(p, precioTotalLinea) {
 }
 async function registrarVenta(opts) {
   if (!DS.canWrite) throw Object.assign(new Error("denied"), {code: "denied"});
-  const rm = relojMalo(); if (rm) throw new Error(rm);
+  const rm = relojMalo(); if (rm) throw new Error(rm); hoyAlDia();
   if (!S.cart.length) throw new Error("El pedido está vacío.");
   const caja = cajaHoy();
   if (!caja || !caja.apertura) { const e = new Error("Primero abre la caja."); e.abrirCaja = true; throw e; }
@@ -2031,7 +2047,7 @@ async function confirmarPago(v) { const id = cajaId(v.fecha, DEV.id), cur = col(
 
 /* ---------- caja ---------- */
 async function abrirCaja(monto) {
-  const rm = relojMalo(); if (rm) throw new Error(rm);
+  const rm = relojMalo(); if (rm) throw new Error(rm); hoyAlDia();
   const f = S.today, id = cajaId(f), cur = col("cajas")[id];
   const vieja = cajasAll().find(x => x.dev === DEV.id && x.fecha < f && x.apertura && cajaEstado(x) === "abierta"); if (vieja) throw new Error("Primero cierra la caja del " + diaCorto(vieja.fecha) + ".");
   if (cur && cur.apertura && cajaEstado(Object.assign({id}, cur)) !== "cerrada") throw new Error("La caja ya está abierta.");
@@ -5303,10 +5319,16 @@ function banners() {
   if (DS.mode === "db" && !SYNC.online) h += `<div class="notice" style="margin:0 0 12px;display:flex;gap:10px;align-items:center">${ic("info", 20)}<span><b>Trabajando sin conexión.</b> Las ventas se enviarán solas cuando vuelva Internet.${ventasPendientes() ? " Pendientes: <b>" + ventasPendientes() + "</b>." : ""}</span></div>`;
   else if (SYNC.estado === "sincronizando" && SYNC.total > 1) h += `<div class="notice ok" style="margin:0 0 12px">Enviando ${Math.min(SYNC.hecho + 1, SYNC.total)}/${SYNC.total}…</div>`;
   if (DS.error) h += `<div class="notice bad" style="margin:0 0 12px">${esc(DS.error)}</div>`;
-  const rm = relojMalo(); if (rm) h += `<div class="notice bad" style="margin:0 0 12px"><b>${esc(rm)}</b></div>`;
+  const rm = relojMalo(); if (rm) h += `<div class="notice bad" style="margin:0 0 12px"><b>${esc(rm)}</b>${DS.mode === "db" ? `<div style="margin-top:8px"><button class="btn ghost sm" data-act="revisarFecha">YA LA CORREGÍ</button></div>` : ""}</div>`;
+  else if (DS.mode === "db" && new Date().getTimezoneOffset() !== 300) h += `<div class="notice" style="margin:0 0 12px">La zona horaria de este equipo no es la de Colombia: las ventas de la noche pueden quedar con el día siguiente. Cámbiala en los ajustes de la tablet (Fecha y hora → Zona horaria → Bogotá).</div>`;   // UTC−5 todo el año
   if (PWA.hay) h += `<div class="notice ok" style="margin:0 0 12px;display:flex;gap:10px;align-items:center;justify-content:space-between"><span><b>Hay una versión nueva de OLI.</b> Se aplica sola cuando no haya un pedido abierto.</span><button class="btn pri sm" data-act="actualizarYa">ACTUALIZAR</button></div>`;
   el.innerHTML = h;
 }
+// después de corregir la fecha en la tablet: se comprueba ya con el servidor (OLI también lo hace solo)
+ACT.revisarFecha = async () => {
+  if (!conRed()) { toast("Sin Internet no se puede comprobar la fecha. Conéctate y vuelve a tocar.", true); return; }
+  await revisarReloj(true); hoyAlDia(); toast(relojMalo() ? "La fecha sigue mal: revísala en los ajustes de la tablet." : "Listo: la fecha está bien. Ya puedes vender.", !!relojMalo()); draw();
+};
 function loginHTML() {
   return `<div class="gate"><div class="box"><div class="logo">OLI</div><h2>Bienvenido</h2><p>Ingresa para empezar.</p>
     <label class="f" for="lg-mail" style="text-align:left">Correo</label><input class="in plain" id="lg-mail" type="email" autocomplete="username" inputmode="email" placeholder="tucorreo@ejemplo.com">
