@@ -501,6 +501,18 @@ begin
   r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','iv5','col','mermas','id','2026-10-09_dA','t',200,'del',true), jsonb_build_object('op_id','iv6','col','movinv','id','2026-10-09_dA','t',200,'del',true)), 'dA', '1.0');
   reset role;
   perform t_assert(not exists (select 1 from waste where id = 'mz1') and not exists (select 1 from inventory_movements where id = 'mvz1') and (select qty from inventory_current where product_id = 'p-mango') = v, 'al borrar esos documentos se borran también sus filas (no quedan huérfanas) y el inventario vuelve a lo de antes');
+  -- T36: datos del cliente que pide factura, solo para el administrador
+  reset role; set role authenticated; perform t_as(e1);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','fc1','col','facturas','id','2026-10-10_d1','t',1,'data','{"fecha":"2026-10-10","dev":"d1","items":[{"id":"f-v1","ventaId":"v1","t":1,"doc":"123","nombre":"Cliente Prueba","correo":"c@ejemplo.com"}]}'::jsonb)), 'd1', '1.0');
+  perform t_assert(r->0->>'status' = 'applied', 'la caja anota los datos del cliente que pide factura');
+  perform t_assert((select count(*) from oli_docs where collection = 'facturas') = 0, '…pero un empleado no los puede leer en el servidor');
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','fc2','col','facturas','id','2026-10-10_d1','t',2,'data','{"fecha":"2026-10-10","dev":"d1","items":[{"id":"f-v2","ventaId":"v2","t":2,"doc":"456","nombre":"Otro","correo":""}]}'::jsonb),
+         jsonb_build_object('op_id','fc3','col','facturas','id','2026-10-10_d2','t',2,'data','{"fecha":"2026-10-10","dev":"d2","items":[]}'::jsonb)), 'd1', '1.0');
+  perform t_assert(r->0->>'status' = 'applied' and r->1->>'status' = 'rejected', 'cada equipo escribe solo su documento');
+  reset role; set role authenticated; perform t_as(a);
+  perform t_assert((select jsonb_array_length(data->'items') from oli_docs where collection = 'facturas' and doc_id = '2026-10-10_d1') = 2, 'el administrador los ve, y los envíos se unen sin perder ninguno');
+  reset role; set role authenticated; perform t_as(x);
+  perform t_assert((select count(*) from oli_docs where collection = 'facturas') = 0, 'alguien de otro negocio no los ve');
   -- T16: coherencia de totales
   reset role;
   perform t_assert((select sum(total) from sales) = (select sum(amount) from payments), 'total de ventas = total de pagos');

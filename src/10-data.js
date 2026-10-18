@@ -16,6 +16,7 @@ const RULES = [
   {path: "", read: "interact", write: "admin"},
   {path: "ventas", write: "interact"}, {path: "cajas", write: "interact"}, {path: "mermas", write: "interact"}, {path: "checklists", write: "interact"},
   {path: "anulaciones", write: "interact"}, {path: "confirmaciones", write: "interact"}, {path: "demandaperdida", write: "interact"}, {path: "dispositivos", write: "interact"}, {path: "cajashelado", write: "interact"},
+  {path: "facturas", read: "admin", write: "interact"},     // datos del cliente que pide factura: la caja los anota; solo el administrador los lee
   {path: "costos", read: "admin", write: "admin"}, {path: "recetas", read: "admin", write: "admin"}, {path: "gastos", read: "admin", write: "admin"},
   {path: "compras", read: "admin", write: "admin"}, {path: "config", read: "admin", write: "admin"}, {path: "terceros", read: "admin", write: "admin"}, {path: "movinv", read: "interact", write: "admin"}, {path: "periodos", read: "admin", write: "admin"}, {path: "docelec", read: "admin", write: "admin"},
   {path: "audit", read: "admin", write: "admin"}, {path: "audit/{self}", read: "interact", write: "interact"},     // cada persona escribe su auditoría; solo el administrador la lee toda
@@ -23,8 +24,8 @@ const RULES = [
 ];
 const LV = {view: 1, interact: 2, admin: 3, owner: 4};
 const SHARED_COLS = ["productos", "stock", "movinv", "ventas", "cajas", "mermas", "checklists", "anulaciones", "confirmaciones", "demandaperdida", "dispositivos", "reaperturas", "meta", "cajashelado"];
-const ADMIN_COLS = ["costos", "recetas", "gastos", "compras", "config", "terceros", "periodos", "docelec"];
-const RANGED = new Set(["ventas", "cajas", "mermas", "checklists", "anulaciones", "confirmaciones", "demandaperdida", "reaperturas", "movinv", "cajashelado"]);
+const ADMIN_COLS = ["costos", "recetas", "gastos", "compras", "config", "terceros", "periodos", "docelec", "facturas"];
+const RANGED = new Set(["ventas", "cajas", "mermas", "checklists", "anulaciones", "confirmaciones", "demandaperdida", "reaperturas", "movinv", "cajashelado", "facturas"]);
 const HIST_DIAS = 95;
 
 const DS = {lastRemote: 0, mode: "loading", dbh: null, uid: null, isAdmin: false, canWrite: true, c: {}, v: 0, ready: {}, error: null, fromCache: true, localRole: "admin", subs: [], remoteSeen: false};
@@ -208,7 +209,9 @@ async function syncNow() {
       const still = OUT[op.path];
       const acks = DS.acks || (DS.acks = {}); acks[op.path] = (op.del ? [] : idsDe(op.data)).slice(-600);   // de lo que se envió (también ops guardados por una versión anterior)
       const ops2 = [["kv", "put", "acks", acks]];
-      if (still && still.t === op.t) { delete OUT[op.path]; ops2.push(["outbox", "del", op.path]); }
+      if (still && still.t === op.t) { delete OUT[op.path]; ops2.push(["outbox", "del", op.path]);
+        // lo que esta persona puede escribir pero no leer (datos del cliente que pidió factura, su historial) no se queda en el equipo una vez enviado
+        if (!puede(op.col, "read") && DS.c[op.col] && op.id in DS.c[op.col]) { const m = Object.assign({}, DS.c[op.col]); delete m[op.id]; DS.c[op.col] = m; ops2.push(["docs", "del", op.path]); } }
       await IDB.tx(ops2); SYNC.hecho++; SYNC.ultima = Date.now(); (SYNC.ackT || (SYNC.ackT = {}))[op.col] = Date.now(); netFail = false; return null;
     } catch (e) {
       if (!esRechazo(e)) { netFail = true; SYNC.error = "sin respuesta del servidor"; return "red"; }

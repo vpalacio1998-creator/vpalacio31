@@ -52,9 +52,11 @@ async function registrarVenta(opts) {
   let resto = desc;   // el descuento se reparte por línea y la suma cuadra exacto con el total
   const items = S.cart.map((c, k) => { const p = prod(c.pid), bruto = c.p * c.q, d = k === S.cart.length - 1 ? resto : Math.round(sub ? desc * bruto / sub : 0); resto -= d; const i = impLinea(p, bruto - d); return Object.assign({pid: c.pid, n: c.n, q: c.q, p: c.p, d, imp: {t: i.t, r: i.r, base: i.base, v: i.imp}}, c.sab ? {sab: c.sab.slice(), pres: c.pres, det: c.det, gasta: consumoLinea(c), bc: bolasCaja()} : {}); });
   const t = Date.now(), fecha = ymd(new Date(t));
-  const venta = {id: DEV.id + "-" + t.toString(36) + "-" + seq, n: seq, num: (DEV.nombre || DEV.id) + " #" + seq, t, fecha, uid: uidActual(), dev: DEV.id, m: opts.m, total, sub, desc, recibido: opts.m === "Efectivo" ? (opts.recibido || total) : total, cambio: opts.m === "Efectivo" ? Math.max(0, (opts.recibido || total) - total) : 0, ref: opts.ref || "", cliente: opts.cliente || null, estado: "confirmada"};
+  const venta = {id: DEV.id + "-" + t.toString(36) + "-" + seq, n: seq, num: (DEV.nombre || DEV.id) + " #" + seq, t, fecha, uid: uidActual(), dev: DEV.id, m: opts.m, total, sub, desc, recibido: opts.m === "Efectivo" ? (opts.recibido || total) : total, cambio: opts.m === "Efectivo" ? Math.max(0, (opts.recibido || total) - total) : 0, ref: opts.ref || "", cliente: opts.cliente ? true : null, estado: "confirmada"};
   venta.items = items;
   await appendTo("ventas", cajaId(fecha), "ventas", venta, {fecha, dev: DEV.id, uid: uidActual(), devNombre: DEV.nombre});
+  // los datos personales del cliente que pide factura no van en la venta (la leen todos los equipos): van aparte, solo para el administrador
+  if (opts.cliente) await appendTo("facturas", cajaId(fecha), "items", {id: "f-" + venta.id, ventaId: venta.id, t, uid: uidActual(), doc: opts.cliente.doc || "", nombre: opts.cliente.nombre || "", correo: opts.cliente.correo || ""}, {fecha, dev: DEV.id});
   if (desc > 0) audit("DESCUENTO", venta.id, fmt(desc) + " sobre " + fmt(sub));
   return venta;
 }

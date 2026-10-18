@@ -27,6 +27,9 @@ const ventasAll = () => memo("ventasAll", () => {
   return out.sort((a, b) => a.t - b.t);
 });
 const ventasOk = () => memo("ventasOk", () => ventasAll().filter(v => !v.anulada));
+/* datos del cliente que pidió factura (solo administrador). Las ventas viejas los traían adentro (v.cliente con doc y nombre). */
+const facturasMap = () => memo("facts", () => { const m = {}; for (const d of Object.values(col("facturas"))) for (const x of (d.items || [])) if (x && x.ventaId) m[x.ventaId] = x; return m; });
+const clienteDe = v => facturasMap()[v.id] || (v.cliente && typeof v.cliente === "object" ? v.cliente : null);
 const ventasEn = (a, b) => ventasOk().filter(v => v.fecha >= a && v.fecha <= b);
 /* qué inventario gasta una línea (de una venta o del pedido): los combos se abren en sus componentes; un cono gasta su barquillo y su cucurucho o vaso.
    Las bolas de helado no se descuentan una a una: se miden por caja de cada sabor (ver 63-conos). */

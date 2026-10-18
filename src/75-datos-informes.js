@@ -57,7 +57,7 @@ function filasRentabilidad(a, b) {
   return rentabilidad(a, b).map(r => ({producto: r.n, pid: r.pid, unidades: r.uds, ventas: r.ing, costo: r.sinCosto ? null : r.costo, descuentos: r.desc || 0, merma: mer[r.pid] || 0}));   // r.ing ya trae el descuento restado
 }
 function filasClientes(a, b) {
-  const m = {}; for (const v of ventasOk()) if (v.fecha >= a && v.fecha <= b && v.cliente && v.cliente.doc) { const k = v.cliente.doc, o = m[k] = m[k] || {doc: k, nombre: v.cliente.nombre || "", correo: v.cliente.correo || "", ult: "", n: 0, total: 0, prods: {}}; o.n++; o.total += v.total; if (v.fecha > o.ult) o.ult = v.fecha; for (const it of (v.items || [])) o.prods[it.n] = (o.prods[it.n] || 0) + it.q; }
+  const m = {}; for (const v of ventasOk()) { const cl = v.fecha >= a && v.fecha <= b ? clienteDe(v) : null; if (!cl || !cl.doc) continue; const k = cl.doc, o = m[k] = m[k] || {doc: k, nombre: cl.nombre || "", correo: cl.correo || "", ult: "", n: 0, total: 0, prods: {}}; o.n++; o.total += v.total; if (v.fecha > o.ult) o.ult = v.fecha; for (const it of (v.items || [])) o.prods[it.n] = (o.prods[it.n] || 0) + it.q; }
   const cada = configNeg().puntosCada || 0;
   return Object.values(m).map(o => ({cliente: o.doc, nombre: o.nombre, correo: o.correo, ultima: o.ult, compras: o.n, total: o.total, ticket: o.n ? o.total / o.n : 0, favorito: Object.entries(o.prods).sort((x, y) => y[1] - x[1])[0][0], puntos: cada ? Math.floor(o.total / cada) : null, estado: "Activo"}));
 }
