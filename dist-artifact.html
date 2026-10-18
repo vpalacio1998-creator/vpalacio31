@@ -333,7 +333,7 @@ details.help span{display:block;font-weight:500;font-size:13px;line-height:1.35;
 <div class="sheet hidden" id="sheet"><div class="bg"></div><div class="panel" role="dialog" aria-modal="true" id="panel"></div></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script>window.OLI_BUILD="24d49084";</script>
+<script>window.OLI_BUILD="cb61884c";</script>
 <script>
 (function(){
 "use strict";
@@ -1180,7 +1180,9 @@ const ventasEn = (a, b) => ventasOk().filter(v => v.fecha >= a && v.fecha <= b);
 /* qué inventario gasta una línea (de una venta o del pedido): los combos se abren en sus componentes; un cono gasta su barquillo y su cucurucho o vaso.
    Las bolas de helado no se descuentan una a una: se miden por caja de cada sabor (ver 63-conos). */
 function consumoBruto(it) {
-  if (Array.isArray(it.gasta)) return it.gasta;                       // lo que se guardó al vender (no cambia si después se edita el producto)
+  // lo que se guardó al vender (no cambia si después se edita el producto). Solo insumos y cantidades razonables (la misma regla del servidor):
+  // un dato raro no suma inventario ni descuenta otro producto
+  if (Array.isArray(it.gasta)) return it.gasta.filter(x => x && (prod(x.pid) || {}).tipo === "insumo" && Number(x.q) > 0 && Number(x.q) <= (Number(it.q) || 0) * 3);
   const p = prod(it.pid);
   if (p && p.combo) return p.combo.map(c => ({pid: c.pid, q: c.q * it.q}));
   if (p && p.cono) return gastoCono(p, it.pres, it.q);
@@ -1252,6 +1254,10 @@ function cajaBloqueada() { const c = cajaHoy(); return c && cajaEstado(c) === "c
 const checklistDe = (fecha, dev = DEV.id) => col("checklists")[cajaId(fecha, dev)] || {fecha, dev, apertura: {}, cierre: {}};
 
 /* ---------- finanzas ---------- */
+/* devoluciones en efectivo ("Sacar dinero" → "Devolución a cliente"): la venta sigue contada (su caja ya cerró), así que la plata devuelta se resta
+   de la utilidad. Las devoluciones por Nequi u otro medio se anotan como gasto (ya se restan). */
+const esDevolucion = m => m && m.tipo === "retiro" && String(m.motivo || "").indexOf("Devolución a cliente") === 0;
+function devolucionesEn(a, b) { const out = []; for (const c of cajasAll()) if (c.fecha >= a && c.fecha <= b) for (const m of (c.movs || [])) if (esDevolucion(m)) out.push({fecha: c.fecha, monto: Number(m.monto) || 0}); return out; }
 function gastosEn(a, b) {
   const out = [];
   for (const [id, g] of Object.entries(col("gastos"))) if (g.fecha >= a && g.fecha <= b) out.push(Object.assign({id, origen: "gasto"}, g));
@@ -1265,14 +1271,15 @@ function finanzas(a, b) {
     for (const l of lineasExp(v)) { const c = costoUnit(l.pid, v.t); if (c == null) { if (l.porCaja) sinCostoHelado = true; else sinCosto += l.q; } else cogs += c * l.q; }
   }
   const gs = gastosEn(a, b), gastosOp = sum(gs.filter(g => g.cat !== BASE_COSTO), g => g.valor), gastosMP = sum(gs.filter(g => g.cat === BASE_COSTO), g => g.valor);
-  const bruta = ventas - cogs, utilidad = bruta - gastosOp;
-  return {ventas, cogs, bruta, gastos: gastosOp, gastosMP, utilidad, margen: ventas ? utilidad / ventas : NaN, margenBruto: ventas ? bruta / ventas : NaN, n: vs.length, uds, ticket: vs.length ? ventas / vs.length : 0, sinCosto, sinCostoHelado};
+  const devol = sum(devolucionesEn(a, b), x => x.monto);   // plata devuelta en efectivo de ventas que ya no se podían anular (caja cerrada)
+  const bruta = ventas - cogs, utilidad = bruta - gastosOp - devol;
+  return {ventas, cogs, bruta, gastos: gastosOp, gastosMP, devol, utilidad, margen: ventas ? utilidad / ventas : NaN, margenBruto: ventas ? bruta / ventas : NaN, n: vs.length, uds, ticket: vs.length ? ventas / vs.length : 0, sinCosto, sinCostoHelado};
 }
 function rentabilidad(a, b) {
   const rows = {};
   for (const v of ventasEn(a, b)) for (const it of (v.items || [])) {
     const p = prod(it.pid), r = rows[it.pid] = rows[it.pid] || {pid: it.pid, n: (p && p.nombre) || it.n || "?", cat: p ? p.cat : "Otros", uds: 0, ing: 0, costo: 0, sinCosto: 0};
-    r.uds += it.q; r.ing += it.p * it.q; const c = costoItem(it, v.t); if (c == null) r.sinCosto += it.q; else r.costo += c * it.q;
+    r.uds += it.q; r.ing += it.p * it.q - (Number(it.d) || 0); r.desc = (r.desc || 0) + (Number(it.d) || 0); const c = costoItem(it, v.t); if (c == null) r.sinCosto += it.q; else r.costo += c * it.q;   // ing: lo que de verdad entró, con el descuento ya restado (como el total de la venta)
   }
   return Object.values(rows).map(r => Object.assign(r, {util: r.ing - r.costo, margen: r.ing ? (r.ing - r.costo) / r.ing : NaN}));
 }
@@ -1280,15 +1287,18 @@ function porClave(a, b, f) { const m = {}; for (const v of ventasEn(a, b)) { con
 function serieDiaria(a, b) {
   const out = [], by = {}; for (const v of ventasEn(a, b)) { const o = by[v.fecha] = by[v.fecha] || {ventas: 0, n: 0, cogs: 0}; o.ventas += v.total; o.n++; for (const l of lineasExp(v)) { const c = costoUnit(l.pid, v.t); if (c != null) o.cogs += c * l.q; } }
   const gs = {}; for (const g of gastosEn(a, b)) if (g.cat !== BASE_COSTO) gs[g.fecha] = (gs[g.fecha] || 0) + g.valor;
+  for (const x of devolucionesEn(a, b)) gs[x.fecha] = (gs[x.fecha] || 0) + x.monto;
   for (let d = a, i = 0; d <= b && i < 400; d = addDays(d, 1), i++) { const o = by[d] || {ventas: 0, n: 0, cogs: 0}; out.push({d, ventas: o.ventas, n: o.n, cogs: o.cogs, bruta: o.ventas - o.cogs, util: o.ventas - o.cogs - (gs[d] || 0)}); }
   return out;
 }
 const configNeg = () => col("config").negocio || {};
 const gastosFijosPlan = () => (configNeg().gastosFijos || []);
 const totalFijos = () => sum(gastosFijosPlan(), g => g.v);
-/* arriendo, nómina y servicios ya están dentro de los gastos fijos del mes: si además se registran como gasto, no se restan dos veces */
-const CATS_FIJAS = ["Arrendamiento", "Nómina", "Servicios"];
-const gastosVariables = (a, b) => { const fijas = totalFijos() > 0 ? CATS_FIJAS : []; return sum(gastosEn(a, b).filter(g => g.cat !== BASE_COSTO && !fijas.includes(g.cat)), g => g.valor); };
+/* arriendo, nómina y servicios que ya están dentro de los gastos fijos del mes: si además se registran como gasto, no se restan dos veces.
+   Solo se da por incluida una categoría si el plan tiene algún renglón de ella con valor (con Luz, Agua e Internet en $0, un recibo de luz sí se resta). */
+const CATS_FIJAS = {Arrendamiento: /arriendo|arrendamiento|alquiler|local/i, "Nómina": /trabajador|n[oó]mina|sueldo|salario|emplead|pago de personal/i, Servicios: /luz|agua|internet|gas|servicio|energ|tel[eé]fono|celular|acueducto/i};
+const catsEnFijos = () => Object.keys(CATS_FIJAS).filter(c => gastosFijosPlan().some(g => (Number(g.v) || 0) > 0 && (CATS_FIJAS[c].test(g.n || "") || g.n === c)));
+const gastosVariables = (a, b) => { const fijas = catsEnFijos(); return sum(gastosEn(a, b).filter(g => g.cat !== BASE_COSTO && !fijas.includes(g.cat)), g => g.valor) + sum(devolucionesEn(a, b), x => x.monto); };
 const margenObjetivo = () => (configNeg().margenObjetivo != null ? configNeg().margenObjetivo : 0.6);
 
 /* ---------- rangos de fecha para filtros ---------- */
@@ -1367,6 +1377,9 @@ const diasAbiertos = (a, b) => Object.keys(histVentasDia()).filter(d => d >= a &
 const histInfo = () => memo("hist", () => { const t = S.today, dias = diasAbiertos(addDays(t, -60), addDays(t, -1)); return {dias, n: dias.length, primero: dias[0] || null, ok: dias.length >= MIN_DIAS}; });
 const unidadesDia = () => memo("upd", () => { const m = {}; for (const v of ventasOk()) for (const l of lineasExp(v)) { const o = m[l.pid] = m[l.pid] || {}; o[v.fecha] = (o[v.fecha] || 0) + l.q; } return m; });
 const unidadesHoy = pid => (unidadesDia()[pid] || {})[S.today] || 0;
+/* unidades VENDIDAS de cada producto por día (un cono es un cono, un combo es un combo): para proyectar plata.
+   unidadesDia, en cambio, es lo que sale del inventario (el barquillo y el cucurucho del cono): para comprar. */
+const vendidasDia = () => memo("vdia", () => { const m = {}; for (const v of ventasOk()) for (const it of (v.items || [])) { const o = m[it.pid] = m[it.pid] || {}; o[v.fecha] = (o[v.fecha] || 0) + (Number(it.q) || 0); } return m; });
 
 /* ---- factor por día de la semana (a nivel tienda) ---- */
 function dowFactors() {
@@ -1408,6 +1421,20 @@ function demandaDia(pid, fecha, parcial) {
   let d = base * fac * tr; if (parcial) d = Math.max(0, d - unidadesHoy(pid)); return d;
 }
 function demanda(pid, fechas) { let s = 0; for (const f of fechas) { const d = demandaDia(pid, f, f === S.today); if (d == null) return null; s += d; } return s; }
+// unidades que se espera VENDER de un producto en esas fechas (para plata). Igual que demanda, pero los conos y combos cuentan como tales.
+function demandaVendida(pid, fechas) {
+  const p = prod(pid); if (!p || !(p.cono || p.combo)) return demanda(pid, fechas);
+  const dias = histInfo().dias.slice(-14); if (dias.length < 3) return null; const u = vendidasDia()[pid] || {}, base = sum(dias, d => u[d] || 0) / dias.length;
+  const tr = clamp(tendTienda() != null ? tendTienda() : 1, 0.75, 1.35); let s = 0;
+  for (const f of fechas) { let d = base * factorDia(f).fac * tr; if (f === S.today) d = Math.max(0, d - (u[S.today] || 0)); s += d; }
+  return s;
+}
+// costo por unidad para proyectar y simular: el registrado; si el producto no tiene uno propio (conos), el promedio de lo vendido en 30 días
+function costoProyeccion(pid) {
+  const c = costoActual(pid); if (c != null) return c;
+  const r = rentabilidad(addDays(S.today, -29), S.today).find(x => x.pid === pid), n = r ? r.uds - r.sinCosto : 0;
+  return n > 0 ? r.costo / n : null;
+}
 function fechasHorizonte(k) {
   const t = S.today;
   if (k === "hoy") return [t]; if (k === "3") return [t, addDays(t, 1), addDays(t, 2)]; if (k === "7") return Array.from({length: 7}, (_, i) => addDays(t, i));
@@ -1468,7 +1495,7 @@ function prepararFinde() {
     const disp = r.st == null ? 0 : Math.max(0, r.st), dem = r.dem, deficit = dem == null ? null : Math.max(0, dem + r.seg - disp);
     return Object.assign({}, r, {disp, deficit, riesgoF: dem == null ? "sin" : dem + r.seg > disp ? (disp < dem ? "bad" : "warn") : "ok"});
   });
-  const ventasEsp = sum(rows, r => (r.dem || 0) * (r.p.precio || 0)), enRiesgo = rows.filter(r => r.riesgoF === "bad" || r.riesgoF === "warn");
+  const ventasEsp = sum(vendibles(), p => (demandaVendida(p.id, fechas) || 0) * (p.precio || 0)), enRiesgo = rows.filter(r => r.riesgoF === "bad" || r.riesgoF === "warn");
   return {fechas, rows, ventasEsp, enRiesgo, basico, datosOk: hi.ok};
 }
 
@@ -1497,7 +1524,7 @@ function patrones() {
 function proyeccion(dias) {
   const hi = histInfo(); if (!hi.ok) return {ok: false, dias};
   const fechas = Array.from({length: dias}, (_, i) => addDays(S.today, i + 1)); let ventas = 0, costo = 0, sinCosto = 0; const por = [];
-  for (const p of vendibles()) { const d = demanda(p.id, fechas.map(f => f)); if (d == null) continue; const c = costoActual(p.id); ventas += d * (p.precio || 0); if (c == null) sinCosto += d; else costo += d * c; por.push({p, d}); }
+  for (const p of vendibles()) { const d = demandaVendida(p.id, fechas); if (d == null) continue; const c = costoProyeccion(p.id); ventas += d * (p.precio || 0); if (c == null) sinCosto += d; else costo += d * c; por.push({p, d}); }
   const fijos = totalFijos() * dias / 30, ant = fechas.map(f => ({f, f2: dowFactors().f[dowOf(f)]})), sorted = ant.filter(x => x.f2 > 0).sort((a, b) => b.f2 - a.f2);
   const df = dowFactors(), top = Object.entries(df.f).filter(([k]) => df.ok[k]).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([k]) => DOW[k]);
   const need = recomendarCompra(fechas).filter(r => r.comprar), riesgo = need.filter(r => r.riesgo !== "ok");
@@ -1511,8 +1538,11 @@ function simular(i) {
 }
 function baseSimulador(pid) {
   const a = addDays(S.today, -29), b = S.today;
-  if (pid === "*") { const f = finanzas(a, b); return {precio: f.uds ? f.ventas / f.uds : 0, costo: f.uds ? f.cogs / f.uds : 0, vol: f.uds, gastos: f.gastos || totalFijos()}; }
-  const r = rentabilidad(a, b).find(x => x.pid === pid), p = prod(pid); return {precio: p ? p.precio : 0, costo: costoActual(pid) || 0, vol: r ? r.uds : 0, gastos: totalFijos()};
+  // gastos del mes: los fijos del plan más lo variable registrado (la misma regla del punto de equilibrio del inicio); sin plan, lo registrado
+  const gastosMes = totalFijos() > 0 ? totalFijos() + gastosVariables(a, b) : finanzas(a, b).gastos;
+  if (pid === "*") { const f = finanzas(a, b); return {precio: f.uds ? f.ventas / f.uds : 0, costo: f.uds ? f.cogs / f.uds : 0, vol: f.uds, gastos: gastosMes}; }
+  const r = rentabilidad(a, b).find(x => x.pid === pid), p = prod(pid), c = costoProyeccion(pid);
+  return {precio: p ? p.precio : 0, costo: c == null ? 0 : Math.round(c), sinCosto: c == null, vol: r ? r.uds : 0, gastos: gastosMes};
 }
 
 /* ---- recomendaciones de precio (solo recomienda; nunca cambia precios) ---- */
@@ -1566,8 +1596,9 @@ function productosLentos() {
   return memo("lentos", () => {
     if (!histInfo().ok) return [];
     const rent = {}; rentabilidad(addDays(S.today, -29), S.today).forEach(r => rent[r.pid] = r); const out = [];
+    const nd = Math.max(1, Math.min(30, diffDays(S.today, histInfo().primero || S.today) + 1));   // días de verdad con historia (máx. 30): con 16 días no se divide por 30
     for (const p of terminados().filter(x => x.activo !== false && x.controla !== false && !x.combo)) {
-      const st = stockDe(p.id); if (st == null || st <= (p.min || 0)) continue; const u = (rent[p.id] || {}).uds || 0, cov = u > 0 ? st / (u / 30) : Infinity;
+      const st = stockDe(p.id); if (st == null || st <= (p.min || 0)) continue; const u = (rent[p.id] || {}).uds || 0, cov = u > 0 ? st / (u / nd) : Infinity;
       if (cov > 45 && st >= 8) out.push({p, st, u30: u, cov, rec: "Reducir producción o compra."});
     }
     return out.sort((a, b) => b.cov - a.cov);
@@ -1602,6 +1633,11 @@ function anomalias() {
     const difs = cajasAll().filter(c => c.fecha >= addDays(t, -29) && (c.cierres || []).length && Math.abs((c.cierres.slice(-1)[0] || {}).dif || 0) >= 1000);
     if (difs.length >= 3) out.push({sev: "warn", t: `Se registraron ${difs.length} cierres con diferencias en 30 días.`, d: "Conviene revisar los cierres y el conteo de efectivo.", ir: "cierres"});
     for (const [pid, st] of Object.entries(stockMap())) { const p = prod(pid); if (st != null && st < 0 && (!p || (p.activo !== false && !p.combo))) out.push({sev: "bad", t: `El inventario de ${(p || {}).nombre || pid} quedó negativo (${st}).`, d: "Puede ser un conflicto entre dispositivos o un conteo desactualizado. Haz un conteo.", ir: "inventario"}); }   // un combo o un producto desactivado no se cuenta: su alerta sale en el insumo
+    const viejos = conteosViejos(); if (viejos.length) { const malos = viejos.filter(x => x.dias >= HIST_DIAS - 2);
+      out.push({sev: malos.length ? "bad" : "warn", t: malos.length ? `El inventario de ${malos.slice(0, 3).map(x => x.p.nombre).join(", ")}${malos.length > 3 ? " y " + (malos.length - 3) + " más" : ""} ya no es confiable en este equipo: hay que contarlo.` : `Hay ${viejos.length === 1 ? "1 producto que no se cuenta" : viejos.length + " productos que no se cuentan"} hace más de 70 días: ${viejos.slice(0, 3).map(x => x.p.nombre).join(", ")}${viejos.length > 3 ? "…" : ""}.`,
+        d: "Este equipo guarda los últimos " + HIST_DIAS + " días de ventas. Cuenta esos productos (Inventario → Contar) para que el cálculo siga siendo exacto.", ir: "inventario"}); }
+    // una venta cuyo total no es la suma de sus productos menos el descuento (la app nunca la arma así: llegó dañada o de otra forma). Sin asumir nada: revisar
+    for (const v of ventasOk()) if (v.fecha >= addDays(t, -6) && (v.items || []).length && Math.abs((Number(v.total) || 0) - sum(v.items, it => (Number(it.p) || 0) * (Number(it.q) || 0) - (Number(it.d) || 0))) > 1) out.push({sev: "warn", t: `La venta ${v.num || v.id} tiene un total que no cuadra con sus productos.`, d: diaCorto(v.fecha) + " " + hora(v.t) + " · total " + fmt(v.total) + " · productos " + fmt(sum(v.items, it => (Number(it.p) || 0) * (Number(it.q) || 0) - (Number(it.d) || 0))) + ". Revísala en Ventas.", ir: "reportes"});
     // el servidor marca "sinPermiso" un retiro o pago de un empleado que llegó con el permiso apagado (la plata sí salió: se guarda y se avisa)
     for (const c of cajasAll()) if (c.fecha >= addDays(t, -6)) for (const m of (c.movs || [])) if (m.sinPermiso) out.push({sev: "warn", t: `${nombreDe(m.uid) || "Un empleado"} ${m.tipo === "gasto" ? "pagó" : "sacó"} ${fmt(m.monto)} de la caja aunque los empleados no tienen permiso.`, d: diaCorto(c.fecha) + " " + hora(m.t) + " · " + ((col("dispositivos")[c.dev] || {}).nombre || c.devNombre || "") + (m.motivo ? " · " + m.motivo : "") + ". La plata sí salió de la caja: quedó registrada.", ir: "caja"});
     return out;
@@ -1670,7 +1706,7 @@ function decisionesHoy() {
 /* ---- resumen del día ---- */
 function resumenDia(fecha = S.today) {
   const f = finanzas(fecha, fecha), rent = rentabilidad(fecha, fecha).sort((a, b) => b.uds - a.uds), est = rent[0], ago = prods().filter(p => p.activo !== false && p.controla !== false && estadoProd(p).k === "agotado");
-  const cajas = cajasAll().filter(c => c.fecha === fecha && (c.cierres || []).length), dif = sum(cajas, c => c.cierres.slice(-1)[0].dif || 0), al = alertas().length;
+  const cajas = cajasAll().filter(c => c.fecha === fecha && cajaEstado(c) === "cerrada"), dif = sum(cajas, c => Number(c.cierres.slice(-1)[0].dif) || 0), al = alertas().length;   // una caja reabierta no cuenta su cierre viejo
   const rec = recomendarCompra(fechasHorizonte("finde")).filter(r => r.comprar > 0 && r.riesgo !== "ok").slice(0, 2);
   const recTxt = rec.length ? "Comprar " + rec.map(r => r.comprar + " " + r.p.nombre.replace(/^Paleta /, "")).join(" y ") + " antes del " + DOW[6] + "." : (ago.length ? "Reponer " + ago.map(p => p.nombre).slice(0, 2).join(" y ") + "." : "Todo en orden. Sigue así.");
   return {f, fecha, uds: sum(rent, r => r.uds), est, ago, dif, al, rec: recTxt, txt: ""};
@@ -1963,11 +1999,16 @@ async function sumarStock(pid, q, mov) {
   await movInv([Object.assign({pid, delta: true, q, antes, despues: Math.round((antes + q) * 1000) / 1000}, mov)]);
   return antes;
 }
-// el historial de ventas en el equipo cubre ~95 días: si un inventario no se cuenta en 80 días, se hace un corte automático (sin cambiar la cantidad)
-async function rebaseStockViejo() {
-  if (!esAdmin() || DS.mode !== "db" || !DS.remoteSeen) return; const lim = Date.now() - 80 * 864e5;
-  for (const [pid, s0] of Object.entries(stockDocs())) { const p = prod(pid), st = stockDe(pid); if (!p || p.controla === false || p.combo || st == null || !s0 || (s0.t || 0) > lim || OUT[pathOf("stock", pid)]) continue;
-    await fijarStock(pid, st, {tipo: "rebase", motivo: "Corte automático del inventario"}).catch(() => {}); }
+// Antes, si un inventario no se contaba en 80 días, este equipo lo "fijaba" solo con su propio cálculo: congelaba un número al que le podían
+// faltar ventas de otros equipos sin Internet (y las que llegaban después ya no se restaban). Ya no escribe nada: OLI pide contar
+// (conteosViejos, en las alertas) antes de que el equipo deje de tener todas las ventas desde el último conteo.
+async function rebaseStockViejo() {}
+// productos que no se cuentan hace mucho: con servidor, cada equipo guarda HIST_DIAS días de ventas; pasado ese tiempo su cálculo ya no es confiable
+function conteosViejos() {
+  if (DS.mode !== "db") return [];
+  const out = []; for (const [pid, s0] of Object.entries(stockDocs())) { const p = prod(pid); if (!p || p.activo === false || p.controla === false || p.combo || !s0 || s0.base == null) continue;
+    const dias = Math.floor((Date.now() - (s0.t || 0)) / 864e5); if (dias >= 70) out.push({p, dias}); }
+  return out.sort((a, b) => b.dias - a.dias);
 }
 async function contarStock(pid, cantidad, motivo) {
   exigirAdmin(); const p = prod(pid), antes = await fijarStock(pid, cantidad, {tipo: "conteo", motivo: motivo || "Conteo"});
@@ -2392,12 +2433,13 @@ VIEWS.caja = () => {
   let principal = "";
   if (st === "sin") principal = `<div class="card" style="text-align:center;padding:26px 16px">${ic("caja", 56)}<h3 style="margin:10px 0 6px">La caja está cerrada</h3><p class="muted" style="margin:0 0 16px">Ábrela para empezar a vender. Te preguntamos con cuánto efectivo empiezas.</p><button class="btn pri xl wide" data-act="abrirCaja">${ic("caja", 22)} ABRIR CAJA</button></div>`;
   else principal = cajaCardHTML(c, true) + (st === "abierta" ? `<div class="btns" style="margin-bottom:14px"><button class="btn ghost" style="flex:1" data-act="movCaja" data-t="retiro">Sacar dinero</button><button class="btn ghost" style="flex:1" data-act="movCaja" data-t="ingreso">Entró dinero</button><button class="btn ghost" style="flex:1" data-act="movCaja" data-t="gasto">Pagué algo</button></div><button class="btn pri xl wide" data-act="cerrarCaja">${ic("lock", 22)} CERRAR CAJA</button>` : "");
-  const pend = ventasOk().filter(v => v.pend && v.fecha >= addDays(S.today, -3));
   const adm = esAdmin();
+  // el administrador ve todos los pagos por confirmar (la alerta los cuenta todos); la caja, los de los últimos 3 días
+  const pend = ventasOk().filter(v => v.pend && (adm || v.fecha >= addDays(S.today, -3)));
   if (adm && S.cajaVista === "mes") return cabecera("Caja", "Acumulado del mes") + vistaCajaSeg() + cajaMesHTML();
   return cabecera("Caja", "Hoy · " + diaLargo(S.today) + (DEV.nombre ? " · " + esc(DEV.nombre) : "")) + (adm ? vistaCajaSeg() : "") + avisoCajaPendiente() + (st === "sin" ? principal : cajaCardHTML(c, true)) +
     (st !== "sin" ? checklistHTML("apertura", CHECK_AP) : "") + (st === "abierta" ? checklistHTML("tarde", CHECK_TARDE) + checklistHTML("cierre", CHECK_CI) : "") +
-    (pend.length ? `<div class="card"><h3>Pagos por confirmar</h3><p class="small muted" style="margin-top:-4px">Mira el aviso de tu banco o billetera. Si ya llegó, toca “Ya llegó”.</p>${pend.slice(-8).reverse().map(v => `<div class="row"><div class="l"><b>${fmt(v.total)}</b> <span class="pill">${esc(v.m)}</span><div class="small muted">${hora(v.t)}${v.ref ? " · " + esc(v.ref) : ""}</div></div><button class="btn pri sm" data-act="ya" data-id="${esc(v.id)}">Ya llegó</button></div>`).join("")}</div>` : "") +
+    (pend.length ? `<div class="card"><h3>Pagos por confirmar</h3><p class="small muted" style="margin-top:-4px">Mira el aviso de tu banco o billetera. Si ya llegó, toca “Ya llegó”.</p>${(adm ? pend : pend.slice(-8)).slice().reverse().map(v => `<div class="row"><div class="l"><b>${fmt(v.total)}</b> <span class="pill">${esc(v.m)}</span><div class="small muted">${v.fecha !== S.today ? diaCorto(v.fecha) + " " : ""}${hora(v.t)}${v.ref ? " · " + esc(v.ref) : ""}</div></div><button class="btn pri sm" data-act="ya" data-id="${esc(v.id)}">Ya llegó</button></div>`).join("")}</div>` : "") +
     (st === "abierta" ? `<div class="btns" style="margin-bottom:14px"><button class="btn ghost" style="flex:1" data-act="movCaja" data-t="retiro">Sacar dinero</button><button class="btn ghost" style="flex:1" data-act="movCaja" data-t="ingreso">Entró dinero</button><button class="btn ghost" style="flex:1" data-act="movCaja" data-t="gasto">Pagué algo</button></div><button class="btn pri xl wide" data-act="cerrarCaja">${ic("lock", 22)} CERRAR CAJA</button>` : "") +
     ventasHoyHTML() +
     (adm && todas.length ? `<h3>Otras cajas de hoy</h3>${todas.map(x => cajaCardHTML(x, false)).join("")}` : "");
@@ -2416,10 +2458,11 @@ const TIT_MOV = {retiro: "Sacar dinero de la caja", ingreso: "Entró dinero a la
 const permisoMov = () => esAdmin() || ((col("meta").permisos || {}).movimientosEmpleado !== false);
 ACT.movCaja = (el, d) => { if (!permisoMov()) { toast("Pídele al administrador que haga este movimiento.", true); return; } S.movTipo = d.t;
   abrir(() => `${head(TIT_MOV[S.movTipo])}<label class="f" for="mv-monto">¿Cuánto?</label><input class="in money" id="mv-monto" inputmode="numeric" placeholder="$0">${teclado("mv-monto")}
-  <label class="f">¿Para qué?</label>${sel("mv-mot", MOT_MOV[S.movTipo], "")}${S.movTipo === "retiro" ? `<p class="xs muted" style="margin:4px 0 0">¿Devolución de una venta con la caja todavía abierta? Mejor anula la venta en «Ventas de hoy»: la caja se ajusta sola. «Devolución a cliente» es para ventas de cajas ya cerradas.</p>` : ""}<label class="f" for="mv-nota">Detalle (opcional)</label><input class="in plain" id="mv-nota" placeholder="Ej: compra de vasos">
+  <label class="f">¿Para qué?</label>${sel("mv-mot", MOT_MOV[S.movTipo], "")}${S.movTipo === "retiro" ? `<p class="xs muted" style="margin:4px 0 0">¿Devolución de una venta con la caja todavía abierta? Mejor anula la venta en «Ventas de hoy»: la caja se ajusta sola. «Devolución a cliente» es para ventas de cajas ya cerradas.</p>` : ""}${S.movTipo === "gasto" && esAdmin() ? `<label class="check" style="margin-top:10px"><input type="checkbox" id="mv-mp"> Es mercancía que se vende y ya tiene costo en OLI (helado, paletas, cucuruchos, barquillos…)</label><p class="xs muted" style="margin:2px 0 0 30px">Así no se resta dos veces: ya se resta en el costo de cada venta. Servilletas, jabón o transporte: déjalo sin marcar.</p>` : ""}<label class="f" for="mv-nota">Detalle (opcional)</label><input class="in plain" id="mv-nota" placeholder="Ej: compra de vasos">
   <button class="btn pri xl wide" style="margin-top:14px" data-act="doMov">GUARDAR</button>`); };
 ACT.doMov = async () => { const m = num($("#mv-monto").value), mot = selVal("mv-mot"), nota = $("#mv-nota").value.trim(); if (!mot) { toast("Elige para qué fue.", true); return; }
-  await guardar(async () => { await movimientoCaja(S.movTipo, m, mot + (nota ? " · " + nota : ""), S.movTipo === "gasto" ? "Otros" : ""); cerrar(); draw(); }, "Guardado"); };
+  const mp = S.movTipo === "gasto" && esAdmin() && !!($("#mv-mp") || {}).checked;   // mercancía con costo: categoría «Materia prima» (Dinero no la resta dos veces)
+  await guardar(async () => { await movimientoCaja(S.movTipo, m, mot + (nota ? " · " + nota : ""), S.movTipo === "gasto" ? (mp ? BASE_COSTO : "Otros") : ""); cerrar(); draw(); }, "Guardado"); };
 ACT.cerrarCaja = (el, d) => { S.cierreId = (d && d.id) || (cajaHoy() || {}).id || ""; const c = cajaSel(); if (!c) return; const k = cajaCalc(c); S.cierreVal = ""; abrir(() => {
   return `${head(c.fecha === S.today ? "Cerrar caja" : "Cerrar la caja del " + diaCorto(c.fecha))}<div class="card flat"><div class="row" style="padding-top:0"><div class="l">Ventas ${c.fecha === S.today ? "de hoy" : "de ese día"}</div><div class="r">${fmt(k.ventas)}</div></div>${Object.entries(k.por).map(([m, v]) => `<div class="row"><div class="l">${esc(m)}</div><div class="r">${fmt(v)}</div></div>`).join("")}
     <div class="row"><div class="l"><b>Efectivo que debería haber</b></div><div class="r big" style="font-size:26px">${fmt(k.esperado)}</div></div></div>
@@ -2431,7 +2474,7 @@ document.addEventListener("input", e => {
     if (el) { el.textContent = c < 0 ? "Faltan " + fmt(-c) : fmt(c); el.style.color = c < 0 ? "var(--danger)" : "var(--marca-d)"; } return; }
   if (e.target.id === "ci-monto") { const cs = cajaSel(); if (!cs) return; const k = cajaCalc(cs), v = num(e.target.value), dif = v - k.esperado, has = e.target.value.trim() !== "";
     $("#ci-dif").innerHTML = has ? `<div class="notice ${dif === 0 ? "ok" : "bad"}"><b>${dif === 0 ? "La caja cuadra" : dif > 0 ? "Sobran " + fmt(dif) : "Faltan " + fmt(-dif)}</b></div>` : "";
-    $("#ci-obs").innerHTML = has && dif !== 0 ? `<label class="f">¿Qué pasó?</label>${sel("ci-mot", ["Error de cambio", "Gasto sin anotar", "Retiro sin anotar", "No sé"], "")}<label class="f" for="ci-nota">Detalle (opcional)</label><input class="in plain" id="ci-nota">` : ""; }
+    $("#ci-obs").innerHTML = has && dif !== 0 ? `<label class="f">¿Qué pasó?</label>${sel("ci-mot", (dif < 0 ? ["Error de cambio", "Gasto sin anotar", "Retiro sin anotar", "Pagaron por transferencia o QR"] : ["Error de cambio", "Retiro sin anotar"]).concat(["No sé"]), "")}${dif < 0 ? `<p class="xs muted" style="margin:4px 0 0">«Pagaron por transferencia o QR»: una venta se marcó como efectivo pero la pagaron por otro medio. Esa plata está en la cuenta, no en la caja.</p>` : ""}<label class="f" for="ci-nota">Detalle (opcional)</label><input class="in plain" id="ci-nota">` : ""; }
   if (e.target.id === "qsearch") { S.q = e.target.value; const g = $("#grid"); if (g) g.innerHTML = gridHTML(); }
 });
 ACT.doCerrar = async () => { const raw = $("#ci-monto").value; if (!raw.trim()) { toast("Escribe cuánto efectivo hay en la caja.", true); return; } const mot = selVal("ci-mot"), nota = ($("#ci-nota") || {value: ""}).value.trim();
@@ -2439,6 +2482,8 @@ ACT.doCerrar = async () => { const raw = $("#ci-monto").value; if (!raw.trim()) 
   await guardar(async () => { const ci = await cerrarCaja(num(raw), (mot ? mot : "") + (nota ? " · " + nota : ""), cs); S.cierreId = ""; abrir(() => `<div class="done"><div class="tick">${ic("ok", 52)}</div><h2 style="margin:14px 0 4px">Caja cerrada</h2><p class="muted">Vendiste ${fmt(ci.resumen.ventas)} en ${ci.resumen.n} ventas.<br>${ci.dif === 0 ? "La caja cuadró." : ci.dif > 0 ? "Sobraron " + fmt(ci.dif) + "." : "Faltaron " + fmt(-ci.dif) + "."}</p><button class="btn pri xl wide" data-act="cerrar">Listo</button></div>`); draw(); }); };
 ACT.reabrir = async (el, d) => { const c = d.id ? cajasAll().find(x => x.id === d.id) : cajaHoy(); if (c && await confirmar({titulo: "¿Reabrir la caja?", texto: "Quedará registrado quién la reabrió.", si: "Sí, reabrir", no: "No"})) await guardar(() => reabrirCaja(c), "Caja reabierta"); };
 
+// plata de la caja: un doble toque mientras se guarda no anota dos veces el mismo movimiento ni cierra dos veces
+for (const k of ["doMov", "doCerrar"]) { const f = ACT[k]; if (f) ACT[k] = (el, d) => unaVez("act:" + k, () => f(el, d)); }
 
 /* >>> 62-inventario.js */
 /* ============ 62 · inventario completo ============
@@ -2510,7 +2555,7 @@ function movimientosVista() {
   pedirNombres(uniq(movs.map(m => m.uid)));
   return `<div class="seg" style="margin-bottom:10px">${[["hoy", "Hoy"], ["7", "7 días"], ["30", "30 días"]].map(([k, l]) => `<button data-act="movRango" data-v="${k}" aria-pressed="${S.movRango === k}">${l}</button>`).join("")}</div>
     <label class="f" for="mv-pid">Producto</label><select class="in" id="mv-pid" data-act-change="movPid"><option value="">Todos</option>${ps.map(p => `<option value="${esc(p.id)}" ${S.movPid === p.id ? "selected" : ""}>${esc(p.nombre)}</option>`).join("")}</select>
-    <div class="card" style="margin-top:12px">${movs.length ? movs.map(m => `<div class="row" style="align-items:flex-start;padding:9px 0"><div class="l" style="flex:1"><b>${esc(TIPO_MOV[m.tipo] || m.tipo)}</b> · ${esc((prod(m.pid) || {nombre: m.pid}).nombre)}<div class="small muted">${diaCorto(m.fecha)} ${hora(m.t)}${m.det ? " · " + esc(m.det) : ""}${nombreDe(m.uid) ? " · " + esc(nombreDe(m.uid)) : ""}${m.antes != null && m.despues != null ? " · " + fmtN(m.antes, 2) + " → " + fmtN(m.despues, 2) : ""}</div></div><div style="text-align:right"><b style="color:${m.q < 0 ? "var(--danger)" : "var(--marca-d)"}">${m.q > 0 ? "+" : ""}${fmtN(m.q, 2)}</b>${S.movPid && m.saldo != null ? `<div class="xs muted">Saldo ${fmtN(m.saldo, 2)}</div>` : ""}</div></div>`).join("") : '<p class="muted" style="margin:0">No hay movimientos en este periodo.</p>'}</div>
+    <div class="card" style="margin-top:12px">${movs.length ? movs.map(m => `<div class="row" style="align-items:flex-start;padding:9px 0"><div class="l" style="flex:1"><b>${esc(TIPO_MOV[m.tipo] || m.tipo)}</b> · ${esc((prod(m.pid) || {nombre: m.pid}).nombre)}<div class="small muted">${diaCorto(m.fecha)} ${hora(m.t)}${m.det ? " · " + esc(m.det) : ""}${nombreDe(m.uid) ? " · " + esc(nombreDe(m.uid)) : ""}${m.antes != null && m.despues != null && !m.delta ? " · " + fmtN(m.antes, 2) + " → " + fmtN(m.despues, 2) : ""}</div></div><div style="text-align:right"><b style="color:${m.q < 0 ? "var(--danger)" : "var(--marca-d)"}">${m.q > 0 ? "+" : ""}${fmtN(m.q, 2)}</b>${S.movPid && m.saldo != null ? `<div class="xs muted">Saldo ${fmtN(m.saldo, 2)}</div>` : ""}</div></div>`).join("") : '<p class="muted" style="margin:0">No hay movimientos en este periodo.</p>'}</div>
     ${S.movPid ? "" : '<p class="xs muted">Elige un producto para ver el saldo después de cada movimiento.</p>'}`;
 }
 VIEWS.inventario = () => {
@@ -2600,10 +2645,12 @@ const itemsHelado = () => memo("itHel", () => { const out = []; for (const [docI
 /* cambios de caja vigentes: sin los anulados; y un "empezar a contar" solo vale si es el primero de su sabor (no parte una caja en dos) */
 const eventosHelado = () => memo("evHel", () => {
   const anulados = new Set(itemsHelado().filter(x => x.anula).map(x => x.anula)), vistos = new Set(), out = [];
-  for (const x of itemsHelado()) { if (!x.sabor || x.anula || anulados.has(x.id)) continue; if (x.motivo === "inicio" && vistos.has(x.sabor)) continue; vistos.add(x.sabor); out.push(x); }
+  // solo sabores de verdad y motivos conocidos (igual que el servidor)
+  for (const x of itemsHelado()) { if (!x.sabor || x.anula || anulados.has(x.id) || !esSabor(x.sabor) || !["acabo", "danada", "inicio"].includes(x.motivo)) continue; if (x.motivo === "inicio" && vistos.has(x.sabor)) continue; vistos.add(x.sabor); out.push(x); }
   return out;
 });
-const bolasVendidas = () => memo("bolasV", () => { const m = {}; for (const v of ventasOk()) for (const it of (v.items || [])) if (Array.isArray(it.sab)) for (const s of it.sab) (m[s] = m[s] || []).push({t: v.t, q: it.q}); return m; });
+// bolas vendidas por sabor: las de los conos (it.sab) y las de un combo con sabor (p. ej. "Cono 1 bola Red velvet"), igual que el costo y el consumo
+const bolasVendidas = () => memo("bolasV", () => { const m = {}; for (const v of ventasOk()) for (const it of (v.items || [])) { if (Array.isArray(it.sab)) for (const s of it.sab) (m[s] = m[s] || []).push({t: v.t, q: it.q}); else for (const x of bolasDeLinea(it)) (m[x.pid] = m[x.pid] || []).push({t: v.t, q: x.q}); } return m; });
 
 /* cada caja de un sabor va de un cambio de caja al siguiente; la última sigue abierta */
 function rendimientoCajas() {
@@ -2845,7 +2892,7 @@ function diaVentasHTML(f) {
     <div class="card"><h3>Qué se vendió</h3>${lista.map(x => { const sab = Object.entries(x.sab).sort((a, b) => b[1] - a[1]);
       return `<div class="row" style="align-items:flex-start"><div class="l" style="flex:1;min-width:0"><b>${fmtN(x.q, 2)} × ${esc(x.n)}</b>${sab.length ? `<div class="small muted">${sab.map(([s, q]) => esc(nombreSabor(s)) + " " + fmtN(q, 0)).join(" · ")} (bolas)</div>` : ""}
         <div class="vd-barra" aria-hidden="true"><i style="width:${Math.max(2, Math.round(x.t / totLineas * 100))}%"></i></div></div><b class="num">${fmt(x.t)}</b></div>`; }).join("")}
-      ${desc ? `<div class="row"><span>Descuentos</span><b>- ${fmt(desc)}</b></div>` : ""}</div>
+      ${desc ? `<div class="row"><span>Descuentos (ya restados arriba)</span><b>${fmt(desc)}</b></div>` : ""}</div>
     <div class="card"><h3>Ventas del día <span class="xs muted">· toca una para ver el detalle o anularla</span></h3>
       ${todas.map(v => `<button class="row" style="width:100%;background:none;border:0;border-bottom:1px solid var(--line);text-align:left;cursor:pointer;font:inherit;color:inherit;${v.anulada ? "opacity:.6" : ""}" data-act="verVenta" data-id="${esc(v.id)}"><div class="l" style="min-width:0"><b>${hora(v.t)} · ${esc(v.num || "")}</b>${v.anulada ? ' <span class="pill bad">Anulada</span>' : ""}<div class="small muted" style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc((v.items || []).map(i => i.q + " " + i.n).join(", "))}</div><div class="xs muted">${esc(v.m || "")}${nombreEq(v.dev) ? " · " + esc(nombreEq(v.dev)) : ""}${nombreDe(v.uid) ? " · " + esc(nombreDe(v.uid)) : ""}</div></div><b class="num" style="${v.anulada ? "text-decoration:line-through" : ""}">${fmt(v.total)}</b></button>`).join("")}</div>`;
 }
@@ -2867,7 +2914,7 @@ const primerMesDatos = () => { const fs = ventasOk().map(v => v.fecha).concat(ca
 
 function resumenMes(mes) {
   const a = mes + "-01", fin = lastOfMonth(a), b = fin < S.today ? fin : S.today, en = f => !!f && f >= a && f <= b;
-  const L = liquidez({a, b}), dias = {}, dia = f => dias[f] || (dias[f] = {f, vendido: 0, n: 0, gastos: 0, devol: 0, dif: 0, sinAnotar: 0, cajas: 0, abiertas: 0, cerradas: 0});
+  const L = liquidez({a, b}), dias = {}, dia = f => dias[f] || (dias[f] = {f, vendido: 0, n: 0, gastos: 0, devol: 0, dif: 0, sinAnotar: 0, aCuentas: 0, cajas: 0, abiertas: 0, cerradas: 0});
   const porMedio = {}, porCat = {};
   for (const v of ventasOk()) if (en(v.fecha)) { const d = dia(v.fecha), x = Number(v.total) || 0; d.vendido += x; d.n++; porMedio[v.m || "Otro"] = (porMedio[v.m || "Otro"] || 0) + x; }
   for (const g of gastosEn(a, b)) { const x = Number(g.valor) || 0; dia(g.fecha).gastos += x; porCat[g.cat || "Otros"] = (porCat[g.cat || "Otros"] || 0) + x; }
@@ -2878,7 +2925,7 @@ function resumenMes(mes) {
     for (const mv of (c.movs || [])) if (mv.tipo === "retiro" && empiezaCon(mv.motivo, "Devolución a cliente")) d.devol += Number(mv.monto) || 0;
     const ci = (c.cierres || []).slice(-1)[0];   // misma regla que la liquidez: un faltante por "Gasto sin anotar" se resta cuando se anota el gasto
     if (ci && c.apertura && cajaEstado(c) === "cerrada") { const x = Number(ci.dif) || 0; d.cerradas++; cerradas++;
-      if (x < 0 && empiezaCon(ci.obs, "Gasto sin anotar")) d.sinAnotar -= x; else if (x) d.dif += x; }
+      if (x < 0 && empiezaCon(ci.obs, "Gasto sin anotar")) d.sinAnotar -= x; else if (x < 0 && empiezaCon(ci.obs, "Pagaron por transferencia")) d.aCuentas = (d.aCuentas || 0) - x; else if (x) d.dif += x; }   // pagado por otro medio: no faltó plata, está en la cuenta
   }
   let acum = 0;
   const filas = Object.values(dias).sort((x, y) => x.f.localeCompare(y.f)).map(d => { const neto = d.vendido - d.gastos - d.devol + d.dif; acum += neto; return Object.assign(d, {neto, acum}); });
@@ -2907,15 +2954,16 @@ function cajaMesHTML() {
       <div class="card"><h3>Cómo pagaron</h3>${medios.map(([m, v]) => fila(esc(m), "", v)).join("")}</div>
       <div class="card"><h3>En qué se gastó</h3>${cats.length ? cats.map(([c, v]) => fila(esc(c), "", v)).join("") : '<p class="muted" style="margin:0">No hay gastos registrados este mes.</p>'}${L.devol ? fila("Devoluciones a clientes", "“Sacar dinero” → “Devolución a cliente”", L.devol) : ""}</div>
     </div>
-    ${L.retDueno || L.consig || L.otrosRet || L.otrosIng || L.sinAnotar ? `<div class="card"><h3>Movimientos de caja que no suman ni restan</h3><p class="small muted" style="margin-top:-4px">La plata cambia de lugar o no se sabe qué fue.</p>
+    ${L.retDueno || L.consig || L.otrosRet || L.otrosIng || L.sinAnotar || L.aCuentas ? `<div class="card"><h3>Movimientos de caja que no suman ni restan</h3><p class="small muted" style="margin-top:-4px">La plata cambia de lugar o no se sabe qué fue.</p>
       ${L.retDueno ? fila("Retiros del dueño", "Sigue siendo plata del negocio", L.retDueno) : ""}${L.consig ? fila("Consignaciones", "Del efectivo al banco", L.consig) : ""}
       ${L.otrosRet ? fila("Salió de la caja por «Otro»", "Si fue un pago, anótenlo como gasto", L.otrosRet) : ""}${L.otrosIng ? fila("Entró a la caja por «Otro»", "", L.otrosIng) : ""}
-      ${L.sinAnotar ? fila("Faltó por «Gasto sin anotar»", "Se resta cuando anoten ese gasto en Dinero", L.sinAnotar) : ""}</div>` : ""}
+      ${L.sinAnotar ? fila("Faltó por «Gasto sin anotar»", "Se resta cuando anoten ese gasto en Dinero", L.sinAnotar) : ""}
+      ${L.aCuentas ? fila("Cobrado por transferencia o QR (se marcó efectivo)", "No faltó: esa plata está en la cuenta, no en la caja", L.aCuentas) : ""}</div>` : ""}
     <div class="card"><h3>Día por día</h3><p class="small muted" style="margin-top:-4px">Toca un día para ver qué se vendió.</p>
       ${tablaVista([{h: "Día", f: d => `<button class="lnk" data-act="verDiaVentas" data-f="${esc(d.f)}">${esc(diaCorto(d.f))}</button>`}, {h: "Vendido", n: 1, f: d => fmt(d.vendido)}, {h: "Gastos", n: 1, f: d => d.gastos || d.devol ? "− " + fmt(d.gastos + d.devol) : "–"},
         {h: "Caja", n: 1, f: d => [d.dif ? `<span style="color:${d.dif < 0 ? "var(--danger)" : "inherit"}">${d.dif < 0 ? "Faltó " : "Sobró "}${fmt(Math.abs(d.dif))}</span>` : "",
-          d.sinAnotar ? `<span class="muted">Faltó ${fmt(d.sinAnotar)} (gasto sin anotar)</span>` : "", d.abiertas ? '<span class="muted">abierta</span>' : "",
-          !d.dif && !d.sinAnotar && d.cerradas ? "cuadró" : ""].filter(Boolean).join("<br>") || "–"},
+          d.sinAnotar ? `<span class="muted">Faltó ${fmt(d.sinAnotar)} (gasto sin anotar)</span>` : "", d.aCuentas ? `<span class="muted">${fmt(d.aCuentas)} pagados por transferencia o QR</span>` : "", d.abiertas ? '<span class="muted">abierta</span>' : "",
+          !d.dif && !d.sinAnotar && !d.aCuentas && d.cerradas ? "cuadró" : ""].filter(Boolean).join("<br>") || "–"},
         {h: "Acumulado", n: 1, f: d => `<b>${plata(d.acum)}</b>`}], R.filas)}
     </div>
     <p class="xs muted">Acumulado = lo vendido menos los gastos y las devoluciones, más o menos lo que faltó o sobró al cerrar caja (igual que «¿Cuánta plata hay?» en Dinero). No incluye la plata con la que empezaron ni el costo de lo vendido: la utilidad está en Dinero → Mes.</p>`}`;
@@ -3168,9 +3216,9 @@ function bDinero() {
     <div><div class="muted small" style="font-weight:700;letter-spacing:.05em">VENTAS HOY</div><div class="big" style="font-size:44px">${fmt(f.ventas)}</div>
       ${cmp.delta != null ? `<div style="margin-top:4px;font-weight:700;color:${up ? "var(--marca-d)" : "var(--danger)"}">${ic(up ? "sube" : "baja", 18)} ${up ? "↑" : "↓"} ${Math.abs(Math.round(cmp.delta * 100))}% <span class="muted" style="font-weight:500">vs ${esc(cmp.et)}</span></div><div class="small muted">Referencia: ${fmt(cmp.base)}</div>` : `<div class="small muted" style="margin-top:4px">Aún no hay suficiente historia para comparar.</div>`}
       <div class="seg" style="margin-top:10px">${MODOS_COMP.map(([k, l]) => `<button data-act="comp" data-v="${k}" aria-pressed="${S.comp === k}">${l}</button>`).join("")}</div></div>
-    <div><div class="muted small" style="font-weight:700;letter-spacing:.05em">UTILIDAD ESTIMADA ${ayuda("Ventas menos el costo de lo vendido y los gastos de hoy. No incluye gastos fijos del mes (arriendo, nómina).")}</div><div class="big" style="font-size:36px;color:${f.utilidad < 0 ? "var(--danger)" : "var(--marca-d)"}">${fmt(f.utilidad)}</div>
+    <div><div class="muted small" style="font-weight:700;letter-spacing:.05em">UTILIDAD ESTIMADA ${ayuda("Ventas menos el costo de lo vendido y todo lo que se registró como gasto hoy (también nómina, arriendo o servicios si se pagaron hoy). No resta la cuota diaria de los gastos fijos: esa va abajo, en «Lo que queda hoy».")}</div><div class="big" style="font-size:36px;color:${f.utilidad < 0 ? "var(--danger)" : "var(--marca-d)"}">${fmt(f.utilidad)}</div>
       <div class="small muted">Margen ${pct(f.margen, 1)}${f.sinCosto ? " · " + fmtN(f.sinCosto, 0) + " unidades sin costo" : ""}${f.sinCostoHelado ? " · falta el costo de algún sabor de helado" : ""}</div>
-      <div class="row" style="padding:6px 0;margin-top:8px"><span class="small">Venta</span><b class="small">${fmt(f.ventas)}</b></div><div class="row" style="padding:6px 0"><span class="small">− Costo de lo vendido</span><b class="small">${fmt(f.cogs)}</b></div><div class="row" style="padding:6px 0"><span class="small">= Utilidad bruta</span><b class="small">${fmt(f.bruta)}</b></div>${totalFijos() ? (() => { const gv = gastosVariables(S.today, S.today), q = f.bruta - gv - fijoDia(); return `<div class="row" style="padding:6px 0"><span class="small">− Otros gastos de hoy ${ayuda("Gastos del día que no son arriendo, nómina ni servicios: esos ya están en los gastos fijos.")}</span><b class="small">${fmt(gv)}</b></div><div class="row" style="padding:6px 0"><span class="small">− Gastos fijos del día ${ayuda("Arriendo, trabajadoras, servicios, impuestos: el total mensual dividido entre los días del mes.")}</span><b class="small">${fmt(fijoDia())}</b></div><div class="row" style="padding:6px 0"><b class="small">= Lo que queda hoy</b><b class="small" style="color:${q < 0 ? "var(--danger)" : "var(--marca-d)"}">${fmt(q)}</b></div>`; })() : `<div class="row" style="padding:6px 0"><span class="small">− Gastos de hoy</span><b class="small">${fmt(f.gastos)}</b></div>`}</div></div>
+      <div class="row" style="padding:6px 0;margin-top:8px"><span class="small">Venta</span><b class="small">${fmt(f.ventas)}</b></div><div class="row" style="padding:6px 0"><span class="small">− Costo de lo vendido</span><b class="small">${fmt(f.cogs)}</b></div><div class="row" style="padding:6px 0"><span class="small">= Utilidad bruta</span><b class="small">${fmt(f.bruta)}</b></div>${totalFijos() ? (() => { const gv = gastosVariables(S.today, S.today), q = f.bruta - gv - fijoDia(), enFijos = f.gastos + (f.devol || 0) - gv; return `${enFijos > 0 ? `<div class="row" style="padding:6px 0"><span class="small muted">Pagado hoy que ya está en los gastos fijos ${ayuda("Nómina, arriendo o servicios registrados hoy: sí se restan en la utilidad de arriba, pero aquí no se restan otra vez porque ya están en la cuota diaria de los gastos fijos.")}</span><b class="small muted">${fmt(enFijos)}</b></div>` : ""}<div class="row" style="padding:6px 0"><span class="small">− Otros gastos de hoy ${ayuda("Gastos del día que no son arriendo, nómina ni servicios del plan (esos ya están en los gastos fijos), y devoluciones en efectivo.")}</span><b class="small">${fmt(gv)}</b></div><div class="row" style="padding:6px 0"><span class="small">− Gastos fijos del día ${ayuda("Arriendo, trabajadoras, servicios, impuestos: el total mensual dividido entre los días del mes.")}</span><b class="small">${fmt(fijoDia())}</b></div><div class="row" style="padding:6px 0"><b class="small">= Lo que queda hoy</b><b class="small" style="color:${q < 0 ? "var(--danger)" : "var(--marca-d)"}">${fmt(q)}</b></div>`; })() : `<div class="row" style="padding:6px 0"><span class="small">− Gastos de hoy${f.devol ? " y devoluciones en efectivo" : ""}</span><b class="small">${fmt(f.gastos + (f.devol || 0))}</b></div>`}</div></div>
     <hr style="border:0;border-top:1px solid var(--line);margin:16px 0">
     <div class="two" style="gap:20px"><div>${bEquilibrio()}</div>
       <div><b>CIERRE ESTIMADO</b>${est.ok ? `<div class="big" style="font-size:26px;margin:4px 0">${fmtK(est.est)}</div><div class="small">Rango probable: <b>${fmtK(est.lo)} – ${fmtK(est.hi)}</b></div><div class="xs muted">Estimación basada en el comportamiento de hoy y en ${est.n} ${DOW[dowOf(S.today)]}s anteriores. No es una promesa.</div>` : `<p class="muted small" style="margin:6px 0 0">${esc(est.motivo)}</p>`}</div></div></div>`;
@@ -3207,9 +3255,11 @@ function bHacer() {
     : `<div class="notice ok" style="margin:10px 0 0">${ic("ok", 16)} No hay nada urgente. OLI está en orden.</div>`}</div>`;
 }
 function bAhora() {
-  const t = S.today, f = finanzas(t, t), r = ritmoHora(), vs = ventasOk().filter(v => v.fecha === t), ult = vs[vs.length - 1], cajas = cajasAll().filter(c => c.fecha === t), efect = sum(cajas, c => cajaEstado(c) !== "sin" ? cajaCalc(c).esperado : 0), idCli = vs.filter(v => v.cliente).length, ev = eventosHoy(5);
+  const t = S.today, f = finanzas(t, t), r = ritmoHora(), vs = ventasOk().filter(v => v.fecha === t), ult = vs[vs.length - 1], cajas = cajasAll().filter(c => c.fecha === t), abiertasH = cajas.filter(c => cajaEstado(c) === "abierta"), cerradasH = cajas.filter(c => cajaEstado(c) === "cerrada");
+  // en una caja abierta, lo que debería haber; en una cerrada, lo que se contó al cerrarla (no lo esperado)
+  const efect = sum(abiertasH, c => cajaCalc(c).esperado) + sum(cerradasH, c => Number(c.cierres.slice(-1)[0].contado) || 0), efectTxt = abiertasH.length && cerradasH.length ? "abiertas: lo esperado · cerradas: lo contado" : cerradasH.length ? "contado al cerrar" : abiertasH.length ? "lo que debería haber" : "", idCli = vs.filter(v => v.cliente).length, ev = eventosHoy(5);
   return `<div class="card"><div class="row" style="padding-top:0"><h3 style="margin:0">OLI ahora</h3><span class="pill ok"><span class="dot"></span>En vivo</span></div>
-    <div class="kpis" style="grid-template-columns:repeat(2,1fr);margin:10px 0"><div class="kpi"><span>Última hora</span><b>${fmt(r.total)}</b><small>${r.n} ventas · ${r.ult10} en 10 min</small></div><div class="kpi"><span>Tickets hoy</span><b>${f.n}</b><small>Ticket promedio ${fmt(f.ticket)}</small></div><div class="kpi"><span>Productos vendidos</span><b>${f.uds}</b></div><div class="kpi"><span>Efectivo en caja</span><b>${fmt(efect)}</b></div></div>
+    <div class="kpis" style="grid-template-columns:repeat(2,1fr);margin:10px 0"><div class="kpi"><span>Última hora</span><b>${fmt(r.total)}</b><small>${r.n} ventas · ${r.ult10} en 10 min</small></div><div class="kpi"><span>Tickets hoy</span><b>${f.n}</b><small>Ticket promedio ${fmt(f.ticket)}</small></div><div class="kpi"><span>Productos vendidos</span><b>${f.uds}</b></div><div class="kpi"><span>Efectivo en caja</span><b>${fmt(efect)}</b>${efectTxt ? `<small>${efectTxt}</small>` : ""}</div></div>
     <div class="small muted" style="margin-bottom:6px">${ult ? "Última venta " + `<span data-ts="${ult.t}">${haceTxt(ult.t)}</span>` : "Todavía no hay ventas hoy."}${idCli ? " · " + idCli + " con cliente identificado" : ""}</div>
     <h3 style="font-size:15px;margin:10px 0 2px">EN VIVO</h3>${ev.length ? ev.map(evHTML).join("") : '<p class="muted small">Cuando se venda algo, aparece aquí.</p>'}
     <button class="btn ghost sm" style="margin-top:8px" data-act="verTodoEventos">VER TODO</button></div>`;
@@ -3252,10 +3302,12 @@ function bProductos() {
 }
 function bCaja() {
   const cajas = cajasAll().filter(c => c.fecha === S.today && c.apertura); if (!cajas.length) return `<div class="card"><h3>${ic("caja", 18)} Caja</h3><p class="muted" style="margin:0">Todavía no se ha abierto ninguna caja hoy.</p></div>`;
-  const esp = sum(cajas, c => cajaCalc(c).esperado), cerr = cajas.filter(c => (c.cierres || []).length), dif = sum(cerr, c => c.cierres.slice(-1)[0].dif), abiertas = cajas.filter(c => cajaEstado(c) === "abierta").length, ult = cerr.map(c => c.cierres.slice(-1)[0]).sort((a, b) => b.t - a.t)[0];
+  // cada cifra compara las mismas cajas: las abiertas (también las reabiertas) con lo que debería haber; las cerradas con lo esperado y lo contado al cerrarlas
+  const ab = cajas.filter(c => cajaEstado(c) === "abierta"), cerr = cajas.filter(c => cajaEstado(c) === "cerrada"), ci = c => c.cierres.slice(-1)[0];
+  const esp = sum(ab, c => cajaCalc(c).esperado), espC = sum(cerr, c => ci(c).esperado != null ? Number(ci(c).esperado) : cajaCalc(c).esperado), dif = sum(cerr, c => Number(ci(c).dif) || 0), abiertas = ab.length, ult = cerr.map(ci).sort((a, b) => b.t - a.t)[0];
   const ok = !cerr.length || Math.abs(dif) < 1;
-  return `<div class="card"><h3>${ic("caja", 18)} Caja</h3><div class="row"><span>Efectivo que debería haber</span><b>${fmt(esp)}</b></div>${cerr.length ? `<div class="row"><span>Contado al cerrar</span><b>${fmt(sum(cerr, c => c.cierres.slice(-1)[0].contado))}</b></div><div class="row"><span>Diferencia</span><b style="color:${ok ? "inherit" : "var(--danger)"}">${fmt(dif)}</b></div>` : ""}
-    <div style="margin-top:8px">${ok ? `<span class="pill ok">${ic("ok", 14)} ${cerr.length ? "CUADRA" : abiertas + " abierta" + (abiertas === 1 ? "" : "s")}</span>` : `<span class="pill bad">${ic("alerta", 14)} DIFERENCIA ${fmt(dif)}</span> <button class="btn ghost sm" data-act="ir" data-r="reportes">REVISAR</button>`}</div>
+  return `<div class="card"><h3>${ic("caja", 18)} Caja</h3>${ab.length ? `<div class="row"><span>Debería haber en ${ab.length === 1 ? "la caja abierta" : "las " + ab.length + " cajas abiertas"}</span><b>${fmt(esp)}</b></div>` : ""}${cerr.length ? `<div class="row"><span>Esperado al cerrar${cerr.length > 1 ? " (" + cerr.length + " cajas)" : ""}</span><b>${fmt(espC)}</b></div><div class="row"><span>Contado al cerrar</span><b>${fmt(sum(cerr, c => Number(ci(c).contado) || 0))}</b></div><div class="row"><span>Diferencia</span><b style="color:${ok ? "inherit" : "var(--danger)"}">${fmt(dif)}</b></div>` : ""}
+    <div style="margin-top:8px">${ok ? `<span class="pill ok">${ic("ok", 14)} ${cerr.length ? "CUADRA" + (abiertas ? " · " + abiertas + " abierta" + (abiertas === 1 ? "" : "s") : "") : abiertas + " abierta" + (abiertas === 1 ? "" : "s")}</span>` : `<span class="pill bad">${ic("alerta", 14)} DIFERENCIA ${fmt(dif)}</span> <button class="btn ghost sm" data-act="ir" data-r="reportes">REVISAR</button>`}</div>
     ${ult ? `<div class="small muted" style="margin-top:8px">Último cierre: ${hora(ult.t)}${nombreDe(ult.uid) ? " · " + esc(nombreDe(ult.uid)) : ""}</div>` : ""}</div>`;
 }
 function bEquipo() {
@@ -3293,7 +3345,7 @@ const puestaEnMarcha = () => `<div class="card" style="border-color:var(--marca)
   <p class="xs muted" style="margin:10px 0 0">El catálogo trae las paletas, bebidas y precios de OLI. Los datos de demostración incluyen un mes de ventas de ejemplo y se pueden borrar en Ajustes.</p></div>`;
 VIEWS.hoy = () => {
   if (!prods().length) return bEncabezado() + puestaEnMarcha();
-  const comp = comandoModo() === "completa", cajaProblema = cajasAll().some(c => c.fecha >= addDays(S.today, -1) && (c.cierres || []).length && Math.abs(c.cierres.slice(-1)[0].dif) >= 1000), findeFuerte = [4, 5, 6].includes(dowOf(S.today)) && histInfo().ok;
+  const comp = comandoModo() === "completa", cajaProblema = cajasAll().some(c => c.fecha >= addDays(S.today, -1) && cajaEstado(c) === "cerrada" && Math.abs(Number(c.cierres.slice(-1)[0].dif) || 0) >= 1000), findeFuerte = [4, 5, 6].includes(dowOf(S.today)) && histInfo().ok;
   const partes = [bEncabezado(), bEstado(), bAtencion()];
   if (cajaProblema) partes.push(bCaja());
   partes.push(bDinero(), bHacer());
@@ -3518,12 +3570,14 @@ VIEWS.finanzas = () => {
     <div class="row"><div class="l">− Costo de lo vendido<div class="small muted">Lo que te costó lo que vendiste${f.sinCosto ? " · " + fmtN(f.sinCosto, 0) + " uds sin costo" : ""}${f.sinCostoHelado ? " · falta el costo de algún sabor de helado" : ""}</div></div><div class="r">${fmt(f.cogs)}</div></div>
     <div class="row"><div class="l"><b>= Utilidad bruta</b></div><div class="r">${fmt(f.bruta)}</div></div>
     <div class="row"><div class="l">− Gastos<div class="small muted">Arriendo, servicios, nómina…${f.gastosMP ? " (materia prima no se resta: ya está en el costo)" : ""}</div></div><div class="r">${fmt(f.gastos)}</div></div>
+    ${f.devol ? `<div class="row"><div class="l">− Devoluciones en efectivo<div class="small muted">Plata devuelta de ventas que ya estaban en una caja cerrada</div></div><div class="r">${fmt(f.devol)}</div></div>` : ""}
     <div class="row"><div class="l"><b>= Utilidad estimada</b><div class="small muted">Margen ${pct(f.margen, 1)}</div></div><div class="r big" style="font-size:28px;color:${f.utilidad < 0 ? "var(--danger)" : "var(--marca-d)"}">${fmt(f.utilidad)}</div></div></div>
   <div class="card"><h3>Ventas y utilidad por día</h3>${serie.some(x => x.ventas) ? lineas([{n: "Ventas", c: "var(--marca)", pts: pts.map(x => ({l: diaCorto(x.d), v: x.ventas}))}, {n: "Utilidad", c: "var(--ink)", pts: pts.map(x => ({l: diaCorto(x.d), v: x.util}))}], {aria: "Ventas y utilidad por día"}) : '<p class="muted">Sin ventas en este periodo.</p>'}</div>
   <div class="two"><div class="card"><h3>¿Dónde estoy ganando?</h3><div class="seg" style="margin-bottom:10px">${[["util", "Más rentable"], ["uds", "Más vendido"], ["margen", "Mayor margen"], ["bajo", "Menor margen"]].map(([k, l]) => `<button data-act="rentOrden" data-v="${k}" aria-pressed="${S.rentOrden === k}">${l}</button>`).join("")}</div>
     ${rent.length ? tablaVista([{h: "Producto", f: r => esc(r.n)}, {h: "Unid.", n: 1, f: r => r.uds}, {h: "Ventas", n: 1, f: r => fmtK(r.ing)}, {h: "Utilidad", n: 1, f: r => r.sinCosto ? "–" : fmtK(r.util)}, {h: "Margen", n: 1, f: r => isFinite(r.margen) && !r.sinCosto ? pct(r.margen) : "–"}], rent.slice().sort(orden).slice(0, 12)) : '<p class="muted">Sin ventas en este periodo.</p>'}</div>
   <div class="card"><h3>Gastos por categoría</h3>${Object.keys(byCat).length ? hbarras(Object.entries(byCat).sort((x, y) => y[1] - x[1]).map(([n, v]) => ({n, v}))) : '<p class="muted">No hay gastos registrados en este periodo.</p>'}</div></div>
-  <div class="card"><h3>Punto de equilibrio del mes</h3>${fijos ? `<p class="small muted" style="margin-top:-4px">Gastos fijos del plan: ${fmt(fijos)} al mes.</p><div class="bar" style="height:12px"><i style="width:${Math.min(100, mes.bruta / fijos * 100)}%"></i></div><p style="margin:8px 0 0">${falta <= 0 ? "Ya cubriste los gastos fijos del mes. Lo que sigue es ganancia." : `Llevas ${fmt(mes.bruta)} de utilidad bruta y faltan <b>${fmt(falta)}</b> para cubrir los gastos fijos.${gU > 0 ? ` Son unas ${Math.ceil(falta / gU)} unidades más (a ${fmt(gU)} de utilidad por unidad), ${dMes - diaN > 0 ? "unas " + Math.ceil(falta / gU / (dMes - diaN)) + " por día hasta fin de mes" : ""}.` : ""}`}</p>` : '<p class="muted">Define tus gastos fijos en Ajustes para ver el punto de equilibrio.</p>'}</div>
+  <div class="card"><h3>Punto de equilibrio del mes</h3>${fijos ? (() => { const e = equilibrio();   // la misma cuenta del inicio: utilidad bruta menos los otros gastos del mes
+    return `<p class="small muted" style="margin-top:-4px">Gastos fijos del plan: ${fmt(fijos)} al mes.</p><div class="bar" style="height:12px"><i style="width:${Math.min(100, Math.max(0, e.bruta) / fijos * 100)}%"></i></div><p style="margin:8px 0 0">${e.falta <= 0 ? "Ya cubriste los gastos fijos del mes. Lo que sigue es ganancia." : `Llevas ${fmt(e.bruta)} de utilidad bruta (menos los otros gastos del mes) y faltan <b>${fmt(e.falta)}</b> para cubrir los gastos fijos.${e.udsDia ? ` Son unas ${e.udsDia} unidades por día hasta fin de mes (a ${fmt(gU)} de utilidad por unidad).` : ""}`}</p>`; })() : '<p class="muted">Define tus gastos fijos en Ajustes para ver el punto de equilibrio.</p>'}</div>
   <div class="card"><h3>Gastos registrados</h3>${gs.length ? gs.slice(0, 25).map(g => `<div class="row" style="padding:8px 0"><div class="l"><b>${esc(g.cat)}</b>${g.desc ? " · " + esc(g.desc) : ""}<div class="small muted">${diaCorto(g.fecha)}${g.origen === "caja" ? " · desde caja" : ""}${g.proveedor ? " · " + esc(g.proveedor) : ""}</div></div><div class="r">${fmt(g.valor)}</div>${g.origen === "gasto" ? `<button class="btn ghost sm" data-act="borrarGasto" data-id="${esc(g.id)}" aria-label="Borrar gasto">${ic("x", 16)}</button>` : ""}</div>`).join("") : '<p class="muted">Todavía no hay gastos en este periodo.</p>'}</div>`;
 };
 ACT.rentOrden = (el, d) => { S.rentOrden = d.v; draw(); };
@@ -3577,7 +3631,8 @@ function aSimulador() {
   ${tablaVista([{h: "", f: r => r[0]}, {h: "Hoy", n: 1, f: r => r[1]}, {h: "Con tus cambios", n: 1, f: r => r[2]}, {h: "Diferencia", n: 1, f: r => r[3]}], [
     ["Ingresos", fmt(A.ing), fmt(B.ing), fmt(B.ing - A.ing)], ["Utilidad", fmt(A.util), fmt(B.util), (B.util - A.util >= 0 ? "+" : "") + fmt(B.util - A.util)], ["Margen", pct(A.margen, 1), pct(B.margen, 1), isFinite(B.margen - A.margen) ? fmtN((B.margen - A.margen) * 100, 1) + " pts" : "–"],
     ["Punto de equilibrio (unid.)", A.pe == null ? "–" : A.pe, B.pe == null ? "–" : B.pe, A.pe != null && B.pe != null ? B.pe - A.pe : "–"]])}
-  <p class="xs muted">Simulación simple: no estima cómo reaccionarían tus clientes a un cambio de precio. Cambia las unidades para probar escenarios.</p>`;
+  ${base.sinCosto && s.costo == null ? `<div class="notice warn">Este producto no tiene costo registrado: la columna «Hoy» lo toma en $0, así que la utilidad y el margen salen más altos de lo real. Escribe el costo arriba o regístralo en Productos.</div>` : ""}
+  <p class="xs muted">Simulación simple: no estima cómo reaccionarían tus clientes a un cambio de precio. Cambia las unidades para probar escenarios. ${totalFijos() > 0 ? "Gastos del mes: tus gastos fijos más los demás gastos registrados en 30 días." : "Gastos del mes: los gastos registrados en 30 días."}${prod(s.pid) && prod(s.pid).cono ? " El costo del cono es el promedio de lo vendido en 30 días (barquillo, cucurucho o vaso y bolas)." : ""}</p>`;
 }
 document.addEventListener("change", e => { const t = e.target; if (!t.dataset) return;
   if (t.dataset.actChange === "simProd") { S.sim = {pid: t.value, precio: null, costo: null, vol: null, gastos: null}; draw(); }
@@ -3780,7 +3835,7 @@ function liquidez(rango) {                                    // rango {a, b}: s
     const x = Number(g.valor) || 0, m = g.m || "Efectivo"; nG++; med(m).salio += x;
     if (enEfectivo(m)) gEf += x; else gCu += x;
   }
-  let consig = 0, retDueno = 0, devol = 0, otrosRet = 0, otrosIng = 0, difs = 0, nDifs = 0, sinAnotar = 0; const sinAnotarF = [];
+  let consig = 0, retDueno = 0, devol = 0, otrosRet = 0, otrosIng = 0, difs = 0, nDifs = 0, sinAnotar = 0, aCuentas = 0; const sinAnotarF = [];
   for (const c of cajas) {
     for (const mv of (c.movs || [])) if (despues(c.fecha, mv.t)) {
       const x = Number(mv.monto) || 0;
@@ -3795,10 +3850,11 @@ function liquidez(rango) {                                    // rango {a, b}: s
     const ci = (c.cierres || []).slice(-1)[0];
     if (ci && cajaEstado(c) === "cerrada" && c.apertura && despues(c.fecha, c.apertura.t)) { const d = Number(ci.dif) || 0;
       if (d < 0 && empiezaCon(ci.obs, "Gasto sin anotar")) { sinAnotar -= d; sinAnotarF.push(c.fecha); }   // ese gasto se anota en Dinero y se resta allá: aquí no, para no restarlo dos veces
+      else if (d < 0 && empiezaCon(ci.obs, "Pagaron por transferencia")) aCuentas -= d;                       // se marcó efectivo pero llegó a la cuenta: la plata pasa de la caja a cuentas
       else if (d) { difs += d; nDifs++; } }
   }
   const sEf = s ? Number(s.efectivo) || 0 : 0, sCu = s ? Number(s.cuentas) || 0 : 0;
-  const efectivo = sEf + vEf - anEf - gEf - devol + difs - consig, cuentas = sCu + vCu - anCu - gCu + consig;
+  const efectivo = sEf + vEf - anEf - gEf - devol + difs - consig - aCuentas, cuentas = sCu + vCu - anCu - gCu + consig + aCuentas;
   // compras recibidas en el mismo tiempo: se muestran, no se restan
   let compras = 0, nCompras = 0;
   for (const c of Object.values(col("compras"))) if (c && c.estado === "recibido") { const f = c.recFecha || c.fecha; if (despues(f, c.recT || c.t)) { compras += sum(c.lineas || [], l => (Number(l.costo) || 0) * (Number(l.q) || 0)) + (Number(c.iva) || 0); nCompras++; } }
@@ -3808,7 +3864,7 @@ function liquidez(rango) {                                    // rango {a, b}: s
   const cargando = DS.mode === "db" && ["ventas", "cajas", "anulaciones", "gastos", "config"].some(n => !DS.ready[n]);
   const incompleto = DS.mode === "db" && desde < addDays(hoy, -(HIST_DIAS - 5));   // con servidor, este equipo ya no tiene todas las ventas de ese tiempo
   return {conSaldo: !!s, saldo: s, desde, sEf, sCu, ventas: vEf + vCu, vEf, vCu, nV, anulDesp: anEf + anCu, nAn, gastos: gEf + gCu, gEf, gCu, nG,
-    devol, otrosRet, otrosIng, sinAnotar, sinAnotarF: uniq(sinAnotarF).sort(), difs, nDifs, consig, retDueno, pend, efectivo, cuentas, total: efectivo + cuentas, medios, compras, nCompras, abiertas, sinEnviar, cargando, incompleto};
+    devol, otrosRet, otrosIng, sinAnotar, sinAnotarF: uniq(sinAnotarF).sort(), aCuentas, difs, nDifs, consig, retDueno, pend, efectivo, cuentas, total: efectivo + cuentas, medios, compras, nCompras, abiertas, sinEnviar, cargando, incompleto};
 }
 
 function liquidezHTML() {
@@ -3912,7 +3968,7 @@ function filasInventario(a, b) {
   }
   return out;
 }
-function filasAjustes(a, b) { return prods().filter(p => p.controla !== false && !p.combo).flatMap(p => movimientosInv(p.id)).sort((x, y) => x.t - y.t).filter(m => m.fecha >= a && m.fecha <= b && m.tipo !== "venta" && m.tipo !== "perdida").map(m => ({fecha: m.fecha, hora: hora(m.t), producto: (prod(m.pid) || {nombre: m.pid}).nombre, tipo: TIPO_MOV[m.tipo] || m.tipo, cantidad: m.q, antes: m.antes == null ? null : m.antes, despues: m.despues == null ? null : m.despues, motivo: m.det || "", usuario: empNombre(m.uid)})); }
+function filasAjustes(a, b) { return prods().filter(p => p.controla !== false && !p.combo).flatMap(p => movimientosInv(p.id)).sort((x, y) => x.t - y.t).filter(m => m.fecha >= a && m.fecha <= b && m.tipo !== "venta" && m.tipo !== "perdida").map(m => ({fecha: m.fecha, hora: hora(m.t), producto: (prod(m.pid) || {nombre: m.pid}).nombre, tipo: TIPO_MOV[m.tipo] || m.tipo, cantidad: m.q, antes: m.delta ? (m.saldo != null ? Math.round((m.saldo - m.q) * 1000) / 1000 : null) : m.antes == null ? null : m.antes, despues: m.delta ? (m.saldo != null ? m.saldo : null) : m.despues == null ? null : m.despues, motivo: m.det || "", usuario: empNombre(m.uid)})); }
 function proveedorDe(pid) { const cs = Object.values(col("compras")).filter(c => (c.lineas || []).some(l => l.pid === pid) && c.proveedor).sort((x, y) => (y.t || 0) - (x.t || 0)); return cs[0] ? cs[0].proveedor : ""; }
 function filasCompras(a, b) {
   const out = [];
@@ -3932,9 +3988,8 @@ function filasMovCaja(a, b) { const out = []; for (const c of cajasAll()) if (c.
 function filasGastos(a, b) { return gastosEn(a, b).map(g => ({fecha: g.fecha, proveedor: g.proveedor || "", categoria: g.cat || "", descripcion: g.desc || "", base: g.base || (g.iva ? g.valor - g.iva : g.valor), iva: g.iva || 0, retencion: g.retencion || 0, total: g.valor, metodo: g.m || "", cuenta: g.origen === "caja" || g.m === "Efectivo" ? "Caja" : "Banco", usuario: empNombre(g.uid), soporte: (g.soporte && g.soporte.ref) || "", estado: g.origen === "caja" ? "Desde caja" : (g.estado || "Registrado")})).sort((x, y) => x.fecha.localeCompare(y.fecha)); }
 function filasMermas(a, b) { return mermasAll().filter(m => m.fecha >= a && m.fecha <= b).map(m => { const p = prod(m.pid), c = costoUnit(m.pid, m.t); return {pid: m.pid, producto: (p && p.nombre) || m.pid, fecha: m.fecha, cantidad: m.q, unidad: (p && p.unidad) || "und", costo: c, total: c == null ? null : c * m.q, motivo: m.motivo, empleado: empNombre(m.uid), obs: m.obs || ""}; }).concat(perdidasHelado(a, b)); }
 function filasRentabilidad(a, b) {
-  const desc = {}, mer = {}; for (const r of filasVentas(a, b, {})) if (r.estado === "Confirmada") desc[r.pid] = (desc[r.pid] || 0) + r.descuento;
-  for (const m of filasMermas(a, b)) if (m.pid) mer[m.pid] = (mer[m.pid] || 0) + (m.total || 0);
-  return rentabilidad(a, b).map(r => ({producto: r.n, pid: r.pid, unidades: r.uds, ventas: r.ing - (desc[r.pid] || 0), costo: r.sinCosto ? null : r.costo, descuentos: desc[r.pid] || 0, merma: mer[r.pid] || 0}));
+  const mer = {}; for (const m of filasMermas(a, b)) if (m.pid) mer[m.pid] = (mer[m.pid] || 0) + (m.total || 0);
+  return rentabilidad(a, b).map(r => ({producto: r.n, pid: r.pid, unidades: r.uds, ventas: r.ing, costo: r.sinCosto ? null : r.costo, descuentos: r.desc || 0, merma: mer[r.pid] || 0}));   // r.ing ya trae el descuento restado
 }
 function filasClientes(a, b) {
   const m = {}; for (const v of ventasOk()) if (v.fecha >= a && v.fecha <= b && v.cliente && v.cliente.doc) { const k = v.cliente.doc, o = m[k] = m[k] || {doc: k, nombre: v.cliente.nombre || "", correo: v.cliente.correo || "", ult: "", n: 0, total: 0, prods: {}}; o.n++; o.total += v.total; if (v.fecha > o.ult) o.ult = v.fecha; for (const it of (v.items || [])) o.prods[it.n] = (o.prods[it.n] || 0) + it.q; }
@@ -5032,7 +5087,7 @@ function puedeAnular(v) {
 }
 ACT.verVenta = (el, d) => { const v = ventasAll().find(x => x.id === d.id); if (!v) return; const an = v.anulada ? anulacionDe(v.id) : null; if (an) pedirNombres([an.uid]); pedirNombres([v.uid]); const pa = puedeAnular(v);
   abrir(() => `${head(v.num || "Venta")}<div class="notice ${v.anulada ? "bad" : "ok"}">${v.anulada ? "<b>Venta anulada.</b>" + (an ? " " + diaCorto(ymd(new Date(an.t))) + " " + hora(an.t) + " por " + esc(nombreDe(an.uid) || "—") + (an.motivo ? " · Motivo: " + esc(an.motivo) : "") : "") : "Venta confirmada."} · ${esc(ventaSyncTxt(ventaSync(v)))}</div>
-    <div class="row"><span>Fecha</span><b>${diaCorto(v.fecha)} ${hora(v.t)}</b></div><div class="row"><span>Caja</span><b>${esc((col("dispositivos")[v.dev] || {}).nombre || v.dev || "")}</b></div><div class="row"><span>Vendió</span><b>${esc(nombreDe(v.uid) || "—")}</b></div><div class="row"><span>Pago</span><b>${esc(v.m)}${v.m === "Efectivo" && v.cambio ? " · recibió " + fmt(v.recibido) + ", cambio " + fmt(v.cambio) : ""}</b></div>
+    <div class="row"><span>Fecha</span><b>${diaCorto(v.fecha)} ${hora(v.t)}</b></div><div class="row"><span>Caja</span><b>${esc((col("dispositivos")[v.dev] || {}).nombre || v.dev || "")}</b></div><div class="row"><span>Vendió</span><b>${esc(nombreDe(v.uid) || "—")}</b></div><div class="row"><span>Pago</span><b>${esc(v.m)}${v.m === "Efectivo" && v.cambio ? " · recibió " + fmt(v.recibido) + ", cambio " + fmt(v.cambio) : ""}</b></div>${v.pend && !v.anulada ? `<div class="row"><span class="pill warn">Pago por confirmar</span>${esAdmin() || (v.dev === DEV.id && v.fecha >= addDays(S.today, -3)) ? `<button class="btn pri sm" data-act="ya" data-id="${esc(v.id)}">Ya llegó</button>` : ""}</div>` : ""}
     ${(v.items || []).map(i => `<div class="row"><span>${i.q} × ${esc(i.n)}${i.det ? `<span class="small muted" style="display:block">${esc(i.det)}</span>` : ""}</span><b>${fmt(i.p * i.q)}</b></div>`).join("")}${v.desc ? `<div class="row"><span>Descuento</span><b>- ${fmt(v.desc)}</b></div>` : ""}<div class="row"><b>Total</b><b class="big" style="font-size:24px">${fmt(v.total)}</b></div>
     ${pa.ok ? `<button class="btn danger wide" style="margin-top:10px" data-act="anular" data-id="${esc(v.id)}">Anular esta venta</button>` : pa.txt ? `<p class="small muted" style="margin-top:10px">${pa.txt}</p>` : ""}`); };
 ACT.anular = (el, d) => { const v = ventasAll().find(x => x.id === d.id); if (!v) return;

@@ -191,8 +191,9 @@ begin
     jsonb_build_object('op_id','cn1','col','productos','id','i-barq','t',40000,'data','{"nombre":"Barquillo","tipo":"insumo","precio":0,"orden":700.5}'::jsonb),
     jsonb_build_object('op_id','cn2','col','stock','id','i-barq','t',40000,'data','{"base":100,"t":40000}'::jsonb),
     jsonb_build_object('op_id','cn3','col','stock','id','h-choco','t',40000,'data','{"base":5,"t":40000}'::jsonb),
+    jsonb_build_object('op_id','cn3b','col','productos','id','h-choco','t',40000,'data','{"nombre":"Helado Chocolate","tipo":"insumo","sabor":true,"precio":0,"orden":800}'::jsonb),
     jsonb_build_object('op_id','cn4','col','productos','id','p-cono2','t',40000,'data','{"nombre":"Cono doble","precio":9000,"cono":{"bolas":2,"barquillo":"i-barq"}}'::jsonb)), 'dA', '1.0');
-  perform t_assert((select count(*) from jsonb_array_elements(r) el where el->>'status' = 'applied') = 4 and (select sort from products where id = 'i-barq') = 701, 'un orden con decimales no tumba el lote (se redondea)');
+  perform t_assert((select count(*) from jsonb_array_elements(r) el where el->>'status' = 'applied') = 5 and (select sort from products where id = 'i-barq') = 701, 'un orden con decimales no tumba el lote (se redondea)');
   reset role; set role authenticated; perform t_as(e1);
   r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','cn5','col','ventas','id','2026-10-03_d1','t',41000,'data', jsonb_build_object('fecha','2026-10-03','dev','d1','ventas', jsonb_build_array(
          jsonb_build_object('id','d1-cono-1','n',20,'num','Caja 1 #20','t',41000,'fecha','2026-10-03','uid',e1::text,'dev','d1','m','Efectivo','total',18000,'sub',18000,'desc',0,'estado','confirmada',
@@ -477,6 +478,29 @@ begin
   r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','rs9','col','mermas','id','2026-10-08_d1','t',2,'data','{"fecha":"2026-10-08","dev":"d1","items":[{"id":"mm2","t":1,"pid":"p-mango","q":1,"motivo":"Daño"}]}'::jsonb)), 'd1', '1.0');
   perform t_assert(r->0->>'status' = 'applied', 'una pérdida normal entra');
   reset role;
+  -- T35: inventario en el servidor (auditoría): lo que una venta dice que gastó, cambios de caja con algo que no es sabor, borrar documentos
+  reset role; set role authenticated; perform t_as(e1);
+  v := (select qty from inventory_current where product_id = 'i-barq'); n := (select qty from inventory_current where product_id = 'p-mango');
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','iv1','col','ventas','id','2026-10-09_d1','t',1,'data', jsonb_build_object('fecha','2026-10-09','dev','d1','ventas', jsonb_build_array(
+         jsonb_build_object('id','d1-iv-1','n',300,'num','Caja 1 #300','t',1,'fecha','2026-10-09','uid',e1::text,'dev','d1','m','Efectivo','total',9000,'sub',9000,'desc',0,'estado','confirmada',
+           'items','[{"pid":"p-cono2","n":"Cono doble","q":1,"p":9000,"d":0,"sab":["h-choco","h-choco"],"pres":"vaso","gasta":[{"pid":"i-barq","q":-50},{"pid":"p-mango","q":1},{"pid":"i-barq","q":"x"}]}]'::jsonb))))), 'd1', '1.0');
+  reset role;
+  perform t_assert(r->0->>'status' = 'applied' and (select qty from inventory_current where product_id = 'i-barq') = v, 'lo que una venta dice que gastó solo cuenta si es un insumo y una cantidad razonable (una negativa no suma inventario; un dato raro no rompe la consulta)');
+  perform t_assert((select qty from inventory_current where product_id = 'p-mango') = n, 'un producto que no es insumo (una paleta) no se descuenta por lo que la venta dijo que gastó');
+  v := (select qty from inventory_current where product_id = 'p-mango');
+  set role authenticated; perform t_as(e1);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','iv2','col','cajashelado','id','2026-10-09_d1','t',1,'data','{"fecha":"2026-10-09","dev":"d1","items":[{"id":"cx1","t":1,"sabor":"p-mango","motivo":"acabo","uid":"x"}]}'::jsonb)), 'd1', '1.0');
+  reset role;
+  perform t_assert((select qty from inventory_current where product_id = 'p-mango') = v and not exists (select 1 from inventory_movements where id = 'caja_cx1'), 'un «cambio de caja» de algo que no es un sabor de helado no descuenta nada');
+  set role authenticated; perform t_as(a);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','iv3','col','mermas','id','2026-10-09_dA','t',100,'data','{"fecha":"2026-10-09","dev":"dA","items":[{"id":"mz1","t":100,"pid":"p-mango","q":2,"motivo":"Daño"}]}'::jsonb),
+         jsonb_build_object('op_id','iv4','col','movinv','id','2026-10-09_dA','t',100,'data','{"fecha":"2026-10-09","dev":"dA","items":[{"id":"mvz1","t":100,"pid":"p-mango","q":4,"delta":true,"tipo":"entrada"}]}'::jsonb)), 'dA', '1.0');
+  reset role;
+  perform t_assert(exists (select 1 from waste where id = 'mz1') and exists (select 1 from inventory_movements where id = 'mvz1'), 'la pérdida y la entrada quedan en las tablas de consulta');
+  set role authenticated; perform t_as(a);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','iv5','col','mermas','id','2026-10-09_dA','t',200,'del',true), jsonb_build_object('op_id','iv6','col','movinv','id','2026-10-09_dA','t',200,'del',true)), 'dA', '1.0');
+  reset role;
+  perform t_assert(not exists (select 1 from waste where id = 'mz1') and not exists (select 1 from inventory_movements where id = 'mvz1') and (select qty from inventory_current where product_id = 'p-mango') = v, 'al borrar esos documentos se borran también sus filas (no quedan huérfanas) y el inventario vuelve a lo de antes');
   -- T16: coherencia de totales
   reset role;
   perform t_assert((select sum(total) from sales) = (select sum(amount) from payments), 'total de ventas = total de pagos');

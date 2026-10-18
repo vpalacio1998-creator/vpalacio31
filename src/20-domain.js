@@ -31,7 +31,9 @@ const ventasEn = (a, b) => ventasOk().filter(v => v.fecha >= a && v.fecha <= b);
 /* qué inventario gasta una línea (de una venta o del pedido): los combos se abren en sus componentes; un cono gasta su barquillo y su cucurucho o vaso.
    Las bolas de helado no se descuentan una a una: se miden por caja de cada sabor (ver 63-conos). */
 function consumoBruto(it) {
-  if (Array.isArray(it.gasta)) return it.gasta;                       // lo que se guardó al vender (no cambia si después se edita el producto)
+  // lo que se guardó al vender (no cambia si después se edita el producto). Solo insumos y cantidades razonables (la misma regla del servidor):
+  // un dato raro no suma inventario ni descuenta otro producto
+  if (Array.isArray(it.gasta)) return it.gasta.filter(x => x && (prod(x.pid) || {}).tipo === "insumo" && Number(x.q) > 0 && Number(x.q) <= (Number(it.q) || 0) * 3);
   const p = prod(it.pid);
   if (p && p.combo) return p.combo.map(c => ({pid: c.pid, q: c.q * it.q}));
   if (p && p.cono) return gastoCono(p, it.pres, it.q);
@@ -103,6 +105,10 @@ function cajaBloqueada() { const c = cajaHoy(); return c && cajaEstado(c) === "c
 const checklistDe = (fecha, dev = DEV.id) => col("checklists")[cajaId(fecha, dev)] || {fecha, dev, apertura: {}, cierre: {}};
 
 /* ---------- finanzas ---------- */
+/* devoluciones en efectivo ("Sacar dinero" → "Devolución a cliente"): la venta sigue contada (su caja ya cerró), así que la plata devuelta se resta
+   de la utilidad. Las devoluciones por Nequi u otro medio se anotan como gasto (ya se restan). */
+const esDevolucion = m => m && m.tipo === "retiro" && String(m.motivo || "").indexOf("Devolución a cliente") === 0;
+function devolucionesEn(a, b) { const out = []; for (const c of cajasAll()) if (c.fecha >= a && c.fecha <= b) for (const m of (c.movs || [])) if (esDevolucion(m)) out.push({fecha: c.fecha, monto: Number(m.monto) || 0}); return out; }
 function gastosEn(a, b) {
   const out = [];
   for (const [id, g] of Object.entries(col("gastos"))) if (g.fecha >= a && g.fecha <= b) out.push(Object.assign({id, origen: "gasto"}, g));
@@ -116,14 +122,15 @@ function finanzas(a, b) {
     for (const l of lineasExp(v)) { const c = costoUnit(l.pid, v.t); if (c == null) { if (l.porCaja) sinCostoHelado = true; else sinCosto += l.q; } else cogs += c * l.q; }
   }
   const gs = gastosEn(a, b), gastosOp = sum(gs.filter(g => g.cat !== BASE_COSTO), g => g.valor), gastosMP = sum(gs.filter(g => g.cat === BASE_COSTO), g => g.valor);
-  const bruta = ventas - cogs, utilidad = bruta - gastosOp;
-  return {ventas, cogs, bruta, gastos: gastosOp, gastosMP, utilidad, margen: ventas ? utilidad / ventas : NaN, margenBruto: ventas ? bruta / ventas : NaN, n: vs.length, uds, ticket: vs.length ? ventas / vs.length : 0, sinCosto, sinCostoHelado};
+  const devol = sum(devolucionesEn(a, b), x => x.monto);   // plata devuelta en efectivo de ventas que ya no se podían anular (caja cerrada)
+  const bruta = ventas - cogs, utilidad = bruta - gastosOp - devol;
+  return {ventas, cogs, bruta, gastos: gastosOp, gastosMP, devol, utilidad, margen: ventas ? utilidad / ventas : NaN, margenBruto: ventas ? bruta / ventas : NaN, n: vs.length, uds, ticket: vs.length ? ventas / vs.length : 0, sinCosto, sinCostoHelado};
 }
 function rentabilidad(a, b) {
   const rows = {};
   for (const v of ventasEn(a, b)) for (const it of (v.items || [])) {
     const p = prod(it.pid), r = rows[it.pid] = rows[it.pid] || {pid: it.pid, n: (p && p.nombre) || it.n || "?", cat: p ? p.cat : "Otros", uds: 0, ing: 0, costo: 0, sinCosto: 0};
-    r.uds += it.q; r.ing += it.p * it.q; const c = costoItem(it, v.t); if (c == null) r.sinCosto += it.q; else r.costo += c * it.q;
+    r.uds += it.q; r.ing += it.p * it.q - (Number(it.d) || 0); r.desc = (r.desc || 0) + (Number(it.d) || 0); const c = costoItem(it, v.t); if (c == null) r.sinCosto += it.q; else r.costo += c * it.q;   // ing: lo que de verdad entró, con el descuento ya restado (como el total de la venta)
   }
   return Object.values(rows).map(r => Object.assign(r, {util: r.ing - r.costo, margen: r.ing ? (r.ing - r.costo) / r.ing : NaN}));
 }
@@ -131,15 +138,18 @@ function porClave(a, b, f) { const m = {}; for (const v of ventasEn(a, b)) { con
 function serieDiaria(a, b) {
   const out = [], by = {}; for (const v of ventasEn(a, b)) { const o = by[v.fecha] = by[v.fecha] || {ventas: 0, n: 0, cogs: 0}; o.ventas += v.total; o.n++; for (const l of lineasExp(v)) { const c = costoUnit(l.pid, v.t); if (c != null) o.cogs += c * l.q; } }
   const gs = {}; for (const g of gastosEn(a, b)) if (g.cat !== BASE_COSTO) gs[g.fecha] = (gs[g.fecha] || 0) + g.valor;
+  for (const x of devolucionesEn(a, b)) gs[x.fecha] = (gs[x.fecha] || 0) + x.monto;
   for (let d = a, i = 0; d <= b && i < 400; d = addDays(d, 1), i++) { const o = by[d] || {ventas: 0, n: 0, cogs: 0}; out.push({d, ventas: o.ventas, n: o.n, cogs: o.cogs, bruta: o.ventas - o.cogs, util: o.ventas - o.cogs - (gs[d] || 0)}); }
   return out;
 }
 const configNeg = () => col("config").negocio || {};
 const gastosFijosPlan = () => (configNeg().gastosFijos || []);
 const totalFijos = () => sum(gastosFijosPlan(), g => g.v);
-/* arriendo, nómina y servicios ya están dentro de los gastos fijos del mes: si además se registran como gasto, no se restan dos veces */
-const CATS_FIJAS = ["Arrendamiento", "Nómina", "Servicios"];
-const gastosVariables = (a, b) => { const fijas = totalFijos() > 0 ? CATS_FIJAS : []; return sum(gastosEn(a, b).filter(g => g.cat !== BASE_COSTO && !fijas.includes(g.cat)), g => g.valor); };
+/* arriendo, nómina y servicios que ya están dentro de los gastos fijos del mes: si además se registran como gasto, no se restan dos veces.
+   Solo se da por incluida una categoría si el plan tiene algún renglón de ella con valor (con Luz, Agua e Internet en $0, un recibo de luz sí se resta). */
+const CATS_FIJAS = {Arrendamiento: /arriendo|arrendamiento|alquiler|local/i, "Nómina": /trabajador|n[oó]mina|sueldo|salario|emplead|pago de personal/i, Servicios: /luz|agua|internet|gas|servicio|energ|tel[eé]fono|celular|acueducto/i};
+const catsEnFijos = () => Object.keys(CATS_FIJAS).filter(c => gastosFijosPlan().some(g => (Number(g.v) || 0) > 0 && (CATS_FIJAS[c].test(g.n || "") || g.n === c)));
+const gastosVariables = (a, b) => { const fijas = catsEnFijos(); return sum(gastosEn(a, b).filter(g => g.cat !== BASE_COSTO && !fijas.includes(g.cat)), g => g.valor) + sum(devolucionesEn(a, b), x => x.monto); };
 const margenObjetivo = () => (configNeg().margenObjetivo != null ? configNeg().margenObjetivo : 0.6);
 
 /* ---------- rangos de fecha para filtros ---------- */

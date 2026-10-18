@@ -7,6 +7,9 @@ const diasAbiertos = (a, b) => Object.keys(histVentasDia()).filter(d => d >= a &
 const histInfo = () => memo("hist", () => { const t = S.today, dias = diasAbiertos(addDays(t, -60), addDays(t, -1)); return {dias, n: dias.length, primero: dias[0] || null, ok: dias.length >= MIN_DIAS}; });
 const unidadesDia = () => memo("upd", () => { const m = {}; for (const v of ventasOk()) for (const l of lineasExp(v)) { const o = m[l.pid] = m[l.pid] || {}; o[v.fecha] = (o[v.fecha] || 0) + l.q; } return m; });
 const unidadesHoy = pid => (unidadesDia()[pid] || {})[S.today] || 0;
+/* unidades VENDIDAS de cada producto por día (un cono es un cono, un combo es un combo): para proyectar plata.
+   unidadesDia, en cambio, es lo que sale del inventario (el barquillo y el cucurucho del cono): para comprar. */
+const vendidasDia = () => memo("vdia", () => { const m = {}; for (const v of ventasOk()) for (const it of (v.items || [])) { const o = m[it.pid] = m[it.pid] || {}; o[v.fecha] = (o[v.fecha] || 0) + (Number(it.q) || 0); } return m; });
 
 /* ---- factor por día de la semana (a nivel tienda) ---- */
 function dowFactors() {
@@ -48,6 +51,20 @@ function demandaDia(pid, fecha, parcial) {
   let d = base * fac * tr; if (parcial) d = Math.max(0, d - unidadesHoy(pid)); return d;
 }
 function demanda(pid, fechas) { let s = 0; for (const f of fechas) { const d = demandaDia(pid, f, f === S.today); if (d == null) return null; s += d; } return s; }
+// unidades que se espera VENDER de un producto en esas fechas (para plata). Igual que demanda, pero los conos y combos cuentan como tales.
+function demandaVendida(pid, fechas) {
+  const p = prod(pid); if (!p || !(p.cono || p.combo)) return demanda(pid, fechas);
+  const dias = histInfo().dias.slice(-14); if (dias.length < 3) return null; const u = vendidasDia()[pid] || {}, base = sum(dias, d => u[d] || 0) / dias.length;
+  const tr = clamp(tendTienda() != null ? tendTienda() : 1, 0.75, 1.35); let s = 0;
+  for (const f of fechas) { let d = base * factorDia(f).fac * tr; if (f === S.today) d = Math.max(0, d - (u[S.today] || 0)); s += d; }
+  return s;
+}
+// costo por unidad para proyectar y simular: el registrado; si el producto no tiene uno propio (conos), el promedio de lo vendido en 30 días
+function costoProyeccion(pid) {
+  const c = costoActual(pid); if (c != null) return c;
+  const r = rentabilidad(addDays(S.today, -29), S.today).find(x => x.pid === pid), n = r ? r.uds - r.sinCosto : 0;
+  return n > 0 ? r.costo / n : null;
+}
 function fechasHorizonte(k) {
   const t = S.today;
   if (k === "hoy") return [t]; if (k === "3") return [t, addDays(t, 1), addDays(t, 2)]; if (k === "7") return Array.from({length: 7}, (_, i) => addDays(t, i));
@@ -108,7 +125,7 @@ function prepararFinde() {
     const disp = r.st == null ? 0 : Math.max(0, r.st), dem = r.dem, deficit = dem == null ? null : Math.max(0, dem + r.seg - disp);
     return Object.assign({}, r, {disp, deficit, riesgoF: dem == null ? "sin" : dem + r.seg > disp ? (disp < dem ? "bad" : "warn") : "ok"});
   });
-  const ventasEsp = sum(rows, r => (r.dem || 0) * (r.p.precio || 0)), enRiesgo = rows.filter(r => r.riesgoF === "bad" || r.riesgoF === "warn");
+  const ventasEsp = sum(vendibles(), p => (demandaVendida(p.id, fechas) || 0) * (p.precio || 0)), enRiesgo = rows.filter(r => r.riesgoF === "bad" || r.riesgoF === "warn");
   return {fechas, rows, ventasEsp, enRiesgo, basico, datosOk: hi.ok};
 }
 
@@ -137,7 +154,7 @@ function patrones() {
 function proyeccion(dias) {
   const hi = histInfo(); if (!hi.ok) return {ok: false, dias};
   const fechas = Array.from({length: dias}, (_, i) => addDays(S.today, i + 1)); let ventas = 0, costo = 0, sinCosto = 0; const por = [];
-  for (const p of vendibles()) { const d = demanda(p.id, fechas.map(f => f)); if (d == null) continue; const c = costoActual(p.id); ventas += d * (p.precio || 0); if (c == null) sinCosto += d; else costo += d * c; por.push({p, d}); }
+  for (const p of vendibles()) { const d = demandaVendida(p.id, fechas); if (d == null) continue; const c = costoProyeccion(p.id); ventas += d * (p.precio || 0); if (c == null) sinCosto += d; else costo += d * c; por.push({p, d}); }
   const fijos = totalFijos() * dias / 30, ant = fechas.map(f => ({f, f2: dowFactors().f[dowOf(f)]})), sorted = ant.filter(x => x.f2 > 0).sort((a, b) => b.f2 - a.f2);
   const df = dowFactors(), top = Object.entries(df.f).filter(([k]) => df.ok[k]).sort((a, b) => b[1] - a[1]).slice(0, 2).map(([k]) => DOW[k]);
   const need = recomendarCompra(fechas).filter(r => r.comprar), riesgo = need.filter(r => r.riesgo !== "ok");
@@ -151,8 +168,11 @@ function simular(i) {
 }
 function baseSimulador(pid) {
   const a = addDays(S.today, -29), b = S.today;
-  if (pid === "*") { const f = finanzas(a, b); return {precio: f.uds ? f.ventas / f.uds : 0, costo: f.uds ? f.cogs / f.uds : 0, vol: f.uds, gastos: f.gastos || totalFijos()}; }
-  const r = rentabilidad(a, b).find(x => x.pid === pid), p = prod(pid); return {precio: p ? p.precio : 0, costo: costoActual(pid) || 0, vol: r ? r.uds : 0, gastos: totalFijos()};
+  // gastos del mes: los fijos del plan más lo variable registrado (la misma regla del punto de equilibrio del inicio); sin plan, lo registrado
+  const gastosMes = totalFijos() > 0 ? totalFijos() + gastosVariables(a, b) : finanzas(a, b).gastos;
+  if (pid === "*") { const f = finanzas(a, b); return {precio: f.uds ? f.ventas / f.uds : 0, costo: f.uds ? f.cogs / f.uds : 0, vol: f.uds, gastos: gastosMes}; }
+  const r = rentabilidad(a, b).find(x => x.pid === pid), p = prod(pid), c = costoProyeccion(pid);
+  return {precio: p ? p.precio : 0, costo: c == null ? 0 : Math.round(c), sinCosto: c == null, vol: r ? r.uds : 0, gastos: gastosMes};
 }
 
 /* ---- recomendaciones de precio (solo recomienda; nunca cambia precios) ---- */
@@ -206,8 +226,9 @@ function productosLentos() {
   return memo("lentos", () => {
     if (!histInfo().ok) return [];
     const rent = {}; rentabilidad(addDays(S.today, -29), S.today).forEach(r => rent[r.pid] = r); const out = [];
+    const nd = Math.max(1, Math.min(30, diffDays(S.today, histInfo().primero || S.today) + 1));   // días de verdad con historia (máx. 30): con 16 días no se divide por 30
     for (const p of terminados().filter(x => x.activo !== false && x.controla !== false && !x.combo)) {
-      const st = stockDe(p.id); if (st == null || st <= (p.min || 0)) continue; const u = (rent[p.id] || {}).uds || 0, cov = u > 0 ? st / (u / 30) : Infinity;
+      const st = stockDe(p.id); if (st == null || st <= (p.min || 0)) continue; const u = (rent[p.id] || {}).uds || 0, cov = u > 0 ? st / (u / nd) : Infinity;
       if (cov > 45 && st >= 8) out.push({p, st, u30: u, cov, rec: "Reducir producción o compra."});
     }
     return out.sort((a, b) => b.cov - a.cov);
@@ -242,6 +263,11 @@ function anomalias() {
     const difs = cajasAll().filter(c => c.fecha >= addDays(t, -29) && (c.cierres || []).length && Math.abs((c.cierres.slice(-1)[0] || {}).dif || 0) >= 1000);
     if (difs.length >= 3) out.push({sev: "warn", t: `Se registraron ${difs.length} cierres con diferencias en 30 días.`, d: "Conviene revisar los cierres y el conteo de efectivo.", ir: "cierres"});
     for (const [pid, st] of Object.entries(stockMap())) { const p = prod(pid); if (st != null && st < 0 && (!p || (p.activo !== false && !p.combo))) out.push({sev: "bad", t: `El inventario de ${(p || {}).nombre || pid} quedó negativo (${st}).`, d: "Puede ser un conflicto entre dispositivos o un conteo desactualizado. Haz un conteo.", ir: "inventario"}); }   // un combo o un producto desactivado no se cuenta: su alerta sale en el insumo
+    const viejos = conteosViejos(); if (viejos.length) { const malos = viejos.filter(x => x.dias >= HIST_DIAS - 2);
+      out.push({sev: malos.length ? "bad" : "warn", t: malos.length ? `El inventario de ${malos.slice(0, 3).map(x => x.p.nombre).join(", ")}${malos.length > 3 ? " y " + (malos.length - 3) + " más" : ""} ya no es confiable en este equipo: hay que contarlo.` : `Hay ${viejos.length === 1 ? "1 producto que no se cuenta" : viejos.length + " productos que no se cuentan"} hace más de 70 días: ${viejos.slice(0, 3).map(x => x.p.nombre).join(", ")}${viejos.length > 3 ? "…" : ""}.`,
+        d: "Este equipo guarda los últimos " + HIST_DIAS + " días de ventas. Cuenta esos productos (Inventario → Contar) para que el cálculo siga siendo exacto.", ir: "inventario"}); }
+    // una venta cuyo total no es la suma de sus productos menos el descuento (la app nunca la arma así: llegó dañada o de otra forma). Sin asumir nada: revisar
+    for (const v of ventasOk()) if (v.fecha >= addDays(t, -6) && (v.items || []).length && Math.abs((Number(v.total) || 0) - sum(v.items, it => (Number(it.p) || 0) * (Number(it.q) || 0) - (Number(it.d) || 0))) > 1) out.push({sev: "warn", t: `La venta ${v.num || v.id} tiene un total que no cuadra con sus productos.`, d: diaCorto(v.fecha) + " " + hora(v.t) + " · total " + fmt(v.total) + " · productos " + fmt(sum(v.items, it => (Number(it.p) || 0) * (Number(it.q) || 0) - (Number(it.d) || 0))) + ". Revísala en Ventas.", ir: "reportes"});
     // el servidor marca "sinPermiso" un retiro o pago de un empleado que llegó con el permiso apagado (la plata sí salió: se guarda y se avisa)
     for (const c of cajasAll()) if (c.fecha >= addDays(t, -6)) for (const m of (c.movs || [])) if (m.sinPermiso) out.push({sev: "warn", t: `${nombreDe(m.uid) || "Un empleado"} ${m.tipo === "gasto" ? "pagó" : "sacó"} ${fmt(m.monto)} de la caja aunque los empleados no tienen permiso.`, d: diaCorto(c.fecha) + " " + hora(m.t) + " · " + ((col("dispositivos")[c.dev] || {}).nombre || c.devNombre || "") + (m.motivo ? " · " + m.motivo : "") + ". La plata sí salió de la caja: quedó registrada.", ir: "caja"});
     return out;
@@ -310,7 +336,7 @@ function decisionesHoy() {
 /* ---- resumen del día ---- */
 function resumenDia(fecha = S.today) {
   const f = finanzas(fecha, fecha), rent = rentabilidad(fecha, fecha).sort((a, b) => b.uds - a.uds), est = rent[0], ago = prods().filter(p => p.activo !== false && p.controla !== false && estadoProd(p).k === "agotado");
-  const cajas = cajasAll().filter(c => c.fecha === fecha && (c.cierres || []).length), dif = sum(cajas, c => c.cierres.slice(-1)[0].dif || 0), al = alertas().length;
+  const cajas = cajasAll().filter(c => c.fecha === fecha && cajaEstado(c) === "cerrada"), dif = sum(cajas, c => Number(c.cierres.slice(-1)[0].dif) || 0), al = alertas().length;   // una caja reabierta no cuenta su cierre viejo
   const rec = recomendarCompra(fechasHorizonte("finde")).filter(r => r.comprar > 0 && r.riesgo !== "ok").slice(0, 2);
   const recTxt = rec.length ? "Comprar " + rec.map(r => r.comprar + " " + r.p.nombre.replace(/^Paleta /, "")).join(" y ") + " antes del " + DOW[6] + "." : (ago.length ? "Reponer " + ago.map(p => p.nombre).slice(0, 2).join(" y ") + "." : "Todo en orden. Sigue así.");
   return {f, fecha, uds: sum(rent, r => r.uds), est, ago, dif, al, rec: recTxt, txt: ""};

@@ -33,7 +33,7 @@ function filasInventario(a, b) {
   }
   return out;
 }
-function filasAjustes(a, b) { return prods().filter(p => p.controla !== false && !p.combo).flatMap(p => movimientosInv(p.id)).sort((x, y) => x.t - y.t).filter(m => m.fecha >= a && m.fecha <= b && m.tipo !== "venta" && m.tipo !== "perdida").map(m => ({fecha: m.fecha, hora: hora(m.t), producto: (prod(m.pid) || {nombre: m.pid}).nombre, tipo: TIPO_MOV[m.tipo] || m.tipo, cantidad: m.q, antes: m.antes == null ? null : m.antes, despues: m.despues == null ? null : m.despues, motivo: m.det || "", usuario: empNombre(m.uid)})); }
+function filasAjustes(a, b) { return prods().filter(p => p.controla !== false && !p.combo).flatMap(p => movimientosInv(p.id)).sort((x, y) => x.t - y.t).filter(m => m.fecha >= a && m.fecha <= b && m.tipo !== "venta" && m.tipo !== "perdida").map(m => ({fecha: m.fecha, hora: hora(m.t), producto: (prod(m.pid) || {nombre: m.pid}).nombre, tipo: TIPO_MOV[m.tipo] || m.tipo, cantidad: m.q, antes: m.delta ? (m.saldo != null ? Math.round((m.saldo - m.q) * 1000) / 1000 : null) : m.antes == null ? null : m.antes, despues: m.delta ? (m.saldo != null ? m.saldo : null) : m.despues == null ? null : m.despues, motivo: m.det || "", usuario: empNombre(m.uid)})); }
 function proveedorDe(pid) { const cs = Object.values(col("compras")).filter(c => (c.lineas || []).some(l => l.pid === pid) && c.proveedor).sort((x, y) => (y.t || 0) - (x.t || 0)); return cs[0] ? cs[0].proveedor : ""; }
 function filasCompras(a, b) {
   const out = [];
@@ -53,9 +53,8 @@ function filasMovCaja(a, b) { const out = []; for (const c of cajasAll()) if (c.
 function filasGastos(a, b) { return gastosEn(a, b).map(g => ({fecha: g.fecha, proveedor: g.proveedor || "", categoria: g.cat || "", descripcion: g.desc || "", base: g.base || (g.iva ? g.valor - g.iva : g.valor), iva: g.iva || 0, retencion: g.retencion || 0, total: g.valor, metodo: g.m || "", cuenta: g.origen === "caja" || g.m === "Efectivo" ? "Caja" : "Banco", usuario: empNombre(g.uid), soporte: (g.soporte && g.soporte.ref) || "", estado: g.origen === "caja" ? "Desde caja" : (g.estado || "Registrado")})).sort((x, y) => x.fecha.localeCompare(y.fecha)); }
 function filasMermas(a, b) { return mermasAll().filter(m => m.fecha >= a && m.fecha <= b).map(m => { const p = prod(m.pid), c = costoUnit(m.pid, m.t); return {pid: m.pid, producto: (p && p.nombre) || m.pid, fecha: m.fecha, cantidad: m.q, unidad: (p && p.unidad) || "und", costo: c, total: c == null ? null : c * m.q, motivo: m.motivo, empleado: empNombre(m.uid), obs: m.obs || ""}; }).concat(perdidasHelado(a, b)); }
 function filasRentabilidad(a, b) {
-  const desc = {}, mer = {}; for (const r of filasVentas(a, b, {})) if (r.estado === "Confirmada") desc[r.pid] = (desc[r.pid] || 0) + r.descuento;
-  for (const m of filasMermas(a, b)) if (m.pid) mer[m.pid] = (mer[m.pid] || 0) + (m.total || 0);
-  return rentabilidad(a, b).map(r => ({producto: r.n, pid: r.pid, unidades: r.uds, ventas: r.ing - (desc[r.pid] || 0), costo: r.sinCosto ? null : r.costo, descuentos: desc[r.pid] || 0, merma: mer[r.pid] || 0}));
+  const mer = {}; for (const m of filasMermas(a, b)) if (m.pid) mer[m.pid] = (mer[m.pid] || 0) + (m.total || 0);
+  return rentabilidad(a, b).map(r => ({producto: r.n, pid: r.pid, unidades: r.uds, ventas: r.ing, costo: r.sinCosto ? null : r.costo, descuentos: r.desc || 0, merma: mer[r.pid] || 0}));   // r.ing ya trae el descuento restado
 }
 function filasClientes(a, b) {
   const m = {}; for (const v of ventasOk()) if (v.fecha >= a && v.fecha <= b && v.cliente && v.cliente.doc) { const k = v.cliente.doc, o = m[k] = m[k] || {doc: k, nombre: v.cliente.nombre || "", correo: v.cliente.correo || "", ult: "", n: 0, total: 0, prods: {}}; o.n++; o.total += v.total; if (v.fecha > o.ult) o.ult = v.fecha; for (const it of (v.items || [])) o.prods[it.n] = (o.prods[it.n] || 0) + it.q; }

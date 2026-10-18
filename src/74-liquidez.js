@@ -45,7 +45,7 @@ function liquidez(rango) {                                    // rango {a, b}: s
     const x = Number(g.valor) || 0, m = g.m || "Efectivo"; nG++; med(m).salio += x;
     if (enEfectivo(m)) gEf += x; else gCu += x;
   }
-  let consig = 0, retDueno = 0, devol = 0, otrosRet = 0, otrosIng = 0, difs = 0, nDifs = 0, sinAnotar = 0; const sinAnotarF = [];
+  let consig = 0, retDueno = 0, devol = 0, otrosRet = 0, otrosIng = 0, difs = 0, nDifs = 0, sinAnotar = 0, aCuentas = 0; const sinAnotarF = [];
   for (const c of cajas) {
     for (const mv of (c.movs || [])) if (despues(c.fecha, mv.t)) {
       const x = Number(mv.monto) || 0;
@@ -60,10 +60,11 @@ function liquidez(rango) {                                    // rango {a, b}: s
     const ci = (c.cierres || []).slice(-1)[0];
     if (ci && cajaEstado(c) === "cerrada" && c.apertura && despues(c.fecha, c.apertura.t)) { const d = Number(ci.dif) || 0;
       if (d < 0 && empiezaCon(ci.obs, "Gasto sin anotar")) { sinAnotar -= d; sinAnotarF.push(c.fecha); }   // ese gasto se anota en Dinero y se resta allá: aquí no, para no restarlo dos veces
+      else if (d < 0 && empiezaCon(ci.obs, "Pagaron por transferencia")) aCuentas -= d;                       // se marcó efectivo pero llegó a la cuenta: la plata pasa de la caja a cuentas
       else if (d) { difs += d; nDifs++; } }
   }
   const sEf = s ? Number(s.efectivo) || 0 : 0, sCu = s ? Number(s.cuentas) || 0 : 0;
-  const efectivo = sEf + vEf - anEf - gEf - devol + difs - consig, cuentas = sCu + vCu - anCu - gCu + consig;
+  const efectivo = sEf + vEf - anEf - gEf - devol + difs - consig - aCuentas, cuentas = sCu + vCu - anCu - gCu + consig + aCuentas;
   // compras recibidas en el mismo tiempo: se muestran, no se restan
   let compras = 0, nCompras = 0;
   for (const c of Object.values(col("compras"))) if (c && c.estado === "recibido") { const f = c.recFecha || c.fecha; if (despues(f, c.recT || c.t)) { compras += sum(c.lineas || [], l => (Number(l.costo) || 0) * (Number(l.q) || 0)) + (Number(c.iva) || 0); nCompras++; } }
@@ -73,7 +74,7 @@ function liquidez(rango) {                                    // rango {a, b}: s
   const cargando = DS.mode === "db" && ["ventas", "cajas", "anulaciones", "gastos", "config"].some(n => !DS.ready[n]);
   const incompleto = DS.mode === "db" && desde < addDays(hoy, -(HIST_DIAS - 5));   // con servidor, este equipo ya no tiene todas las ventas de ese tiempo
   return {conSaldo: !!s, saldo: s, desde, sEf, sCu, ventas: vEf + vCu, vEf, vCu, nV, anulDesp: anEf + anCu, nAn, gastos: gEf + gCu, gEf, gCu, nG,
-    devol, otrosRet, otrosIng, sinAnotar, sinAnotarF: uniq(sinAnotarF).sort(), difs, nDifs, consig, retDueno, pend, efectivo, cuentas, total: efectivo + cuentas, medios, compras, nCompras, abiertas, sinEnviar, cargando, incompleto};
+    devol, otrosRet, otrosIng, sinAnotar, sinAnotarF: uniq(sinAnotarF).sort(), aCuentas, difs, nDifs, consig, retDueno, pend, efectivo, cuentas, total: efectivo + cuentas, medios, compras, nCompras, abiertas, sinEnviar, cargando, incompleto};
 }
 
 function liquidezHTML() {

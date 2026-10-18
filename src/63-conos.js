@@ -14,10 +14,12 @@ const itemsHelado = () => memo("itHel", () => { const out = []; for (const [docI
 /* cambios de caja vigentes: sin los anulados; y un "empezar a contar" solo vale si es el primero de su sabor (no parte una caja en dos) */
 const eventosHelado = () => memo("evHel", () => {
   const anulados = new Set(itemsHelado().filter(x => x.anula).map(x => x.anula)), vistos = new Set(), out = [];
-  for (const x of itemsHelado()) { if (!x.sabor || x.anula || anulados.has(x.id)) continue; if (x.motivo === "inicio" && vistos.has(x.sabor)) continue; vistos.add(x.sabor); out.push(x); }
+  // solo sabores de verdad y motivos conocidos (igual que el servidor)
+  for (const x of itemsHelado()) { if (!x.sabor || x.anula || anulados.has(x.id) || !esSabor(x.sabor) || !["acabo", "danada", "inicio"].includes(x.motivo)) continue; if (x.motivo === "inicio" && vistos.has(x.sabor)) continue; vistos.add(x.sabor); out.push(x); }
   return out;
 });
-const bolasVendidas = () => memo("bolasV", () => { const m = {}; for (const v of ventasOk()) for (const it of (v.items || [])) if (Array.isArray(it.sab)) for (const s of it.sab) (m[s] = m[s] || []).push({t: v.t, q: it.q}); return m; });
+// bolas vendidas por sabor: las de los conos (it.sab) y las de un combo con sabor (p. ej. "Cono 1 bola Red velvet"), igual que el costo y el consumo
+const bolasVendidas = () => memo("bolasV", () => { const m = {}; for (const v of ventasOk()) for (const it of (v.items || [])) { if (Array.isArray(it.sab)) for (const s of it.sab) (m[s] = m[s] || []).push({t: v.t, q: it.q}); else for (const x of bolasDeLinea(it)) (m[x.pid] = m[x.pid] || []).push({t: v.t, q: x.q}); } return m; });
 
 /* cada caja de un sabor va de un cambio de caja al siguiente; la última sigue abierta */
 function rendimientoCajas() {

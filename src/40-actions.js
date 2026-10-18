@@ -129,11 +129,16 @@ async function sumarStock(pid, q, mov) {
   await movInv([Object.assign({pid, delta: true, q, antes, despues: Math.round((antes + q) * 1000) / 1000}, mov)]);
   return antes;
 }
-// el historial de ventas en el equipo cubre ~95 días: si un inventario no se cuenta en 80 días, se hace un corte automático (sin cambiar la cantidad)
-async function rebaseStockViejo() {
-  if (!esAdmin() || DS.mode !== "db" || !DS.remoteSeen) return; const lim = Date.now() - 80 * 864e5;
-  for (const [pid, s0] of Object.entries(stockDocs())) { const p = prod(pid), st = stockDe(pid); if (!p || p.controla === false || p.combo || st == null || !s0 || (s0.t || 0) > lim || OUT[pathOf("stock", pid)]) continue;
-    await fijarStock(pid, st, {tipo: "rebase", motivo: "Corte automático del inventario"}).catch(() => {}); }
+// Antes, si un inventario no se contaba en 80 días, este equipo lo "fijaba" solo con su propio cálculo: congelaba un número al que le podían
+// faltar ventas de otros equipos sin Internet (y las que llegaban después ya no se restaban). Ya no escribe nada: OLI pide contar
+// (conteosViejos, en las alertas) antes de que el equipo deje de tener todas las ventas desde el último conteo.
+async function rebaseStockViejo() {}
+// productos que no se cuentan hace mucho: con servidor, cada equipo guarda HIST_DIAS días de ventas; pasado ese tiempo su cálculo ya no es confiable
+function conteosViejos() {
+  if (DS.mode !== "db") return [];
+  const out = []; for (const [pid, s0] of Object.entries(stockDocs())) { const p = prod(pid); if (!p || p.activo === false || p.controla === false || p.combo || !s0 || s0.base == null) continue;
+    const dias = Math.floor((Date.now() - (s0.t || 0)) / 864e5); if (dias >= 70) out.push({p, dias}); }
+  return out.sort((a, b) => b.dias - a.dias);
 }
 async function contarStock(pid, cantidad, motivo) {
   exigirAdmin(); const p = prod(pid), antes = await fijarStock(pid, cantidad, {tipo: "conteo", motivo: motivo || "Conteo"});
