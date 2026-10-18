@@ -333,7 +333,7 @@ details.help span{display:block;font-weight:500;font-size:13px;line-height:1.35;
 <div class="sheet hidden" id="sheet"><div class="bg"></div><div class="panel" role="dialog" aria-modal="true" id="panel"></div></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script>window.OLI_BUILD="ea7976e2";</script>
+<script>window.OLI_BUILD="8995f58b";</script>
 <script>
 (function(){
 "use strict";
@@ -1055,6 +1055,7 @@ async function sbLoginInterno(email, pass) {
 }
 async function sbCrearNegocio(nombre) { const r = await SB.client.rpc("oli_bootstrap", {p_org_name: nombre, p_store_name: "OLI 001"}); if (r.error) throw new Error("No se pudo crear el negocio. " + (r.error.message || "")); const s = await SB.client.auth.getSession(); await sbCompletarSesion(s.data.session); }
 async function sbSalir() {
+  await quitarNotisAlSalir();                                                                        // este equipo deja de recibir los avisos del administrador
   const sinServidor = SB.sinVerificar || !conRed(); SB.gen++; SB.sinVerificar = false; SB.salio = true; SB.salioUid = DS.uid;
   const ses = sesionGuardada(); if (ses) marcarCerrada(ses);                                         // una renovación atrasada de esta sesión ya no se guarda ni se usa
   if (!sinServidor) { try { await withTimeout(SB.client.auth.signOut({scope: "local"}), 6000); } catch (e) {} }   // con servidor: también se invalida allá (solo en este equipo)
@@ -2931,6 +2932,101 @@ function revisarLuz() {
 setInterval(() => { try { revisarLuz(); } catch (e) {} }, 15000);
 ACT.luzPrendida = async () => { await guardar(() => marcarLuzAfuera(), "¡Listo! Luz de afuera prendida"); if (sheetFn === ventanaLuz) cerrar(); LUZ.pendiente = luzPendiente(); draw(); };
 
+/* >>> 67-notificaciones.js */
+/* ============ 67 · notificaciones al administrador (Web Push) ============
+   El administrador las activa en cada equipo donde las quiera (Ajustes → Notificaciones). Cuando llega al servidor una venta,
+   una anulación, una apertura o cierre de caja, plata que entra o sale de la caja, o un cambio que el servidor no aceptó, el
+   servidor arma el aviso y lo manda (migración 20261018000000_oli_push.sql + Edge Function oli-push): llega aunque OLI esté
+   cerrada. Lo que pasa en este mismo equipo no se avisa aquí. Los avisos nunca llevan costos ni utilidades.
+   En iPhone/iPad solo funcionan con OLI instalada (Agregar a inicio) y abierta desde el ícono. */
+const NOTI = {perm: "default", sub: null, prefs: null, registrada: false, cargando: false, revisado: false};
+const TIPOS_NOTI = [["venta", "Cada venta"], ["anulacion", "Ventas anuladas"], ["caja", "Abrir y cerrar caja (con faltantes o sobrantes)"], ["dinero", "Plata que entra o sale de la caja"], ["problema", "Cambios que no llegan al servidor"]];
+const pushSoportado = () => !!window.OLI_PWA && "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+const notisPosibles = () => DS.backend === "supabase" && esAdmin();
+const b64uBytes = s => { const b = atob(s.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((s.length + 3) % 4)); const u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; };
+const mismaClave = (sub, pk) => { try { const a = new Uint8Array(sub.options.applicationServerKey), b = b64uBytes(pk); return a.length === b.length && a.every((x, i) => x === b[i]); } catch (e) { return false; } };
+async function revisarNotis() {
+  if (!pushSoportado() || !notisPosibles()) return;
+  NOTI.perm = Notification.permission;
+  try { const reg = await navigator.serviceWorker.getRegistration(); NOTI.sub = reg ? await reg.pushManager.getSubscription() : null; } catch (e) { NOTI.sub = null; }
+  NOTI.registrada = false; NOTI.prefs = null;
+  if (NOTI.sub && SB.client && conRed()) { try { const r = await withTimeout(Promise.resolve(SB.client.rpc("oli_push_prefs", {p_endpoint: NOTI.sub.endpoint})), 9000); if (!r.error && r.data) { NOTI.registrada = true; NOTI.prefs = r.data.prefs || {}; } } catch (e) {} }
+  NOTI.revisado = true; changed();
+}
+const notiActiva = () => !!(NOTI.sub && NOTI.registrada && NOTI.perm === "granted");
+function notisHTML() {
+  if (!notisPosibles()) return "";
+  if (!NOTI.revisado && pushSoportado()) setTimeout(() => revisarNotis(), 0);
+  const ios = /^ios/.test(equipoTipo()), cuerpo = (() => {
+    if (!window.OLI_PWA) return '<p class="muted" style="margin:0">Las notificaciones funcionan en la app instalada desde la página de OLI.</p>';
+    if (ios && !esInstalada()) return `<p style="margin:0 0 10px">En iPhone o iPad primero instala OLI: toca <b>Compartir</b> → <b>Agregar a inicio</b> y ábrela desde el ícono. Ahí aparece el botón para activarlas.</p>${btnInstalar()}`;
+    if (!pushSoportado()) return '<p class="muted" style="margin:0">Este navegador no puede recibir notificaciones. Prueba con Chrome (Android o computador) o con OLI instalada en iPhone.</p>';
+    if (NOTI.perm === "denied") return '<div class="notice bad" style="margin:0">Las notificaciones de OLI están bloqueadas en este equipo. Permítelas en los ajustes del navegador o del teléfono (Notificaciones → OLI) y vuelve aquí.</div>';
+    if (!notiActiva()) return `<p style="margin:0 0 10px">Te avisamos al celular, aunque OLI esté cerrada, cuando en las cajas pase algo: una venta, una anulación, abrir o cerrar caja, plata que sale de la caja.</p>
+      <button class="btn pri" data-act="activarNotis" ${NOTI.cargando ? "disabled" : ""}>${ic("campana", 18)} ${NOTI.cargando ? "Activando…" : "ACTIVAR NOTIFICACIONES"}</button>${NOTI.sub && !NOTI.registrada && conRed() ? '<p class="small muted">Este equipo tenía notificaciones pero el servidor ya no lo tiene en la lista: actívalas otra vez.</p>' : ""}`;
+    return `<div class="notice ok" style="margin:0 0 10px">Activadas en este equipo.</div><p class="small muted" style="margin:0 0 6px">Avisarme de:</p>
+      ${TIPOS_NOTI.map(([k, l]) => `<label class="check"><input type="checkbox" data-act-change="notiPref" data-k="${k}" ${(NOTI.prefs || {})[k] === false ? "" : "checked"}> ${l}</label>`).join("")}
+      <div class="btns" style="margin-top:10px"><button class="btn ghost" data-act="probarNotis">Enviar una de prueba</button><button class="btn ghost" data-act="quitarNotis">Desactivar en este equipo</button></div>
+      <p class="xs muted" style="margin-bottom:0">Lo que hagas en este mismo equipo no te llega aquí. Los avisos no llevan costos ni utilidades.</p>`;
+  })();
+  return `<div class="card"><h3>Notificaciones</h3>${cuerpo}</div>`;
+}
+ACT.activarNotis = async () => {
+  if (!pushSoportado() || !notisPosibles() || NOTI.cargando) return;
+  let perm = Notification.permission;
+  if (perm === "default") { try { perm = await Notification.requestPermission(); } catch (e) { perm = Notification.permission; } }   // primero el permiso (iPhone exige que salga del toque)
+  NOTI.perm = perm;
+  if (perm !== "granted") { draw(); toast(perm === "denied" ? "Quedaron bloqueadas: permítelas en los ajustes del teléfono." : "No se activaron.", true); return; }
+  if (!conRed() || SB.sinVerificar) { toast("Para activarlas hace falta Internet.", true); draw(); return; }
+  NOTI.cargando = true; draw();
+  try {
+    const reg = await withTimeout(navigator.serviceWorker.ready, 10000);
+    const k = await withTimeout(SB.client.functions.invoke("oli-push", {method: "GET"}), 15000);
+    const pk = k && k.data && k.data.publicKey; if (!pk) throw new Error("el servidor de avisos no respondió");
+    let sub = await reg.pushManager.getSubscription();
+    if (sub && !mismaClave(sub, pk)) { await sub.unsubscribe().catch(() => {}); sub = null; }
+    if (!sub) sub = await reg.pushManager.subscribe({userVisibleOnly: true, applicationServerKey: b64uBytes(pk)});
+    const j = sub.toJSON();
+    const r = await withTimeout(Promise.resolve(SB.client.rpc("oli_push_suscribir", {p_endpoint: j.endpoint, p_p256dh: j.keys.p256dh, p_auth: j.keys.auth, p_dev: DEV.id, p_prefs: null})), 15000);
+    if (r.error) throw r.error;
+    NOTI.sub = sub; NOTI.registrada = true; NOTI.prefs = (r.data && r.data.prefs) || {};
+    audit("NOTIS_ACTIVADAS", DEV.id, DEV.nombre || "");
+    toast("Listo: este equipo recibirá los avisos. Toca «Enviar una de prueba» para verlo.");
+  } catch (e) { toast("No se pudieron activar: " + ((e && e.message) || "intenta de nuevo"), true); }
+  NOTI.cargando = false; NOTI.revisado = true; draw();
+};
+ACT.notiPref = async (el, d) => {
+  if (!notiActiva()) return;
+  const prefs = Object.assign({}, NOTI.prefs, {[d.k]: !!el.checked});
+  try { const r = await withTimeout(Promise.resolve(SB.client.rpc("oli_push_prefs", {p_endpoint: NOTI.sub.endpoint, p_prefs: prefs})), 10000); if (r.error) throw r.error; NOTI.prefs = (r.data && r.data.prefs) || prefs; toast("Guardado"); }
+  catch (e) { el.checked = !el.checked; toast("No se pudo guardar: revisa la conexión.", true); }
+};
+document.addEventListener("change", e => { const t = e.target; if (t.dataset && t.dataset.actChange === "notiPref") ACT.notiPref(t, t.dataset); });
+ACT.probarNotis = async () => {
+  if (!notiActiva()) return;
+  try { const r = await withTimeout(Promise.resolve(SB.client.rpc("oli_push_prueba", {p_endpoint: NOTI.sub.endpoint})), 10000); if (r.error) throw r.error;
+    toast(r.data && r.data.url === false ? "El envío de avisos todavía no está configurado en el servidor." : "Enviada: debe llegar en unos segundos.", r.data && r.data.url === false); }
+  catch (e) { toast("No se pudo enviar: revisa la conexión.", true); }
+};
+async function quitarNotis(silencio) {
+  const sub = NOTI.sub; if (!sub) return;
+  try { if (SB.client && conRed()) await withTimeout(Promise.resolve(SB.client.rpc("oli_push_quitar", {p_endpoint: sub.endpoint})), 6000); } catch (e) {}
+  try { await sub.unsubscribe(); } catch (e) {}                                                      // sin la suscripción, el servidor la borra cuando el servicio de avisos diga que ya no existe
+  NOTI.sub = null; NOTI.registrada = false; NOTI.prefs = null;
+  if (!silencio) { audit("NOTIS_DESACTIVADAS", DEV.id, DEV.nombre || ""); toast("Notificaciones desactivadas en este equipo."); draw(); }
+}
+ACT.quitarNotis = () => quitarNotis(false);
+/* al cerrar sesión: este equipo deja de recibir los avisos del administrador (puede quedar en manos de un empleado) */
+async function quitarNotisAlSalir() {
+  if (!pushSoportado()) return;
+  try { const reg = await withTimeout(navigator.serviceWorker.getRegistration(), 3000); const sub = reg && await reg.pushManager.getSubscription(); if (sub) { NOTI.sub = sub; await quitarNotis(true); } } catch (e) {}
+}
+/* tocar un aviso abre OLI en la sección del aviso (el service worker manda la sección) */
+if ("serviceWorker" in navigator) navigator.serviceWorker.addEventListener("message", e => {
+  const d = e.data; if (!d || d.tipo !== "ir" || typeof d.url !== "string") return;
+  const r = d.url.replace("#", ""); if (RUTAS[r] && rutaOk(r)) irA(r);
+});
+
 /* >>> 70-comando.js */
 /* ============ 70 · CENTRO DE COMANDO OLI (inicio del administrador) ============
    Orden del DOM = orden móvil. En escritorio se reparte en dos columnas; lo urgente sube solo. */
@@ -3457,7 +3553,7 @@ VIEWS.equipo = () => {
     ${aud.length ? aud.map(a => { pedirNombres([a.u]); return `<div class="row" style="align-items:flex-start;padding:8px 0"><div class="l"><b>${esc(audTxt(a.a))}</b><div class="small muted">${esc(a.d || "")}</div></div><div style="text-align:right" class="xs muted">${diaCorto(ymd(new Date(a.t)))} ${hora(a.t)}<br>${esc(nombreDe(a.u) || "")}</div></div>`; }).join("") : '<p class="muted">No hay registros.</p>'}</div>
   ${rechazadas().length ? `<div class="card"><h3>Cambios de este equipo que el servidor no aceptó</h3>${rechazadasHTML()}<p class="small muted">No borres los datos del navegador: se perderían.</p></div>` : ""}`;
 };
-const AUD_TXT = {LUZ_AFUERA: "Prendió la luz de afuera", PLATA_CONTADA: "Anotó la plata que tienen", PLATA_CONTADA_QUITADA: "Quitó la plata anotada", APERTURA_CAJA: "Caja abierta", CIERRE_CAJA: "Caja cerrada", REABRIR_CAJA: "Caja reabierta", CAJA_RETIRO: "Salió dinero de caja", CAJA_INGRESO: "Entró dinero a caja", CAJA_GASTO: "Pago desde caja", ANULACION: "Venta anulada", DESCUENTO: "Descuento aplicado", MERMA: "Pérdida anotada", AJUSTE_INVENTARIO: "Inventario ajustado", CAMBIO_PRECIO: "Cambio de precio", CAMBIO_COSTO: "Cambio de costo", PRODUCTO_CREADO: "Producto creado", PRODUCTO_EDITADO: "Producto editado", PRODUCTO_DESACTIVADO: "Producto desactivado", PRODUCTO_REACTIVADO: "Producto reactivado", GASTO: "Gasto registrado", GASTO_BORRADO: "Gasto borrado", COMPRA_PEDIDO: "Compra creada", COMPRA_RECIBIDA: "Compra recibida", PRODUCCION: "Producción registrada", RECETA: "Receta guardada", CONFIG: "Configuración", TERCERO: "Tercero guardado", CONFLICTO_INVENTARIO: "Venta que necesita revisión", SYNC_RECHAZADA: "Envío rechazado", CAMBIO_DESCARTADO: "Cambio rechazado descartado", REINTENTO_ADMIN: "Envió con su cuenta un cambio de otra persona", AVISO_EQUIPO_QUITADO: "Quitó el aviso de un equipo que ya no existe"};
+const AUD_TXT = {LUZ_AFUERA: "Prendió la luz de afuera", PLATA_CONTADA: "Anotó la plata que tienen", PLATA_CONTADA_QUITADA: "Quitó la plata anotada", APERTURA_CAJA: "Caja abierta", CIERRE_CAJA: "Caja cerrada", REABRIR_CAJA: "Caja reabierta", CAJA_RETIRO: "Salió dinero de caja", CAJA_INGRESO: "Entró dinero a caja", CAJA_GASTO: "Pago desde caja", ANULACION: "Venta anulada", DESCUENTO: "Descuento aplicado", MERMA: "Pérdida anotada", AJUSTE_INVENTARIO: "Inventario ajustado", CAMBIO_PRECIO: "Cambio de precio", CAMBIO_COSTO: "Cambio de costo", PRODUCTO_CREADO: "Producto creado", PRODUCTO_EDITADO: "Producto editado", PRODUCTO_DESACTIVADO: "Producto desactivado", PRODUCTO_REACTIVADO: "Producto reactivado", GASTO: "Gasto registrado", GASTO_BORRADO: "Gasto borrado", COMPRA_PEDIDO: "Compra creada", COMPRA_RECIBIDA: "Compra recibida", PRODUCCION: "Producción registrada", RECETA: "Receta guardada", CONFIG: "Configuración", TERCERO: "Tercero guardado", CONFLICTO_INVENTARIO: "Venta que necesita revisión", SYNC_RECHAZADA: "Envío rechazado", NOTIS_ACTIVADAS: "Activó las notificaciones", NOTIS_DESACTIVADAS: "Desactivó las notificaciones", CAMBIO_DESCARTADO: "Cambio rechazado descartado", REINTENTO_ADMIN: "Envió con su cuenta un cambio de otra persona", AVISO_EQUIPO_QUITADO: "Quitó el aviso de un equipo que ya no existe"};
 const audTxt = a => AUD_TXT[a] || a;
 /* un equipo que se borró o se cambió deja para siempre su último aviso de cambios rechazados: el administrador lo puede quitar
    (no borra el equipo, para que las ventas viejas sigan mostrando su nombre; si ese equipo vuelve a conectarse, el aviso vuelve) */
@@ -3473,7 +3569,7 @@ ACT.doRenombrar = async () => { const n = ($("#dv-o").value.trim() || selVal("dv
 /* ---------- ajustes ---------- */
 VIEWS.ajustes = () => {
   const c = configNeg(), n = Object.keys(col("productos")).length, demo = col("meta").app && col("meta").app.modo === "demo";
-  return cabecera("Ajustes") + `
+  return cabecera("Ajustes") + notisHTML() + `
   <div class="card"><h3>Tu negocio</h3><label class="f" for="aj-nom">Nombre</label><input class="in plain" id="aj-nom" value="${esc(c.nombre || "OLI")}">
     <div class="split"><div><label class="f" for="aj-mo">Margen que quieres ganar ${ayuda("OLI te sugiere subir el precio de los productos que dejan menos que esto.")}</label><input class="in plain" id="aj-mo" inputmode="numeric" value="${Math.round(margenObjetivo() * 100)}"></div></div>
     <label class="check" style="margin-top:10px"><input type="checkbox" id="aj-mov" ${(col("meta").permisos || {}).movimientosEmpleado !== false && c.movimientosEmpleado !== false ? "checked" : ""}> Los empleados pueden sacar dinero de caja o pagar cosas pequeñas</label>
@@ -4785,7 +4881,7 @@ function drawAuto() {
 }
 window.draw = drawAuto;
 ACT.buscar = () => abrir(() => `${head("Buscar")}<div class="search">${ic("buscar", 20)}<input class="in plain" id="gq" type="search" placeholder="Producto, venta, gasto, compra o persona" autofocus autocomplete="off"></div><div id="gres" style="margin-top:12px"></div>`, {wide: true});
-ACT.campana = () => abrir(() => { const al = alertas(); return head("Avisos") + (al.length ? al.map(a => `<button class="alertrow" data-act="${a.tab ? "ir" : "cerrar"}" data-r="${a.tab || ""}"><span class="sev ${a.sev === "ok" ? "" : a.sev}"></span><div><b>${esc(a.t)}</b><span>${esc(a.d || "")}</span></div></button>`).join("") : vacio("ok", "Todo en orden", "No hay avisos por ahora.")); }, {live: true});
+ACT.campana = () => abrir(() => { const al = alertas(); return head("Avisos") + (notisPosibles() && window.OLI_PWA && !notiActiva() ? `<button class="alertrow" data-act="ir" data-r="ajustes"><span class="sev"></span><div><b>¿Quieres que OLI te avise al celular?</b><span>Activa las notificaciones de ventas y de la caja en Ajustes → Notificaciones.</span></div></button>` : "") + (al.length ? al.map(a => `<button class="alertrow" data-act="${a.tab ? "ir" : "cerrar"}" data-r="${a.tab || ""}"><span class="sev ${a.sev === "ok" ? "" : a.sev}"></span><div><b>${esc(a.t)}</b><span>${esc(a.d || "")}</span></div></button>`).join("") : vacio("ok", "Todo en orden", "No hay avisos por ahora.")); }, {live: true});
 document.addEventListener("input", e => { if (e.target.id === "gq") { const q = e.target.value.trim().toLowerCase(), out = $("#gres"); if (q.length < 2) { out.innerHTML = ""; return; } out.innerHTML = buscarGlobal(q); } });
 function buscarGlobal(q) {
   const g = (t, items) => items.length ? `<h3 style="font-size:15px">${t}</h3>${items.slice(0, 6).join("")}` : "", r = [];

@@ -199,6 +199,7 @@ async function sbLoginInterno(email, pass) {
 }
 async function sbCrearNegocio(nombre) { const r = await SB.client.rpc("oli_bootstrap", {p_org_name: nombre, p_store_name: "OLI 001"}); if (r.error) throw new Error("No se pudo crear el negocio. " + (r.error.message || "")); const s = await SB.client.auth.getSession(); await sbCompletarSesion(s.data.session); }
 async function sbSalir() {
+  await quitarNotisAlSalir();                                                                        // este equipo deja de recibir los avisos del administrador
   const sinServidor = SB.sinVerificar || !conRed(); SB.gen++; SB.sinVerificar = false; SB.salio = true; SB.salioUid = DS.uid;
   const ses = sesionGuardada(); if (ses) marcarCerrada(ses);                                         // una renovación atrasada de esta sesión ya no se guarda ni se usa
   if (!sinServidor) { try { await withTimeout(SB.client.auth.signOut({scope: "local"}), 6000); } catch (e) {} }   // con servidor: también se invalida allá (solo en este equipo)

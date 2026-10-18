@@ -323,6 +323,80 @@ begin
   r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','bz4','col','productos','id','p-borrable2','t',60000,'del',true)), 'dA', '1.0');
   reset role;
   perform t_assert(r->0->>'status' = 'stale' and exists (select 1 from oli_docs where collection = 'productos' and doc_id = 'p-borrable2'), 'un borrado más viejo que el último cambio no borra (queda "stale")');
+  -- T32: notificaciones al administrador (Web Push)
+  reset role; set role authenticated; perform t_as(e1);
+  begin perform oli_push_suscribir('https://push.example/e1', 'k', 'a', 'd1', null); ok := false; exception when others then ok := true; end;
+  perform t_assert(ok, 'un empleado no puede activar notificaciones');
+  reset role; set role authenticated; perform t_as(a);
+  r := oli_push_suscribir('https://push.example/a1', 'BPkey', 'authk', 'dA', null);
+  perform t_assert(r ? 'prefs', 'el administrador activa las notificaciones en su celular');
+  begin perform oli_push_suscribir('http://inseguro.example/a2', 'k', 'a', 'dA', null); ok := false; exception when others then ok := true; end;
+  perform t_assert(ok, 'una suscripción que no es https se rechaza');
+  begin perform oli_push_tomar(10); ok := false; exception when others then ok := true; end;
+  perform t_assert(ok, 'la app no puede tomar los avisos por mandar (solo el servidor)');
+  begin perform count(*) from oli_push_queue; ok := false; exception when others then ok := true; end;
+  perform t_assert(ok, 'la app no puede leer la cola de avisos');
+  reset role; set role authenticated; perform t_as(e1);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','pd1','col','dispositivos','id','d1','t',96900,'data','{"dev":"d1","nombre":"Caja 1","vis":96900,"rech":0}'::jsonb)), 'd1', '1.0');
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','ps1','col','ventas','id','2026-10-05_d1','t',97000,'data', jsonb_build_object('fecha','2026-10-05','dev','d1','ventas', jsonb_build_array(
+         jsonb_build_object('id','d1-ps-1','n',80,'num','Caja 1 #80','t',97000,'fecha','2026-10-05','uid',e1::text,'dev','d1','m','Nequi','pend',true,'total',16000,'sub',16000,'desc',0,'estado','confirmada','items','[{"pid":"p-mango","n":"Paleta Mango","q":2,"p":8000,"d":0}]'::jsonb))))), 'd1', '1.0');
+  reset role;
+  perform t_assert(r->0->>'status' = 'applied' and (select count(*) from oli_push_queue where kind = 'venta' and title = 'Venta $16.000 · Caja 1' and body = 'Nequi (por confirmar) · 2× Paleta Mango' and dev = 'd1') = 1, 'una venta nueva arma un aviso con el valor, el medio, los productos y la caja');
+  set role authenticated; perform t_as(e1);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','ps2','col','ventas','id','2026-10-05_d1','t',97100,'data', jsonb_build_object('fecha','2026-10-05','dev','d1','ventas', jsonb_build_array(
+         jsonb_build_object('id','d1-ps-1','n',80,'num','Caja 1 #80','t',97000,'fecha','2026-10-05','uid',e1::text,'dev','d1','m','Nequi','pend',true,'total',16000,'sub',16000,'desc',0,'estado','confirmada','items','[{"pid":"p-mango","n":"Paleta Mango","q":2,"p":8000,"d":0}]'::jsonb),
+         jsonb_build_object('id','d1-ps-2','n',81,'num','Caja 1 #81','t',97100,'fecha','2026-10-05','uid',e1::text,'dev','d1','m','Efectivo','total',8000,'sub',8000,'desc',0,'estado','confirmada','items','[{"pid":"p-mango","n":"Paleta Mango","q":1,"p":8000,"d":0}]'::jsonb))))), 'd1', '1.0');
+  reset role;
+  perform t_assert((select count(*) from oli_push_queue where kind = 'venta') = 2 and exists (select 1 from oli_push_queue where title = 'Venta $8.000 · Caja 1' and body = 'Efectivo · Paleta Mango'), 'al reenviar el documento del día solo avisa la venta nueva');
+  set role authenticated; perform t_as(e1);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','ps3','col','ventas','id','2026-10-06_d1','t',98000,'data', jsonb_build_object('fecha','2026-10-06','dev','d1','ventas',
+         (select jsonb_agg(jsonb_build_object('id','d1-ps-b' || g,'n',90 + g,'num','Caja 1 #' || (90 + g),'t',98000 + g,'fecha','2026-10-06','uid',e1::text,'dev','d1','m','Efectivo','total',8000,'sub',8000,'desc',0,'estado','confirmada','items','[{"pid":"p-mango","n":"Paleta Mango","q":1,"p":8000,"d":0}]'::jsonb)) from generate_series(1, 4) g)))), 'd1', '1.0');
+  reset role;
+  perform t_assert((select count(*) from oli_push_queue where kind = 'venta') = 3 and exists (select 1 from oli_push_queue where title = 'Caja 1: llegaron 4 ventas por $32.000'), 'muchas ventas que llegan juntas (estaban sin Internet) salen en un solo aviso');
+  set role authenticated; perform t_as(e1);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','pa1','col','anulaciones','id','2026-10-05_d1','t',97200,'data', jsonb_build_object('fecha','2026-10-05','dev','d1','items', jsonb_build_array(
+         jsonb_build_object('id','an-ps','ventaId','d1-ps-2','t',97100 + 60000,'uid',e1::text,'motivo','Error al marcar','total',8000))))), 'd1', '1.0');
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','pc1','col','cajas','id','2026-10-05_d1','t',97300,'data', jsonb_build_object('fecha','2026-10-05','dev','d1','devNombre','Caja 1',
+         'apertura', jsonb_build_object('id','ap-ps','t',96000,'monto',50000,'uid',e1::text),
+         'movs', jsonb_build_array(jsonb_build_object('id','mv-ps','t',97250,'tipo','retiro','monto',20000,'motivo','Hielo','uid',e1::text)),
+         'cierres', jsonb_build_array(jsonb_build_object('id','ci-ps','t',97300,'esperado',54000,'contado',49000,'dif',-5000,'obs','No sé','uid',e1::text))))), 'd1', '1.0');
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','pd2','col','dispositivos','id','d1','t',97400,'data','{"dev":"d1","nombre":"Caja 1","vis":97400,"rech":1,"rechInfo":[{"c":"Anulación de una venta","e":"el empleado solo anula su propia venta en los 10 minutos siguientes"}]}'::jsonb)), 'd1', '1.0');
+  reset role;
+  perform t_assert(exists (select 1 from oli_push_queue where kind = 'anulacion' and title = 'Venta anulada · Caja 1' and body = 'Caja 1 #81 por $8.000 · Error al marcar'), 'una anulación avisa qué venta, cuánto y por qué');
+  perform t_assert(exists (select 1 from oli_push_queue where kind = 'caja' and title = 'Caja 1 abrió caja' and body = 'Base $50.000')
+               and exists (select 1 from oli_push_queue where kind = 'dinero' and title = 'Salió $20.000 de Caja 1' and body = 'Hielo')
+               and exists (select 1 from oli_push_queue where kind = 'caja' and title = 'Caja 1 cerró caja: faltaron $5.000' and body = 'Esperado $54.000 · contado $49.000 · No sé'), 'abrir caja, sacar dinero y cerrar con faltante avisan');
+  perform t_assert(exists (select 1 from oli_push_queue where kind = 'problema' and title = 'Caja 1: un cambio no llegó al servidor'), 'un cambio que el servidor no aceptó avisa al administrador');
+  set role service_role;
+  r := oli_push_tomar(100);
+  reset role;
+  perform t_assert(jsonb_array_length(r) = 8 and (select bool_and(jsonb_array_length(ev->'subs') = 1 and ev->'subs'->0->>'endpoint' = 'https://push.example/a1') from jsonb_array_elements(r) ev), 'el servidor toma los avisos y sabe a qué celular mandarlos');
+  set role authenticated; perform t_as(a);
+  r := oli_push_prefs('https://push.example/a1', '{"venta":false}'::jsonb);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','pc2','col','cajas','id','2026-10-07_dA','t',99000,'data','{"fecha":"2026-10-07","dev":"dA","apertura":{"id":"ap-a","t":99000,"monto":10000}}'::jsonb)), 'dA', '1.0');
+  reset role; set role authenticated; perform t_as(e1);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','ps4','col','ventas','id','2026-10-07_d1','t',99100,'data', jsonb_build_object('fecha','2026-10-07','dev','d1','ventas', jsonb_build_array(
+         jsonb_build_object('id','d1-ps-9','n',99,'num','Caja 1 #99','t',99100,'fecha','2026-10-07','uid',e1::text,'dev','d1','m','Efectivo','total',8000,'sub',8000,'desc',0,'estado','confirmada','items','[{"pid":"p-mango","n":"Paleta Mango","q":1,"p":8000,"d":0}]'::jsonb))))), 'd1', '1.0');
+  reset role; set role service_role;
+  r := oli_push_tomar(100);
+  reset role;
+  perform t_assert(jsonb_array_length(r) = 2 and (select bool_and(jsonb_array_length(ev->'subs') = 0) from jsonb_array_elements(r) ev), 'no le avisa lo que apagó (ventas) ni lo que hizo en su propio equipo');
+  set role authenticated; perform t_as(a);
+  r := oli_push_prueba('https://push.example/a1');
+  reset role; set role service_role;
+  r := oli_push_tomar(100);
+  perform oli_push_resultado(array[(r->0->>'id')::bigint], array['https://push.example/a1'], array[]::text[]);
+  reset role;
+  perform t_assert(jsonb_array_length(r) = 1 and r->0->>'kind' = 'prueba' and r->0->'subs'->0->>'endpoint' = 'https://push.example/a1' and (select sent_at is not null from oli_push_queue where id = (r->0->>'id')::bigint), 'la notificación de prueba va solo a ese celular y queda enviada');
+  set role service_role;
+  perform oli_push_resultado(array[]::bigint[], array[]::text[], array['https://push.example/a1']);
+  reset role;
+  perform t_assert(not exists (select 1 from oli_push_subs where endpoint = 'https://push.example/a1'), 'un celular que ya no recibe (el navegador la quitó) se borra de la lista');
+  set role authenticated; perform t_as(e1);
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','ps5','col','ventas','id','2026-10-07_d1','t',99200,'data', jsonb_build_object('fecha','2026-10-07','dev','d1','ventas', jsonb_build_array(
+         jsonb_build_object('id','d1-ps-10','n',100,'num','Caja 1 #100','t',99200,'fecha','2026-10-07','uid',e1::text,'dev','d1','m','Efectivo','total',8000,'sub',8000,'desc',0,'estado','confirmada','items','[{"pid":"p-mango","n":"Paleta Mango","q":1,"p":8000,"d":0}]'::jsonb))))), 'd1', '1.0');
+  reset role;
+  perform t_assert(r->0->>'status' = 'applied' and not exists (select 1 from oli_push_queue where tag = 'venta-d1-ps-10'), 'sin nadie con avisos activados, la venta se guarda y no se arma ningún aviso');
   -- T16: coherencia de totales
   reset role;
   perform t_assert((select sum(total) from sales) = (select sum(amount) from payments), 'total de ventas = total de pagos');

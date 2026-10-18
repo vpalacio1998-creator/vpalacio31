@@ -15,3 +15,6 @@ minimum_password_length = 8
 
 [functions.invite-user]
 verify_jwt = true
+
+[functions.oli-push]
+verify_jwt = false              # la llama la base de datos (pg_net) y el navegador para la clave pública; no recibe datos de quien llama
