@@ -333,7 +333,7 @@ details.help span{display:block;font-weight:500;font-size:13px;line-height:1.35;
 <div class="sheet hidden" id="sheet"><div class="bg"></div><div class="panel" role="dialog" aria-modal="true" id="panel"></div></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script>window.OLI_BUILD="a2af2320";</script>
+<script>window.OLI_BUILD="3c4aac90";</script>
 <script>
 (function(){
 "use strict";
@@ -3552,11 +3552,12 @@ async function pedirNombres(ids) {
 // Una persona que no aparece se vuelve a buscar como mucho una vez por minuto (p. ej. una cuenta recién creada).
 const NOMBRES_SB = {org: null, t: 0, cargando: false, lista: null};
 async function nombresServidor() {
-  if (!DS.isAdmin || !SB.client || !SB.org || DS.needsLogin || NOMBRES_SB.cargando || (NOMBRES_SB.org === SB.org && Date.now() - NOMBRES_SB.t < 60000)) return;
-  const org = SB.org; NOMBRES_SB.cargando = true;
+  // solo con una sesión de administrador ya verificada (no mientras se cierra o se abre otra: saldría sin sesión)
+  if (!DS.isAdmin || !DS.uid || !SB.client || !SB.org || DS.needsLogin || SB.sinVerificar || SB.salio || SB.ingresando || NOMBRES_SB.cargando || (NOMBRES_SB.org === SB.org && Date.now() - NOMBRES_SB.t < 60000)) return;
+  const org = SB.org, gen = SB.gen; NOMBRES_SB.cargando = true;
   try {
     const r = await withTimeout(Promise.resolve(SB.client.from("memberships").select("user_id,display_name,role,active").eq("org_id", org)), 9000);
-    if (r && !r.error && Array.isArray(r.data) && org === SB.org && DS.isAdmin) {
+    if (r && !r.error && Array.isArray(r.data) && org === SB.org && gen === SB.gen && DS.isAdmin) {
       let ch = false; for (const m of r.data) { const n = String(m.display_name || "").trim(); if (m.user_id && n && NAMES[m.user_id] !== n) { NAMES[m.user_id] = n; ch = true; } }
       NOMBRES_SB.org = org; NOMBRES_SB.t = Date.now(); NOMBRES_SB.lista = r.data.filter(m => m && m.user_id); changed();
     }
