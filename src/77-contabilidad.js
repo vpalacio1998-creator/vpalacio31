@@ -21,8 +21,8 @@ const OBLIG = [
   {k: "soporte", n: "Documento soporte (compras a no obligados)", g: "Cuando compras a quien no está obligado a facturar. OLI guarda los datos; el documento lo genera quien defina tu contador.", falta: t => [!t.dsResponsable && "Quién genera el documento soporte"].filter(Boolean)},
   {k: "iva", n: "IVA", g: "Si eres responsable de IVA y qué tarifa tiene cada producto lo define tu contador. OLI no asume tarifas por el nombre del producto.", falta: () => { const n = prodsSinTrat().length; return n ? [n + " productos sin tratamiento tributario"] : []; }},
   {k: "inc", n: "Impuesto nacional al consumo", g: "Aplica solo a ciertas actividades. Valídalo con tu contador.", falta: () => { const n = prodsSinTrat().length; return n ? [n + " productos sin tratamiento tributario"] : []; }},
-  {k: "ret", n: "Retenciones en la fuente", g: "Depende de tu calidad de agente retenedor. Las retenciones se registran en cada gasto.", falta: () => []},
-  {k: "autoret", n: "Autorretenciones", g: "Solo para algunos contribuyentes. Valídalo con tu contador.", falta: () => []},
+  {k: "ret", n: "Retenciones en la fuente", g: "Depende de tu calidad de agente retenedor. Las retenciones se registran en cada gasto; OLI no calcula tarifas ni bases.", falta: () => [], soloContador: true},
+  {k: "autoret", n: "Autorretenciones", g: "Solo para algunos contribuyentes. OLI no las calcula: valídalo con tu contador.", falta: () => [], soloContador: true},
   {k: "ica", n: "Obligaciones municipales (ICA y otras)", g: "Dependen del municipio donde operas.", falta: t => [!t.municipio && "Municipio"].filter(Boolean)},
   {k: "exogena", n: "Información exógena", g: "Formatos y montos cambian por año gravable: se parametrizan en la pestaña Exógena.", falta: t => [!(configNeg().exogena || []).some(x => +x.anio === +(t.anio || S.today.slice(0, 4))) && "Formatos del año gravable"].filter(Boolean)},
   {k: "nomina", n: "Nómina electrónica", g: "Depende de si tienes trabajadores y usas la nómina como soporte de costos. OLI registra los pagos como gastos (categoría Nómina).", falta: t => [!t.proveedorNomina && "Proveedor de nómina electrónica"].filter(Boolean)}
@@ -30,10 +30,11 @@ const OBLIG = [
 function estadoOblig(o) {
   const c = (trib().oblig || {})[o.k] || {};
   if (c.aplica === "NO APLICA") return "NO APLICA"; if (!c.aplica || c.aplica === "POR VALIDAR") return "REQUIERE CONTADOR";
-  return o.falta(trib()).length ? "PENDIENTE" : c.validado ? "VALIDADO" : "CONFIGURADO";
+  if (o.falta(trib()).length) return "PENDIENTE";
+  return c.validado ? "VALIDADO" : o.soloContador ? "REQUIERE CONTADOR" : "CONFIGURADO";   // lo que OLI no parametriza solo queda bien cuando el contador lo valida
 }
 const tagEstado = e => `<span class="estado-tag ${({"NO APLICA": "NOAPLICA", "REQUIERE CONTADOR": "REQUIERE"})[e] || e}">${esc(e)}</span>`;
-const icoEstado = e => e === "VALIDADO" || e === "CONFIGURADO" ? `<span style="color:var(--ok)">${ic("ok", 20)}</span>` : e === "NO APLICA" ? `<span style="color:var(--muted)">${ic("x", 20)}</span>` : `<span style="color:var(--warn)">${ic("alerta", 20)}</span>`;
+const icoEstado = e => e === "VALIDADO" ? `<span style="color:var(--ok)">${ic("ok", 20)}</span>` : e === "NO APLICA" ? `<span style="color:var(--muted)">${ic("x", 20)}</span>` : `<span style="color:var(--warn)">${ic("alerta", 20)}</span>`;
 const TABS_CON = [["resumen", "Resumen"], ["cumplimiento", "Cumplimiento"], ["facturacion", "Facturación"], ["soporte", "Doc. soporte"], ["exogena", "Exógena"], ["conciliacion", "Conciliación"], ["auditoria", "Auditoría"], ["cierre", "Cierre de mes"]];
 
 /* ---------- resumen ---------- */
@@ -97,14 +98,14 @@ ACT.doOblig = async (el, x) => { const ob = Object.assign({}, trib().oblig || {}
 function conFacturacion() {
   const t = trib(), [a, b] = rangoInf(), pidieron = ventasOk().filter(v => v.fecha >= a && v.fecha <= b && v.cliente), docs = Object.values(col("docelec")), docDe = id => docs.find(x => x.ventaId === id);
   return `<div class="card" style="border-color:${FE.conectado() ? "var(--marca)" : "var(--warn)"}"><h3>Proveedor tecnológico</h3><div class="row"><span>Estado</span>${tagEstado(FE.conectado() ? "CONFIGURADO" : "PENDIENTE")}</div><div class="row"><span>Proveedor</span><b>${esc(t.proveedorFE || "Sin definir")}</b></div><div class="row"><span>Integración</span><b>${esc(FE.estado())}</b></div>
-      <p class="small" style="margin:10px 0 0">OLI tiene lista la capa para conectarse a un proveedor tecnológico autorizado (factura electrónica, notas crédito y débito, documento equivalente POS, respuesta de validación, CUFE, QR, prefijos y resoluciones). <b>Mientras no haya un proveedor conectado, OLI no emite documentos electrónicos ni crea facturas ficticias.</b></p>
+      <p class="small" style="margin:10px 0 0"><b>OLI no se conecta con proveedores de facturación electrónica y no emite documentos electrónicos</b> (tampoco crea facturas ficticias). La factura, la nota o el documento equivalente se emiten en el portal de tu proveedor; aquí puedes registrar su número o CUFE para que quede la trazabilidad.</p>
       <button class="btn ghost sm" style="margin-top:10px" data-act="editFE">Datos de facturación y numeración</button></div>
-    <div class="card"><h3>Documentos contemplados</h3>${tablaVista([{h: "Documento", f: r => r}, {h: "Estado", f: () => FE.conectado() ? "Listo para emitir" : '<span class="pill warn">Requiere proveedor conectado</span>'}], ["Factura electrónica de venta", "Nota crédito", "Nota débito", "Documento equivalente electrónico POS"])}
+    <div class="card"><h3>Documentos contemplados</h3>${tablaVista([{h: "Documento", f: r => r}, {h: "Estado", f: () => '<span class="pill warn">Se emite en el portal del proveedor</span>'}], ["Factura electrónica de venta", "Nota crédito", "Nota débito", "Documento equivalente electrónico POS"])}
       <div class="row"><span>Numeración</span><b>${t.prefijo || t.resolucion ? esc((t.prefijo || "") + " · Res. " + (t.resolucion || "—") + " · " + (t.rangoDesde || "?") + " a " + (t.rangoHasta || "?") + (t.resVence ? " · vence " + fCorta(t.resVence) : "")) : "Sin configurar"}</b></div></div>
     <div class="card"><h3>Ventas en las que el cliente pidió factura</h3><p class="small muted" style="margin-top:-4px">${periodoDoc(a, b)}. Si la factura se emitió en el portal de tu proveedor, registra aquí el número o CUFE para que quede la trazabilidad.</p>
       ${pidieron.length ? tablaVista([{h: "Venta", f: v => esc(v.num)}, {h: "Fecha", f: v => fCorta(v.fecha)}, {h: "Cliente", f: v => { const cl = clienteDe(v); return esc((cl && (cl.nombre || cl.doc)) || ""); }}, {h: "Total", n: 1, f: v => fmt(v.total)}, {h: "Documento", f: v => { const dd = docDe(v.id); return dd ? `<span class="pill ok">${esc(dd.numero || dd.cufe || "Registrado")}</span>` : `<button class="btn ghost sm" style="min-height:30px" data-act="regDoc" data-id="${esc(v.id)}">Registrar emisión</button>`; }}], pidieron) : '<p class="muted" style="margin:0">Ningún cliente pidió factura en este periodo.</p>'}</div>`;
 }
-ACT.editFE = () => { const t = trib(); abrir(() => head("Facturación y numeración") + `<p class="small muted" style="margin-top:0">Datos de tu proveedor y de la resolución de numeración. Las credenciales del proveedor nunca se guardan en este equipo: la conexión se hace desde el servidor.</p>
+ACT.editFE = () => { const t = trib(); abrir(() => head("Facturación y numeración") + `<p class="small muted" style="margin-top:0">Datos de tu proveedor y de la resolución de numeración, para tenerlos a mano. OLI no se conecta con el proveedor: no escribas aquí usuarios ni contraseñas.</p>
   <label class="f" for="fe-p">Proveedor tecnológico</label><input class="in plain" id="fe-p" value="${esc(t.proveedorFE || "")}" placeholder="Nombre del proveedor">
   <label class="f">Ambiente</label>${sel("fe-amb", ["Pruebas", "Producción"], t.feAmbiente || "Pruebas")}
   <div class="split"><div><label class="f" for="fe-pre">Prefijo</label><input class="in plain" id="fe-pre" value="${esc(t.prefijo || "")}"></div><div><label class="f" for="fe-res">N.º resolución</label><input class="in plain" id="fe-res" value="${esc(t.resolucion || "")}"></div></div>

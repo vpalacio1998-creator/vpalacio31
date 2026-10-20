@@ -24,8 +24,11 @@ function agregarAlCarrito(p) {
   const e = estadoProd(p); if (e.k === "agotado") { toast(p.nombre + " está agotado.", true); return false; }
   const prueba = S.cart.map(c => Object.assign({}, c)), ex0 = prueba.find(c => c.pid === p.id); if (ex0) ex0.q++; else prueba.push({pid: p.id, q: 1});
   const f = faltante(prueba); if (f) { toast("Solo hay " + f.st + " de " + f.p.nombre + ".", true); return false; }
-  const ex = S.cart.find(c => c.pid === p.id); if (ex) ex.q++; else S.cart.push({pid: p.id, n: p.nombre, q: 1, p: p.precio}); return true;
+  const ex = S.cart.find(c => c.pid === p.id); if (ex) { ex.q++; if (!ex.k) ex.p = p.precio; } else S.cart.push({pid: p.id, n: p.nombre, q: 1, p: p.precio}); return true;
 }
+// el pedido cobra el precio de ahora (no el de cuando se agregó, ni el de un pedido guardado de otro día). Los conos con sabores
+// guardan su propio precio armado: solo se actualizan si el producto no es cono. Devuelve los nombres que cambiaron.
+function preciosAlDia() { const out = []; for (const c of S.cart) { const p = prod(c.pid); if (p && !p.cono && !c.k && Number(p.precio) !== Number(c.p)) { c.p = Number(p.precio) || 0; out.push(c.n); } } if (out.length) saveCart(); return out; }
 const claveLinea = c => c.k || c.pid;            // un cono con sabores y presentación es una línea propia (clave k); lo demás se agrupa por producto
 function cambiarCantidad(key, d) {
   const c = S.cart.find(x => claveLinea(x) === key); if (!c) return; const p = prod(c.pid);
@@ -47,12 +50,14 @@ async function registrarVenta(opts) {
   if (!caja || !caja.apertura) { const e = new Error("Primero abre la caja."); e.abrirCaja = true; throw e; }
   if (cajaEstado(caja) === "cerrada") throw new Error("La caja de hoy está cerrada. El administrador puede reabrirla.");
   for (const c of S.cart) { const p = prod(c.pid); if (!p || p.activo === false) throw new Error(c.n + " ya no está disponible."); }
+  const cambiados = preciosAlDia(); if (cambiados.length) throw new Error("Cambió el precio de " + cambiados.join(", ") + ". Revisa el pedido: ya tiene el precio nuevo.");
   const falta = faltante(S.cart); if (falta) throw new Error("No alcanza el inventario de " + falta.p.nombre + " (hay " + falta.st + ").");
   const sub = totalCarrito(), desc = clamp(Math.round(opts.desc || 0), 0, sub), total = sub - desc, seq = await nextSeq();
   let resto = desc;   // el descuento se reparte por línea y la suma cuadra exacto con el total
   const items = S.cart.map((c, k) => { const p = prod(c.pid), bruto = c.p * c.q, d = k === S.cart.length - 1 ? resto : Math.round(sub ? desc * bruto / sub : 0); resto -= d; const i = impLinea(p, bruto - d); return Object.assign({pid: c.pid, n: c.n, q: c.q, p: c.p, d, imp: {t: i.t, r: i.r, base: i.base, v: i.imp}}, c.sab ? {sab: c.sab.slice(), pres: c.pres, det: c.det, gasta: consumoLinea(c), bc: bolasCaja()} : {}); });
   const t = Date.now(), fecha = ymd(new Date(t));
   const venta = {id: DEV.id + "-" + t.toString(36) + "-" + seq, n: seq, num: (DEV.nombre || DEV.id) + " #" + seq, t, fecha, uid: uidActual(), dev: DEV.id, m: opts.m, total, sub, desc, recibido: opts.m === "Efectivo" ? (opts.recibido || total) : total, cambio: opts.m === "Efectivo" ? Math.max(0, (opts.recibido || total) - total) : 0, ref: opts.ref || "", cliente: opts.cliente ? true : null, estado: "confirmada"};
+  if (opts.confirmada && esDigital(opts.m)) venta.confirmada = true;   // la caja vio el aviso de que llegó el pago
   venta.items = items;
   await appendTo("ventas", cajaId(fecha), "ventas", venta, {fecha, dev: DEV.id, uid: uidActual(), devNombre: DEV.nombre});
   // los datos personales del cliente que pide factura no van en la venta (la leen todos los equipos): van aparte, solo para el administrador
@@ -65,6 +70,7 @@ async function registrarVenta(opts) {
 const msgDevolucionCerrada = v => v.m === "Efectivo" ? "Si devolviste el dinero, regístralo en Caja: “Sacar dinero” → “Devolución a cliente”."
   : "Se pagó con " + v.m + ": si devolviste el dinero por ese medio, no lo saques de la caja; el administrador lo anota en Dinero → Registrar gasto (categoría Otros), con el medio por el que se devolvió" + (v.m === "QR Bancolombia" ? " (por QR: Transferencia)." : ".");
 async function anularVenta(v, motivo) {
+  if (anuladasSet().has(v.id)) throw new Error("Esa venta ya está anulada.");
   const caja = cajaDe(v.fecha, v.dev);
   if (caja && cajaEstado(caja) === "cerrada") throw new Error("Esta venta es de una caja ya cerrada. " + msgDevolucionCerrada(v));
   const propio = v.uid === uidActual() && v.dev === DEV.id && Date.now() - v.t < 10 * 60000 && caja && cajaEstado(caja) === "abierta";
@@ -100,6 +106,8 @@ async function cerrarCaja(contado, obs, caja) {
   const ci = {id: newId(), t: Date.now(), uid: uidActual(), esperado: k.esperado, contado, dif, obs: (obs || "").trim(), resumen: {ventas: k.ventas, n: k.n, por: k.por, apertura: k.apertura, ingresos: k.ingresos, retiros: k.retiros, gastos: k.gastos},
     ajustes: ajustesCajaAll().filter(x => x.caja === c.id && conVentas(x)).map(x => x.id)};
   await put("cajas", c.id, Object.assign({}, col("cajas")[c.id], {cierres: (c.cierres || []).concat([ci])}));
+  // «Caja cerrada» y «Efectivo contado» de la lista «Al cerrar» los hace este mismo paso
+  try { const chk = col("checklists")[c.id] || {fecha: c.fecha, dev: c.dev, apertura: {}, cierre: {}}, g = Object.assign({}, chk.cierre); g.caja = g.caja || ci.t; g.efectivo = g.efectivo || ci.t; await put("checklists", c.id, Object.assign({}, chk, {cierre: g})); } catch (e) {}
   audit("CIERRE_CAJA", c.id, "Esperado " + fmt(k.esperado) + " · contado " + fmt(contado) + " · dif " + fmt(dif));
   return ci;
 }

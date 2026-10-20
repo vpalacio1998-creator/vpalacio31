@@ -24,8 +24,13 @@ async function cargarCatalogoOLI() {
 async function empezarVacio() { exigirAdmin(); await guardarConfig({nombre: "OLI", margenObjetivo: .6, gastosFijos: [], movimientosEmpleado: true, preciosIncluyenImpuesto: true}); await put("meta", "app", {modo: "real", creado: Date.now(), version: 2}); }
 
 /* ---------- datos de demostración: un mes completo, reproducible ---------- */
+// un negocio con información real no carga la demostración: se mezclaría con sus ventas y le cambiaría la configuración
+const conDatosReales = () => { const app = col("meta").app; return !!(app && app.modo === "real") || ventasAll().some(v => !esDemoId(v.docId) && !esDemoId(v.id)); };
 async function cargarDemo() {
-  exigirAdmin(); const R = rng(20261004), now = Date.now(), hoy = S.today, nDias = 34, mid = hoy0();
+  exigirAdmin(); if (conDatosReales()) throw new Error("Este negocio ya tiene información real: la demostración no se carga aquí porque se mezclaría con tus ventas y cambiaría tu configuración.");
+  // lo que había antes (nombre, gastos fijos, configuración tributaria…) se guarda para devolverlo al borrar la demostración
+  if (!col("config").antesDemo && !(col("meta").app && col("meta").app.modo === "demo")) await put("config", "antesDemo", {negocio: col("config").negocio || null, app: col("meta").app || null, t: Date.now()});
+  const R = rng(20261004), now = Date.now(), hoy = S.today, nDias = 34, mid = hoy0();
   const PR = [  // id, nombre, cat, precio, costo, min, seg, stockDespuesDeHoy, peso
     ["mango", "Paleta Mango", "Paletas", 8000, 3360, 8, 6, 9, 0.22], ["fresa", "Paleta Fresa", "Paletas", 8000, 4200, 8, 6, 14, 0.17], ["maracuya", "Paleta Maracuyá", "Paletas", 8000, 2500, 8, 6, 7, 0.14],
     ["chocolate", "Paleta Chocolate", "Paletas", 9000, 4000, 6, 5, 28, 0.11], ["mora", "Paleta Mora", "Paletas", 8000, 3200, 6, 5, 25, 0.08], ["coco", "Paleta Coco", "Paletas", 8500, 3500, 4, 3, 42, 0.012], ["limon", "Paleta Limón", "Paletas", 7500, 2800, 6, 4, 18, 0.07],
@@ -90,5 +95,11 @@ async function borrarDemo() {
   exigirAdmin(); const cols = SHARED_COLS.concat(ADMIN_COLS).filter(c => c !== "meta");
   for (const c of cols) for (const id of Object.keys(DS.c[c] || {})) if (esDemoId(id)) await remove(c, id);
   for (const id of Object.keys(DS.c.stock || {})) if (esDemoId(id)) await remove("stock", id);
-  const m = col("meta").app; if (m && m.modo === "demo") { await remove("meta", "app"); await remove("config", "negocio").catch(() => {}); const sv = col("config").saldos; if (sv && (sv.guardado || 0) >= (m.creado || 0)) await remove("config", "saldos").catch(() => {}); }   // la plata anotada durante la demo no es real (la de antes, sí)
+  const m = col("meta").app; if (m && m.modo === "demo") {
+    // se devuelve la configuración de antes de la demostración (si no había ninguna, el negocio vuelve a empezar)
+    const antes = col("config").antesDemo;
+    if (antes && antes.app) await put("meta", "app", antes.app); else await remove("meta", "app");
+    if (antes && antes.negocio) await put("config", "negocio", antes.negocio); else await remove("config", "negocio").catch(() => {});
+    if (antes) await remove("config", "antesDemo").catch(() => {});
+    const sv = col("config").saldos; if (sv && (sv.guardado || 0) >= (m.creado || 0)) await remove("config", "saldos").catch(() => {}); }   // la plata anotada durante la demo no es real (la de antes, sí)
 }

@@ -104,7 +104,10 @@ function drawAuto() {
   const ae = document.activeElement, v = $("#view"), tk = $("#ticket");
   const escribiendo = ae && ae !== document.body && /INPUT|TEXTAREA|SELECT/.test(ae.tagName) && (v.contains(ae) || tk.contains(ae)) && ae.id !== "qsearch";
   if (escribiendo) { drawHeader(); banners(); return; }
+  // escribiendo en «Buscar producto»: se redibuja, pero se le devuelve el foco y el cursor (antes se cortaba lo que se escribía)
+  const q = ae && ae.id === "qsearch" ? {a: ae.selectionStart, b: ae.selectionEnd} : null;
   const sc = window.scrollY; draw(); if (!sheetFn) window.scrollTo(0, sc); if (sheetLive) redrawSheet();
+  if (q) { const el = $("#qsearch"); if (el) { el.focus({preventScroll: true}); try { el.setSelectionRange(q.a, q.b); } catch (e) {} } }
 }
 window.draw = drawAuto;
 ACT.buscar = () => abrir(() => `${head("Buscar")}<div class="search">${ic("buscar", 20)}<input class="in plain" id="gq" type="search" placeholder="Producto, venta, gasto, compra o persona" autofocus autocomplete="off"></div><div id="gres" style="margin-top:12px"></div>`, {wide: true});
@@ -143,7 +146,7 @@ ACT.anular = (el, d) => { const v = ventasAll().find(x => x.id === d.id); if (!v
     <button class="btn danger xl wide" style="margin-top:14px" data-act="doAnular" data-id="${esc(v.id)}">SÍ, ANULAR</button>`); };
 ACT.doAnular = async (el, d) => { const v = ventasAll().find(x => x.id === d.id); if (!v) return; const mot = selVal("an-mot"), nota = ($("#an-nota") || {value: ""}).value.trim();
   if (!mot) { toast("Elige el motivo.", true); return; }
-  await guardar(async () => { await anularVenta(v, mot + (nota ? " · " + nota : "")); cerrar(); }, "Venta anulada · queda en el historial"); };
+  await unaVez("act:anular", () => guardar(async () => { await anularVenta(v, mot + (nota ? " · " + nota : "")); cerrar(); }, "Venta anulada · queda en el historial")); };   // doble toque: una sola anulación
 /* ventas de hoy en Caja: la empleada ve las de su equipo; el administrador, todas */
 function ventasHoyHTML() {
   const vs = ventasAll().filter(v => v.fecha === S.today && (esAdmin() || v.dev === DEV.id)).sort((a, b) => b.t - a.t);

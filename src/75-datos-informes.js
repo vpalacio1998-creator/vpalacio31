@@ -10,7 +10,7 @@ function filasVentas(a, b, F) {
   for (const v of ventasAll()) if (v.fecha >= a && v.fecha <= b && pasaF(v, null, F)) for (const it of (v.items || [])) {
     if (!pasaF(v, it, F)) continue; const neto = lineaNeta(it), iv = (it.imp && it.imp.v) || 0, p = prod(it.pid);
     out.push({id: v.id, num: v.num || "", fecha: v.fecha, hora: hora(v.t), t: v.t, caja: devNombre(v.dev), empleado: empNombre(v.uid), producto: it.n, detalle: it.det || "", pid: it.pid, categoria: (p && p.cat) || "", cantidad: it.q, precio: it.p, descuento: it.d || 0,
-      subtotal: neto - iv, impuesto: iv, impTipo: (it.imp && it.imp.t) || "validar", impTarifa: (it.imp && it.imp.r) || 0, total: neto, metodo: v.m, costoU: costoItem(it, v.t), cliente: v.cliente ? "Pidió factura" : "", estado: v.anulada ? "Anulada" : "Confirmada", sync: ventaSyncTxt(ventaSync(v))});
+      subtotal: neto - iv, impuesto: iv, impTipo: (it.imp && it.imp.t) || "validar", impTarifa: (it.imp && it.imp.r) || 0, total: neto, metodo: v.m, costoU: costoItem(it, v.t), costoParcial: costoParcial(it), cliente: v.cliente ? "Pidió factura" : "", estado: v.anulada ? "Anulada" : "Confirmada", sync: ventaSyncTxt(ventaSync(v))});
   }
   return out.sort((x, y) => x.t - y.t);
 }
@@ -28,7 +28,8 @@ function filasInventario(a, b) {
     const ent = sum(en.filter(m => ENTRA[m.tipo]), m => m.q), ven = -sum(en.filter(m => m.tipo === "venta"), m => m.q), mer = -sum(en.filter(m => m.tipo === "perdida"), m => m.q), con = -sum(en.filter(m => m.tipo === "consumo"), m => m.q), ajs = sum(en.filter(m => m.tipo === "conteo"), m => m.q);
     const abr = -sum(en.filter(m => m.tipo === "aperturaCaja"), m => m.q);                        // cajas de helado abiertas: salen del inventario de cajas cerradas
     const ini = fin == null ? null : Math.round((fin - ent + ven + mer + con + abr - ajs) * 1000) / 1000, e = estadoProd(p), c = costoActual(p.id), cov = cobertura(p.id), ag = agotaEn(p.id);
-    const estado = e.k === "agotado" ? "AGOTADO" : e.k === "bajo" ? "BAJO" : ag && ag.dias <= 3 ? "RIESGO" : e.k === "sin" ? "SIN CONTAR" : "NORMAL";
+    // un periodo que ya terminó se juzga con lo que quedó al final de ese periodo (no con el inventario de hoy)
+    const pasado = b < S.today, estado = pasado ? (fin == null ? "SIN CONTAR" : fin <= 0 ? "AGOTADO" : fin <= (p.min || 0) ? "BAJO" : "NORMAL") : e.k === "agotado" ? "AGOTADO" : e.k === "bajo" ? "BAJO" : ag && ag.dias <= 3 ? "RIESGO" : e.k === "sin" ? "SIN CONTAR" : "NORMAL";
     out.push({producto: p.nombre, sku: p.id, categoria: p.cat || "", tipo: p.tipo === "insumo" ? "Insumo" : "Producto terminado", unidad: p.unidad || "und", inicial: ini, entradas: ent, salidas: ven + mer + con + abr, ventas: ven, mermas: mer, consumo: con, abiertas: abr, ajustes: ajs, final: fin, costo: c, minimo: p.min || 0, seguridad: p.seg || 0, cobertura: cov == null || cov === Infinity ? null : Math.round(cov * 10) / 10, estado});
   }
   return out;
@@ -39,7 +40,7 @@ function filasCompras(a, b) {
   const out = [];
   for (const [id, c] of Object.entries(col("compras"))) { const f = c.estado === "recibido" ? (c.recFecha || c.fecha) : c.fecha; if (c.estado === "cancelado" || f < a || f > b) continue; const tot = sum(c.lineas || [], l => (l.costo || 0) * (l.q || 0));
     for (const l of (c.lineas || [])) { const val = (l.costo || 0) * (l.q || 0), iva = tot ? Math.round((c.iva || 0) * val / tot) : 0, p = prod(l.pid);
-      out.push({id, proveedor: c.proveedor || "", nit: c.nit || "", fecha: f, factura: c.factura || "", producto: (p && p.nombre) || l.n || "", unidad: (p && p.unidad) || "und", cantidad: l.q || 0, costo: l.costo || 0, iva, total: val + iva, estado: c.estado === "recibido" ? "Recibida" : c.estado === "cancelado" ? "Cancelada" : "Pendiente", recibido: c.estado === "recibido" ? l.q || 0 : 0, pendiente: c.estado === "pedido" ? l.q || 0 : 0, soporte: (c.soporte && c.soporte.ref) || "", tipoSoporte: (c.soporte && c.soporte.tipo) || ""}); } }
+      out.push({id, proveedor: c.proveedor || "", nit: c.nit || "", fecha: f, factura: c.factura || "", producto: (p && p.nombre) || l.n || "", unidad: (p && p.unidad) || "und", cantidad: l.q || 0, costo: l.costo || 0, iva: c.estado === "recibido" ? iva : null, total: c.estado === "recibido" ? val + iva : null, pedido: c.estado === "recibido" ? null : val + iva, estado: c.estado === "recibido" ? "Recibida" : c.estado === "cancelado" ? "Cancelada" : "Pendiente", recibido: c.estado === "recibido" ? l.q || 0 : 0, pendiente: c.estado === "pedido" ? l.q || 0 : 0, soporte: (c.soporte && c.soporte.ref) || "", tipoSoporte: (c.soporte && c.soporte.tipo) || ""}); } }
   return out.sort((x, y) => x.fecha.localeCompare(y.fecha));
 }
 function filasRecomendacion() {
@@ -51,9 +52,9 @@ function filasCajas(a, b) {
       explicado: cerr ? r.explicado : null, difFinal: cerr ? r.final : null, esperadoRev: cerr ? r.esperado : null, contadoRev: cerr ? r.contado : null, revisada: cerr ? r.revisada : null,
       revision: !cerr ? "" : r.conAjustes ? r.items.map(ajusteTxt).join(" | ") : Math.abs(r.orig) >= 1 ? "Sin revisar" : "", hAp: hora(c.apertura.t), hCi: cerr ? hora(ci.t) : "", estado: cerr ? "Cerrada" : "Abierta", obs: cerr ? ci.obs || "" : "Caja abierta · efectivo esperado ahora " + fmt(k.esperado), id: c.id}; });
 }
-function filasMovCaja(a, b) { const out = []; for (const c of cajasAll()) if (c.fecha >= a && c.fecha <= b) for (const m of (c.movs || [])) out.push({fecha: c.fecha, hora: hora(m.t), caja: devNombre(c.dev), tipo: m.tipo === "retiro" ? "Salida de dinero" : m.tipo === "ingreso" ? "Entrada de dinero" : "Pago desde caja", valor: m.monto, motivo: m.motivo, usuario: empNombre(m.uid), soporte: ""}); return out; }
+function filasMovCaja(a, b, F) { const out = []; for (const c of cajasAll()) if (c.fecha >= a && c.fecha <= b && !(F && F.dev && c.dev !== F.dev)) for (const m of (c.movs || [])) if (!(F && F.uid && m.uid !== F.uid)) out.push({fecha: c.fecha, hora: hora(m.t), caja: devNombre(c.dev), tipo: m.tipo === "retiro" ? "Salida de dinero" : m.tipo === "ingreso" ? "Entrada de dinero" : "Pago desde caja", valor: m.monto, motivo: m.motivo, usuario: empNombre(m.uid), soporte: ""}); return out; }
 function filasGastos(a, b) { return gastosEn(a, b).map(g => ({fecha: g.fecha, proveedor: g.proveedor || "", categoria: g.cat || "", descripcion: g.desc || "", base: g.base || (g.iva ? g.valor - g.iva : g.valor), iva: g.iva || 0, retencion: g.retencion || 0, total: g.valor, metodo: g.m || "", cuenta: g.origen === "caja" || g.m === "Efectivo" ? "Caja" : "Banco", usuario: empNombre(g.uid), soporte: (g.soporte && g.soporte.ref) || "", estado: g.origen === "caja" ? "Desde caja" : (g.estado || "Registrado")})).sort((x, y) => x.fecha.localeCompare(y.fecha)); }
-function filasMermas(a, b) { return mermasAll().filter(m => m.fecha >= a && m.fecha <= b).map(m => { const p = prod(m.pid), c = costoUnit(m.pid, m.t); return {pid: m.pid, producto: (p && p.nombre) || m.pid, fecha: m.fecha, cantidad: m.q, unidad: (p && p.unidad) || "und", costo: c, total: c == null ? null : c * m.q, motivo: m.motivo, empleado: empNombre(m.uid), obs: m.obs || ""}; }).concat(perdidasHelado(a, b)); }
+function filasMermas(a, b) { return mermasAll().filter(m => m.fecha >= a && m.fecha <= b).map(m => { const p = prod(m.pid), c = costoUnit(m.pid, m.t); return {pid: m.pid, producto: (p && p.nombre) || m.pid, fecha: m.fecha, cantidad: m.q, unidad: (p && p.unidad) || "und", costo: c, total: c == null ? null : c * m.q, motivo: m.motivo, empleado: empNombre(m.uid), obs: m.obs || "", uid: m.uid, dev: m.dev}; }).concat(perdidasHelado(a, b)); }
 function filasRentabilidad(a, b) {
   const mer = {}; for (const m of filasMermas(a, b)) if (m.pid) mer[m.pid] = (mer[m.pid] || 0) + (m.total || 0);
   return rentabilidad(a, b).map(r => ({producto: r.n, pid: r.pid, unidades: r.uds, ventas: r.ing, costo: r.sinCosto ? null : r.costo, descuentos: r.desc || 0, merma: mer[r.pid] || 0}));   // r.ing ya trae el descuento restado
@@ -92,7 +93,7 @@ function integridad(a, b) {
   add("warn", "Cierres sin apertura", cajasAll().filter(c => c.fecha >= a && c.fecha <= b && (c.cierres || []).length && !c.apertura).length, "");
   add("warn", "Cajas sin cerrar", cajasAll().filter(c => c.fecha >= a && c.fecha <= b && c.fecha < S.today && c.apertura && cajaEstado(c) !== "cerrada").length, "Cajas de días anteriores que siguen abiertas.");
   add("warn", "Movimientos sin usuario", cajasAll().filter(c => c.fecha >= a && c.fecha <= b).reduce((s, c) => s + (c.movs || []).filter(m => !m.uid).length, 0) + mermasAll().filter(m => m.fecha >= a && m.fecha <= b && !m.uid).length, "");
-  const cr = Object.values(col("compras")).filter(c => c.estado === "recibido" && c.fecha >= a && c.fecha <= b);
+  const cr = Object.values(col("compras")).filter(c => c.estado === "recibido" && (c.recFecha || c.fecha) >= a && (c.recFecha || c.fecha) <= b);
   add("warn", "Compras sin proveedor", cr.filter(c => !c.proveedor).length, "");
   add("warn", "Compras sin soporte", cr.filter(c => !(c.soporte && c.soporte.ref)).length, "Falta la factura o documento soporte.");
   const gs = Object.values(col("gastos")).filter(g => g.fecha >= a && g.fecha <= b);
@@ -104,15 +105,18 @@ function integridad(a, b) {
   return out;
 }
 function informacionPendiente(a, b) {
-  const out = [], cr = Object.values(col("compras")).filter(c => c.estado === "recibido" && c.fecha >= a && c.fecha <= b);
+  const out = [], cr = Object.values(col("compras")).filter(c => c.estado === "recibido" && (c.recFecha || c.fecha) >= a && (c.recFecha || c.fecha) <= b);
   const n1 = cr.filter(c => !(c.soporte && c.soporte.ref)).length; if (n1) out.push(n1 + (n1 === 1 ? " compra sin soporte tributario" : " compras sin soporte tributario"));
   const n2 = filasTerceros(a, b).filter(t => !t.completo).length; if (n2) out.push(n2 + (n2 === 1 ? " proveedor sin identificación completa" : " proveedores sin identificación completa"));
   const n3 = filasMovCaja(a, b).filter(m => m.tipo === "Pago desde caja").length; if (n3) out.push(n3 + (n3 === 1 ? " pago desde caja sin soporte" : " pagos desde caja sin soporte"));
   const n4 = pendientes().length; if (n4) out.push(n4 + " documentos pendientes de sincronización");
   const n5 = uniq(filasVentas(a, b, {}).filter(r => r.impTipo === "validar").map(r => r.pid)).length; if (n5) out.push(n5 + " productos sin tratamiento tributario validado");
-  const n6 = ventasOk().filter(v => v.fecha >= a && v.fecha <= b && v.cliente).length; if (n6) out.push(n6 + " ventas en las que el cliente pidió factura (revisar emisión)");
+  const conDoc = new Set(Object.values(col("docelec")).map(x => x && x.ventaId)), n6 = ventasOk().filter(v => v.fecha >= a && v.fecha <= b && v.cliente && !conDoc.has(v.id)).length; if (n6) out.push(n6 + " ventas en las que el cliente pidió factura (revisar emisión)");
   return out;
 }
+// costo de lo vendido solo de los productos que llevan inventario (los mismos que cuenta el lado del inventario): un granizado sin
+// control de inventario no puede aparecer como diferencia
+function cogsInv(a, b) { let s = 0; for (const v of ventasEn(a, b)) for (const l of lineasExp(v)) { const p = prod(l.pid), c = p && p.controla !== false && !p.combo ? costoUnit(l.pid, v.t) : null; if (c != null) s += c * l.q; } return Math.round(s); }
 function conciliacion(a, b) {
   const f = finanzas(a, b), de = Object.values(col("docelec")).filter(d => d.fecha >= a && d.fecha <= b && (d.estado === "aceptado" || d.estado === "registrado")), feCfg = !!(configNeg().tributario && configNeg().tributario.proveedorFE) || de.length > 0;
   const cajas = filasCajas(a, b).filter(c => c.contado != null), cr = filasCompras(a, b).filter(c => c.estado === "Recibida"), crSop = cr.filter(c => c.soporte);
@@ -123,13 +127,18 @@ function conciliacion(a, b) {
     feCfg ? row("Ventas OLI vs documentos electrónicos", f.ventas, "Ventas OLI", sum(de, d => d.total || 0), "Documentos aceptados", 1, "") : {n: "Ventas OLI vs documentos electrónicos", x: f.ventas, nx: "Ventas OLI", y: null, ny: "Documentos electrónicos", dif: null, ok: false, nota: "No hay proveedor de facturación electrónica conectado. Requiere contador."},
     row("Caja OLI vs caja declarada", sum(cajas, c => c.esperadoRev), "Efectivo esperado", sum(cajas, c => c.contadoRev), "Efectivo contado", 0, cajas.some(c => c.explicado) ? "Con las diferencias ya revisadas (pagos por otro medio, gastos sin anotar, conteos)." : ""),
     row("Compras vs soportes", sum(cr, c => c.total), "Compras registradas", sum(crSop, c => c.total), "Con soporte", 0, ""),
-    row("Inventario vs costo de ventas", f.cogs, "Costo de ventas (OLI)", Math.round(cvTeo), "Inventario inicial + entradas − final − mermas y ajustes", Math.max(1000, f.cogs * 0.05), "Estimación con costos actuales; diferencias menores al 5% son normales."),
+    row("Inventario vs costo de ventas", cogsInv(a, b), "Costo de ventas (OLI, productos con inventario)", Math.round(cvTeo), "Inventario inicial + entradas − final − mermas y ajustes", Math.max(1000, f.cogs * 0.05), "Estimación con costos actuales; diferencias menores al 5% son normales."),
     row("Pagos digitales vs confirmados", digTot, "Ventas digitales", digConf, "Pagos confirmados", 0, "")
   ];
 }
+// anulaciones que el servidor marcó porque llegaron con la caja de la venta ya cerrada (la venta se descuenta igual; el administrador revisa)
+function anulacionesCajaCerrada(a, b) { const out = []; for (const d of Object.values(col("anulaciones"))) for (const x of ((d && d.items) || [])) if (x && x.cajaCerrada) { const v = ventasAll().find(y => y.id === x.ventaId), f = (v && v.fecha) || d.fecha; if (f >= a && f <= b) out.push(Object.assign({}, x, {fecha: f, venta: v ? v.num : x.ventaId, caja: v ? devNombre(v.dev) : ""})); } return out; }
 function riesgosAuditoria(a, b) {
-  const out = [], R = {ANULACION: "Medio", DESCUENTO: "Bajo", CAMBIO_PRECIO: "Medio", CAMBIO_COSTO: "Medio", AJUSTE_INVENTARIO: "Medio", GASTO_BORRADO: "Alto", REABRIR_CAJA: "Medio", SYNC_RECHAZADA: "Alto", CONFLICTO_INVENTARIO: "Alto", PRODUCTO_DESACTIVADO: "Bajo"};
+  // también lo que se descartó, se borró o se restauró, y las revisiones de diferencias de caja
+  const out = [], R = {ANULACION: "Medio", DESCUENTO: "Bajo", CAMBIO_PRECIO: "Medio", CAMBIO_COSTO: "Medio", AJUSTE_INVENTARIO: "Medio", GASTO_BORRADO: "Alto", REABRIR_CAJA: "Medio", SYNC_RECHAZADA: "Alto", CONFLICTO_INVENTARIO: "Alto", PRODUCTO_DESACTIVADO: "Bajo",
+    CAMBIO_DESCARTADO: "Alto", DATOS_DESCARTADOS: "Alto", ENVIO_PURGADO: "Alto", DATOS_RESTAURADOS: "Medio", PLATA_CONTADA_QUITADA: "Medio", CAJA_AJUSTE: "Medio", CAJA_AJUSTE_DESHECHO: "Medio"};
   for (const x of filasAuditoria(a, b)) if (R[x.codigo]) out.push({riesgo: R[x.codigo], tipo: x.accion, accion: x.detalle, usuario: x.usuario, fecha: x.fecha + " " + x.hora, soporte: x.registro});
+  for (const x of anulacionesCajaCerrada(a, b)) out.push({riesgo: "Alto", tipo: "Anulación recibida con la caja ya cerrada", accion: x.venta + " · " + fmt(x.total) + (x.motivo ? " · " + x.motivo : "") + ". Llegó el " + diaCorto(ymd(new Date(x.recibida))) + " " + hora(x.recibida) + ": revisa si se hizo antes del cierre.", usuario: empNombre(x.uid), fecha: x.fecha + " " + hora(x.t), soporte: x.caja});
   for (const c of filasCajas(a, b)) if (c.difFinal && Math.abs(c.difFinal) >= 1) out.push({riesgo: Math.abs(c.difFinal) >= 20000 ? "Alto" : "Medio", tipo: c.revisada ? "Diferencia de caja (revisada y aceptada)" : "Diferencia de caja sin revisar", accion: fmt(c.difFinal) + (c.obs ? " · " + c.obs : "") + (c.revisada ? " · " + c.revision : ""), usuario: c.empleado, fecha: c.fecha + " " + c.hCi, soporte: c.caja});
   for (const c of filasCompras(a, b)) if (c.estado === "Recibida" && !c.soporte) out.push({riesgo: "Medio", tipo: "Compra sin soporte", accion: c.producto + " · " + fmt(c.total), usuario: "", fecha: c.fecha, soporte: c.proveedor || "sin proveedor"});
   if (pendientes().length) out.push({riesgo: "Medio", tipo: "Sincronización pendiente", accion: pendientes().length + " cambios en este equipo", usuario: "", fecha: S.today, soporte: DEV.nombre});

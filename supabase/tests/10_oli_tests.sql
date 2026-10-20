@@ -580,6 +580,26 @@ begin
   r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','rv7','col','mermas','id','2026-10-13_d1','t',60,'data','{"fecha":"2026-10-13","dev":"d1","items":[{"id":"mmq","t":60,"pid":"p-mango","motivo":"Daño"}]}'::jsonb),
          jsonb_build_object('op_id','rv8','col','confirmaciones','id','2026-10-13_d1','t',61,'data','{"fecha":"2026-10-13","dev":"d1","items":[]}'::jsonb)), 'd1', '1.0');
   perform t_assert(r->0->>'status' = 'rejected' and r->1->>'status' = 'applied', 'una pérdida sin cantidad se rechaza con un motivo y lo demás del envío sí se guarda');
+  -- T40: anulación que llega con la caja ya cerrada: se guarda (no se pierde) pero queda marcada para el administrador
+  reset role; set role authenticated; perform t_as(e1);
+  r := oli_apply(jsonb_build_array(
+         jsonb_build_object('op_id','ac1','col','ventas','id','2026-10-14_d1','t',1792000000000,'data', jsonb_build_object('fecha','2026-10-14','dev','d1','uid',e1::text,'ventas', jsonb_build_array(
+           jsonb_build_object('id','d1-ac-1','n',1,'num','Caja 1 #1','t',1792000000000,'fecha','2026-10-14','uid',e1::text,'dev','d1','m','Efectivo','total',8000,'sub',8000,'desc',0,'items','[{"pid":"p-mango","n":"Paleta Mango","q":1,"p":8000,"d":0}]'::jsonb),
+           jsonb_build_object('id','d1-ac-2','n',2,'num','Caja 1 #2','t',1792000100000,'fecha','2026-10-14','uid',e1::text,'dev','d1','m','Efectivo','total',8000,'sub',8000,'desc',0,'items','[{"pid":"p-mango","n":"Paleta Mango","q":1,"p":8000,"d":0}]'::jsonb)))),
+         jsonb_build_object('op_id','ac2','col','anulaciones','id','2026-10-14_d1','t',1792000160000,'data', jsonb_build_object('fecha','2026-10-14','dev','d1','items', jsonb_build_array(jsonb_build_object('id','an-ac-2','ventaId','d1-ac-2','t',1792000160000,'uid',e1::text,'total',8000))))), 'd1', '1.0');
+  perform t_assert(r->1->>'status' = 'applied' and (select coalesce((xx->>'cajaCerrada')::boolean, false) from oli_docs o, jsonb_array_elements(o.data->'items') xx where o.collection = 'anulaciones' and o.doc_id = '2026-10-14_d1' and xx->>'id' = 'an-ac-2') = false,
+    'una anulación con la caja abierta entra normal, sin marca');
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','ac3','col','cajas','id','2026-10-14_d1','t',1792003000000,'data', jsonb_build_object('fecha','2026-10-14','dev','d1',
+         'apertura', jsonb_build_object('id','ap-ac','t',1791990000000,'monto',50000,'uid',e1::text), 'movs','[]'::jsonb,
+         'cierres', jsonb_build_array(jsonb_build_object('id','ci-ac','t',1792003000000,'uid',e1::text,'esperado',58000,'contado',58000,'dif',0,'obs',''))))), 'd1', '1.0');
+  r := oli_apply(jsonb_build_array(jsonb_build_object('op_id','ac4','col','anulaciones','id','2026-10-14_d1','t',1792003100000,'data', jsonb_build_object('fecha','2026-10-14','dev','d1','items', jsonb_build_array(
+         jsonb_build_object('id','an-ac-2','ventaId','d1-ac-2','t',1792000160000,'uid',e1::text,'total',8000),
+         jsonb_build_object('id','an-ac-1','ventaId','d1-ac-1','t',1792000060000,'uid',e1::text,'total',8000))))), 'd1', '1.0');
+  reset role;
+  perform t_assert(r->0->>'status' = 'applied' and exists (select 1 from sale_voids where sale_id = 'd1-ac-1'), 'una anulación que llega con la caja ya cerrada no se pierde');
+  perform t_assert((select (xx->>'cajaCerrada')::boolean and (xx->>'recibida')::bigint > 0 from oli_docs o, jsonb_array_elements(o.data->'items') xx where o.collection = 'anulaciones' and o.doc_id = '2026-10-14_d1' and xx->>'id' = 'an-ac-1')
+    and (select coalesce((xx->>'cajaCerrada')::boolean, false) from oli_docs o, jsonb_array_elements(o.data->'items') xx where o.collection = 'anulaciones' and o.doc_id = '2026-10-14_d1' and xx->>'id' = 'an-ac-2') = false,
+    '…pero queda marcada «caja cerrada» con la hora en que llegó (la que ya estaba no se toca)');
   -- T16: coherencia de totales
   reset role;
   perform t_assert((select sum(total) from sales) = (select sum(amount) from payments), 'total de ventas = total de pagos');

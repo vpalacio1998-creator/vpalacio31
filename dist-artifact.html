@@ -333,7 +333,7 @@ details.help span{display:block;font-weight:500;font-size:13px;line-height:1.35;
 <div class="sheet hidden" id="sheet"><div class="bg"></div><div class="panel" role="dialog" aria-modal="true" id="panel"></div></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script>window.OLI_BUILD="3c4aac90";</script>
+<script>window.OLI_BUILD="ef01772b";</script>
 <script>
 (function(){
 "use strict";
@@ -1227,7 +1227,7 @@ registrarSW();
 /* >>> 20-domain.js */
 /* ============ 20 · dominio: productos, inventario, ventas, caja y finanzas ============ */
 const CATS = ["Paletas", "Helados", "Bebidas", "Combos", "Otros"];
-const METODOS = ["Efectivo", "Nequi", "Daviplata", "QR Bancolombia", "Tarjeta", "Otro"];
+const METODOS = ["Efectivo", "Nequi", "Daviplata", "QR Bancolombia", "Transferencia", "Tarjeta", "Otro"];
 const esDigital = m => m === "Nequi" || m === "Daviplata" || m === "QR Bancolombia";
 const CATS_GASTO = ["Arrendamiento", "Servicios", "Nómina", "Materia prima", "Transporte", "Publicidad", "Mantenimiento", "Otros"];
 const MOTIVOS_MERMA = ["Vencimiento", "Daño", "Preparación", "Error", "Devolución", "Otro"];
@@ -1845,7 +1845,7 @@ function alertas() {
     const out = [], adm = esAdmin();
     for (const r of riesgosStock()) out.push({sev: r.sev, tipo: "inventario", t: r.t, d: r.d, tab: "inventario", pid: r.pid});
     for (const r of riesgosInsumos()) out.push({sev: r.sev, tipo: "inventario", t: r.t, d: r.d, tab: "inventario", pid: r.pid});
-    const pend = ventasOk().filter(v => v.pend).length; if (pend) out.push({sev: "warn", tipo: "caja", t: pend + (pend === 1 ? " pago digital por confirmar." : " pagos digitales por confirmar."), d: "Verifica que llegó el dinero.", tab: "caja"});
+    const pend = ventasOk().filter(v => v.pend && (adm || v.fecha >= addDays(S.today, -3))).length; if (pend) out.push({sev: "warn", tipo: "caja", t: pend + (pend === 1 ? " pago digital por confirmar." : " pagos digitales por confirmar."), d: "Verifica que llegó el dinero.", tab: "caja"});
     for (const c of adm ? cajasAll().filter(x => x.fecha >= addDays(S.today, -7) && cajaEstado(x) === "cerrada") : [cajaHoy()].filter(x => x && cajaEstado(x) === "cerrada")) { const r = difCierre(c); if (r && Math.abs(r.final) >= (c.fecha === S.today ? 1 : 1000) && !r.revisada) out.push({sev: "warn", tipo: "caja", t: "Diferencia de caja de " + fmt(r.final) + " en " + ((col("dispositivos")[c.dev] || {}).nombre || c.devNombre || "la caja") + (c.fecha === S.today ? "" : " (" + diaCorto(c.fecha) + ")") + ".", d: (r.ci.obs ? "Observación: " + r.ci.obs + ". " : "Sin observación. ") + (adm ? "Toca para decir qué pasó." : "El administrador la revisa."), tab: "caja", act: adm ? "resolverDif" : "", id: c.id}); }
     if (SYNC.rechazadas) out.push({sev: "bad", tipo: "sync", t: SYNC.rechazadas === 1 ? "Un cambio de este equipo no se pudo enviar: el servidor no lo aceptó." : SYNC.rechazadas + " cambios de este equipo no se pudieron enviar: el servidor no los aceptó.", d: rechazadas().map(descCambio).join("; ") + ". Toca «Hay datos que revisar» (arriba) para ver por qué y reintentar.", tab: "equipo"});
     if (adm) {
@@ -1854,6 +1854,7 @@ function alertas() {
           d: rechTxt(d) + ". " + (dias >= DIAS_EQUIPO_VIEJO
             ? "Ese equipo no se conecta desde hace " + dias + " días: si se borró o se reemplazó, " + (uno ? "ese cambio se perdió" : "esos cambios se perdieron") + " (no llegaron al servidor). Si ya no existe, quita este aviso en Equipo → «Quitar el aviso»."
             : (uno ? "Sigue guardado" : "Siguen guardados") + " en ese equipo, no en el servidor: allá toca «Hay datos que revisar» (arriba) y luego «Reintentar el envío». Si vuelve a fallar, ingresa en ese equipo con tu cuenta: como administrador puedes reintentarlo" + (DS.backend === "supabase" ? " o descartarlo" : "") + ". Última conexión de ese equipo: " + haceTxt(d.vis) + "."), tab: "equipo"}); }
+      for (const x of anulacionesCajaCerrada(addDays(S.today, -30), S.today)) out.push({sev: "bad", tipo: "caja", t: "Se anuló " + x.venta + " (" + fmt(x.total) + ") con la caja ya cerrada.", d: "La anulación llegó al servidor después del cierre. Revisa si de verdad se hizo antes de cerrar: la plata de esa venta ya se había contado.", tab: "reportes"});
       for (const a of anomalias()) out.push({sev: a.sev, tipo: "anomalia", t: a.t, d: a.d, tab: a.ir === "hoy" ? "hoy" : a.ir === "compras" ? "compras" : a.ir === "inventario" ? "inventario" : a.ir === "cierres" ? "reportes" : "reportes", anom: true});
       for (const a of alertasCostos()) out.push({sev: a.tipo === "sube" ? "warn" : "ok", tipo: "costo", t: (a.insumo ? "El costo de " : "El costo de ") + a.p.nombre + (a.tipo === "sube" ? " aumentó " : " bajó ") + Math.round(Math.abs(a.ch) * 100) + "%.", d: a.insumo ? "Costo anterior " + fmt(a.prev) + ", nuevo " + fmt(a.nuevo) + ". Revisa precio o receta." : "Margen de " + pct(a.mPrev) + " a " + pct(a.mNuevo) + ". Revisa precio o receta.", tab: "productos", pid: a.p.id});
       const pp = proximoPuente(7); if (pp) out.push({sev: "warn", tipo: "compra", t: "Se viene fin de semana largo: " + rangoFechasTxt(pp.fechas) + ".", d: (pp.nombres.join(", ") || "Festivo") + ". Haz el pedido para los " + pp.fechas.length + " días: OLI ya pide " + Math.round(colchonFestivo() * 100) + " % más para esos días.", tab: "compras"});
@@ -2087,8 +2088,11 @@ function agregarAlCarrito(p) {
   const e = estadoProd(p); if (e.k === "agotado") { toast(p.nombre + " está agotado.", true); return false; }
   const prueba = S.cart.map(c => Object.assign({}, c)), ex0 = prueba.find(c => c.pid === p.id); if (ex0) ex0.q++; else prueba.push({pid: p.id, q: 1});
   const f = faltante(prueba); if (f) { toast("Solo hay " + f.st + " de " + f.p.nombre + ".", true); return false; }
-  const ex = S.cart.find(c => c.pid === p.id); if (ex) ex.q++; else S.cart.push({pid: p.id, n: p.nombre, q: 1, p: p.precio}); return true;
+  const ex = S.cart.find(c => c.pid === p.id); if (ex) { ex.q++; if (!ex.k) ex.p = p.precio; } else S.cart.push({pid: p.id, n: p.nombre, q: 1, p: p.precio}); return true;
 }
+// el pedido cobra el precio de ahora (no el de cuando se agregó, ni el de un pedido guardado de otro día). Los conos con sabores
+// guardan su propio precio armado: solo se actualizan si el producto no es cono. Devuelve los nombres que cambiaron.
+function preciosAlDia() { const out = []; for (const c of S.cart) { const p = prod(c.pid); if (p && !p.cono && !c.k && Number(p.precio) !== Number(c.p)) { c.p = Number(p.precio) || 0; out.push(c.n); } } if (out.length) saveCart(); return out; }
 const claveLinea = c => c.k || c.pid;            // un cono con sabores y presentación es una línea propia (clave k); lo demás se agrupa por producto
 function cambiarCantidad(key, d) {
   const c = S.cart.find(x => claveLinea(x) === key); if (!c) return; const p = prod(c.pid);
@@ -2110,12 +2114,14 @@ async function registrarVenta(opts) {
   if (!caja || !caja.apertura) { const e = new Error("Primero abre la caja."); e.abrirCaja = true; throw e; }
   if (cajaEstado(caja) === "cerrada") throw new Error("La caja de hoy está cerrada. El administrador puede reabrirla.");
   for (const c of S.cart) { const p = prod(c.pid); if (!p || p.activo === false) throw new Error(c.n + " ya no está disponible."); }
+  const cambiados = preciosAlDia(); if (cambiados.length) throw new Error("Cambió el precio de " + cambiados.join(", ") + ". Revisa el pedido: ya tiene el precio nuevo.");
   const falta = faltante(S.cart); if (falta) throw new Error("No alcanza el inventario de " + falta.p.nombre + " (hay " + falta.st + ").");
   const sub = totalCarrito(), desc = clamp(Math.round(opts.desc || 0), 0, sub), total = sub - desc, seq = await nextSeq();
   let resto = desc;   // el descuento se reparte por línea y la suma cuadra exacto con el total
   const items = S.cart.map((c, k) => { const p = prod(c.pid), bruto = c.p * c.q, d = k === S.cart.length - 1 ? resto : Math.round(sub ? desc * bruto / sub : 0); resto -= d; const i = impLinea(p, bruto - d); return Object.assign({pid: c.pid, n: c.n, q: c.q, p: c.p, d, imp: {t: i.t, r: i.r, base: i.base, v: i.imp}}, c.sab ? {sab: c.sab.slice(), pres: c.pres, det: c.det, gasta: consumoLinea(c), bc: bolasCaja()} : {}); });
   const t = Date.now(), fecha = ymd(new Date(t));
   const venta = {id: DEV.id + "-" + t.toString(36) + "-" + seq, n: seq, num: (DEV.nombre || DEV.id) + " #" + seq, t, fecha, uid: uidActual(), dev: DEV.id, m: opts.m, total, sub, desc, recibido: opts.m === "Efectivo" ? (opts.recibido || total) : total, cambio: opts.m === "Efectivo" ? Math.max(0, (opts.recibido || total) - total) : 0, ref: opts.ref || "", cliente: opts.cliente ? true : null, estado: "confirmada"};
+  if (opts.confirmada && esDigital(opts.m)) venta.confirmada = true;   // la caja vio el aviso de que llegó el pago
   venta.items = items;
   await appendTo("ventas", cajaId(fecha), "ventas", venta, {fecha, dev: DEV.id, uid: uidActual(), devNombre: DEV.nombre});
   // los datos personales del cliente que pide factura no van en la venta (la leen todos los equipos): van aparte, solo para el administrador
@@ -2128,6 +2134,7 @@ async function registrarVenta(opts) {
 const msgDevolucionCerrada = v => v.m === "Efectivo" ? "Si devolviste el dinero, regístralo en Caja: “Sacar dinero” → “Devolución a cliente”."
   : "Se pagó con " + v.m + ": si devolviste el dinero por ese medio, no lo saques de la caja; el administrador lo anota en Dinero → Registrar gasto (categoría Otros), con el medio por el que se devolvió" + (v.m === "QR Bancolombia" ? " (por QR: Transferencia)." : ".");
 async function anularVenta(v, motivo) {
+  if (anuladasSet().has(v.id)) throw new Error("Esa venta ya está anulada.");
   const caja = cajaDe(v.fecha, v.dev);
   if (caja && cajaEstado(caja) === "cerrada") throw new Error("Esta venta es de una caja ya cerrada. " + msgDevolucionCerrada(v));
   const propio = v.uid === uidActual() && v.dev === DEV.id && Date.now() - v.t < 10 * 60000 && caja && cajaEstado(caja) === "abierta";
@@ -2163,6 +2170,8 @@ async function cerrarCaja(contado, obs, caja) {
   const ci = {id: newId(), t: Date.now(), uid: uidActual(), esperado: k.esperado, contado, dif, obs: (obs || "").trim(), resumen: {ventas: k.ventas, n: k.n, por: k.por, apertura: k.apertura, ingresos: k.ingresos, retiros: k.retiros, gastos: k.gastos},
     ajustes: ajustesCajaAll().filter(x => x.caja === c.id && conVentas(x)).map(x => x.id)};
   await put("cajas", c.id, Object.assign({}, col("cajas")[c.id], {cierres: (c.cierres || []).concat([ci])}));
+  // «Caja cerrada» y «Efectivo contado» de la lista «Al cerrar» los hace este mismo paso
+  try { const chk = col("checklists")[c.id] || {fecha: c.fecha, dev: c.dev, apertura: {}, cierre: {}}, g = Object.assign({}, chk.cierre); g.caja = g.caja || ci.t; g.efectivo = g.efectivo || ci.t; await put("checklists", c.id, Object.assign({}, chk, {cierre: g})); } catch (e) {}
   audit("CIERRE_CAJA", c.id, "Esperado " + fmt(k.esperado) + " · contado " + fmt(contado) + " · dif " + fmt(dif));
   return ci;
 }
@@ -2616,7 +2625,7 @@ function cobroHTML() {
   ${S.metodo === "Efectivo" ? `<label class="f">¿Con cuánto paga?</label><div class="btns">${billetes.map(b => `<button class="btn ${!otro && rec === b ? "pri" : "ghost"}" style="flex:1;min-width:30%" data-act="recibido" data-v="${b}">${b === total ? "Exacto" : fmt(b)}</button>`).join("")}<button class="btn ${otro ? "pri" : "ghost"}" style="flex:1;min-width:30%" data-act="recibidoOtro">Otro valor</button></div>
     ${otro ? `<label class="f" for="rc-v">Valor que entregó el cliente</label><input class="in money" id="rc-v" inputmode="numeric" autocomplete="off" value="${S.recibido !== "" ? fmt(num(S.recibido)) : ""}" placeholder="$0" style="font-size:24px;min-height:56px">${teclado("rc-v")}` : ""}
     <div class="row" style="border:0;margin-top:6px"><b>Cambio</b><span class="big" id="rc-cambio" style="font-size:30px;color:${cambio < 0 ? "var(--danger)" : "var(--marca-d)"}">${cambio < 0 ? "Faltan " + fmt(-cambio) : fmt(cambio)}</span></div>`
-  : esDigital(S.metodo) ? `<div class="notice ok" style="margin-top:12px">Cuando veas el aviso de que llegó el pago, toca <b>CONFIRMAR</b>. Si aún no llega, el administrador lo verá como “por confirmar”.</div>` : ""}
+  : esDigital(S.metodo) ? `<label class="check" style="margin-top:12px"><input type="checkbox" id="pago-visto" ${S.pagoVisto ? "checked" : ""}> Ya vi el aviso de que llegó el pago</label><p class="xs muted" style="margin:4px 0 0">Si todavía no llega, deja la casilla sin marcar: la venta queda «por confirmar» y se confirma después en Caja («Ya llegó»).</p>` : ""}
   <details style="margin:14px 0"${S.mas ? " open" : ""}><summary class="small" style="font-weight:700;cursor:pointer;min-height:40px;display:flex;align-items:center" data-act="masOpc">Más opciones</summary>
     <label class="f">Descuento</label><div class="btns">${[0, 5, 10].map(p => `<button class="btn ${S.descModo === String(p) ? "pri" : "ghost"} sm" data-act="descuento" data-p="${p}">${p === 0 ? "Sin descuento" : p + "%"}</button>`).join("")}</div>
     <label class="check" style="margin-top:12px"><input type="checkbox" id="pidefactura" data-act-change="pideFactura" ${S.cliente ? "checked" : ""}> El cliente pide factura a su nombre</label>
@@ -2629,15 +2638,16 @@ ACT.cobrar = () => {
   if (!S.cart.length) { toast("Toca un producto para empezar.", true); return; }
   if (!DS.canWrite) { toast("Tienes acceso de solo lectura.", true); return; }
   const c = cajaHoy(), st = cajaEstado(c); if (st === "sin") { ACT.abrirCaja(); return; } if (st === "cerrada") { toast("La caja de hoy está cerrada.", true); return; }
-  S.recibido = ""; S.recOtro = false; S.desc = 0; S.descModo = ""; S.cliente = null; S.mas = false; S.metodo = "Efectivo";   // cada venta empieza en efectivo (no hereda el método de la anterior)
+  S.recibido = ""; S.recOtro = false; S.desc = 0; S.descModo = ""; S.cliente = null; S.mas = false; S.metodo = "Efectivo"; S.pagoVisto = false;   // cada venta empieza en efectivo (no hereda el método de la anterior)
   abrir(() => cobroHTML());
 };
-ACT.metodo = (el, d) => { S.metodo = d.v; if (d.v !== "Efectivo") { S.recibido = ""; S.recOtro = false; } redrawSheet(true); };
+ACT.metodo = (el, d) => { S.metodo = d.v; S.pagoVisto = false; if (d.v !== "Efectivo") { S.recibido = ""; S.recOtro = false; } redrawSheet(true); };
 ACT.recibido = (el, d) => { S.recibido = d.v; S.recOtro = false; redrawSheet(true); };
 ACT.recibidoOtro = () => { S.recOtro = true; S.recibido = ""; redrawSheet(true); const i = $("#rc-v"); if (i) i.focus(); };
 ACT.descuento = (el, d) => { const p = Number(d.p); S.descModo = String(p); S.desc = Math.round(totalCarrito() * p / 100); S.mas = true; redrawSheet(true); };
 document.addEventListener("change", e => {
   if (e.target.id === "pidefactura") { S.cliente = e.target.checked ? {doc: "", nombre: "", correo: ""} : null; S.mas = true; redrawSheet(true); }
+  if (e.target.id === "pago-visto") S.pagoVisto = e.target.checked;
   if (e.target.id === "c-doc" || e.target.id === "c-nom" || e.target.id === "c-mail") S.cliente = {doc: $("#c-doc").value.trim(), nombre: $("#c-nom").value.trim(), correo: $("#c-mail").value.trim()};
 });
 ACT.confirmarVenta = async () => {
@@ -2645,10 +2655,12 @@ ACT.confirmarVenta = async () => {
   if (S.metodo === "Efectivo" && rec < total) { toast("El efectivo recibido no alcanza.", true); return; }
   if (S.cliente) S.cliente = {doc: ($("#c-doc") || {value: S.cliente.doc}).value.trim(), nombre: ($("#c-nom") || {value: S.cliente.nombre}).value.trim(), correo: ($("#c-mail") || {value: S.cliente.correo}).value.trim()};
   if (S.cliente && (!S.cliente.doc || !S.cliente.nombre)) { toast("Para la factura escribe el documento y el nombre.", true); return; }
+  const casilla = $("#pago-visto"); if (casilla) S.pagoVisto = casilla.checked;
+  const visto = esDigital(S.metodo) && !!S.pagoVisto;
   cobrando = true; redrawSheet(true);
   try {
-    const v = await registrarVenta({m: S.metodo, desc: S.desc, recibido: rec, cliente: S.cliente});
-    S.cart = []; saveCart(); S.cliente = null; S.desc = 0; S.recibido = ""; S.recOtro = false;
+    const v = await registrarVenta({m: S.metodo, desc: S.desc, recibido: rec, cliente: S.cliente, confirmada: visto});
+    S.cart = []; saveCart(); S.cliente = null; S.desc = 0; S.recibido = ""; S.recOtro = false; S.pagoVisto = false;
     const off = DS.mode === "db" && !SYNC.online;
     abrir(() => `<div class="done" data-v="${esc(v.id)}"><div class="tick">${ic("ok", 52)}</div><h2 style="margin:14px 0 4px">Venta realizada</h2><div class="big">${fmt(v.total)}</div><p class="muted" style="margin:6px 0 0">${esc(v.m)}${v.m === "Efectivo" && v.cambio > 0 ? " · Cambio: <b>" + fmt(v.cambio) + "</b>" : ""}</p>${off ? '<p class="small muted">Guardada en este equipo. Se enviará sola cuando vuelva Internet.</p>' : ""}<button class="btn pri xl wide" style="margin-top:16px" data-act="cerrar" autofocus>Nueva venta</button><button class="btn ghost wide" style="margin-top:8px" data-act="anular" data-id="${esc(v.id)}">Fue un error: anular</button></div>`);
     clearTimeout(doneTimer); const vid = v.id; doneTimer = setTimeout(() => { const el = $("#panel .done"); if (sheetFn && el && el.dataset.v === vid) cerrar(); }, 2600); draw();
@@ -2697,7 +2709,7 @@ VIEWS.caja = () => {
   const pend = ventasOk().filter(v => v.pend && (adm || v.fecha >= addDays(S.today, -3)));
   if (adm && S.cajaVista === "mes") return cabecera("Caja", "Acumulado del mes") + vistaCajaSeg() + cajaMesHTML();
   return cabecera("Caja", "Hoy · " + diaLargo(S.today) + (DEV.nombre ? " · " + esc(DEV.nombre) : "")) + (adm ? vistaCajaSeg() : "") + avisoCajaPendiente() + (st === "sin" ? principal : cajaCardHTML(c, true)) +
-    (st !== "sin" ? checklistHTML("apertura", CHECK_AP) : "") + (st === "abierta" ? checklistHTML("tarde", CHECK_TARDE) + checklistHTML("cierre", CHECK_CI) : "") +
+    (st !== "sin" ? checklistHTML("apertura", CHECK_AP) : "") + (st === "abierta" ? checklistHTML("tarde", CHECK_TARDE) + checklistHTML("cierre", CHECK_CI) : st === "cerrada" ? checklistHTML("cierre", CHECK_CI) : "") +
     (pend.length ? `<div class="card"><h3>Pagos por confirmar</h3><p class="small muted" style="margin-top:-4px">Mira el aviso de tu banco o billetera. Si ya llegó, toca “Ya llegó”.</p>${(adm ? pend : pend.slice(-8)).slice().reverse().map(v => `<div class="row"><div class="l"><b>${fmt(v.total)}</b> <span class="pill">${esc(v.m)}</span><div class="small muted">${v.fecha !== S.today ? diaCorto(v.fecha) + " " : ""}${hora(v.t)}${v.ref ? " · " + esc(v.ref) : ""}</div></div><button class="btn pri sm" data-act="ya" data-id="${esc(v.id)}">Ya llegó</button></div>`).join("")}</div>` : "") +
     (st === "abierta" ? `<div class="btns" style="margin-bottom:14px"><button class="btn ghost" style="flex:1" data-act="movCaja" data-t="retiro">Sacar dinero</button><button class="btn ghost" style="flex:1" data-act="movCaja" data-t="ingreso">Entró dinero</button><button class="btn ghost" style="flex:1" data-act="movCaja" data-t="gasto">Pagué algo</button></div><button class="btn pri xl wide" data-act="cerrarCaja">${ic("lock", 22)} CERRAR CAJA</button>` : "") +
     ventasHoyHTML() +
@@ -2711,7 +2723,7 @@ ACT.abrirCajaHoy = () => abrir(() => `${head("Abrir caja")}<p style="margin-top:
   <label class="f" for="ap-monto">Otro valor</label><input class="in money" id="ap-monto" inputmode="numeric" value="${S.apMonto ? fmt(S.apMonto) : ""}" placeholder="$0">${teclado("ap-monto")}
   <button class="btn pri xl wide" style="margin-top:14px" data-act="doAbrir">${ic("ok", 22)} ABRIR CAJA</button>`, {});
 ACT.aperturaMonto = (el, d) => { $("#ap-monto").value = Number(d.v) ? fmt(Number(d.v)) : "$0"; };
-ACT.doAbrir = async () => { const v = num($("#ap-monto").value); await guardar(async () => { await abrirCaja(v); cerrar(); draw(); }, "Caja abierta. ¡A vender!"); };
+ACT.doAbrir = async () => { if (!$("#ap-monto").value.trim()) { toast("Escribe con cuánto efectivo empiezas, o toca «$0 (sin base)».", true); return; } const v = num($("#ap-monto").value); await guardar(async () => { await abrirCaja(v); cerrar(); draw(); }, "Caja abierta. ¡A vender!"); };
 const MOT_MOV = {retiro: ["Retiro del dueño", "Consignación", "Devolución a cliente", "Cambio de billetes", "Otro"], ingreso: ["Base adicional", "Cambio de billetes", "Otro"], gasto: ["Insumos", "Domicilio", "Aseo", "Transporte", "Otro"]};
 const TIT_MOV = {retiro: "Sacar dinero de la caja", ingreso: "Entró dinero a la caja", gasto: "Pagué algo con dinero de la caja"};
 const permisoMov = () => esAdmin() || ((col("meta").permisos || {}).movimientosEmpleado !== false);
@@ -2721,7 +2733,9 @@ ACT.movCaja = (el, d) => { if (!permisoMov()) { toast("Pídele al administrador 
   <button class="btn pri xl wide" style="margin-top:14px" data-act="doMov">GUARDAR</button>`); };
 ACT.doMov = async () => { const m = num($("#mv-monto").value), mot = selVal("mv-mot"), nota = $("#mv-nota").value.trim(); if (!mot) { toast("Elige para qué fue.", true); return; }
   const mp = S.movTipo === "gasto" && esAdmin() && !!($("#mv-mp") || {}).checked;   // mercancía con costo: categoría «Materia prima» (Dinero no la resta dos veces)
-  await guardar(async () => { await movimientoCaja(S.movTipo, m, mot + (nota ? " · " + nota : ""), S.movTipo === "gasto" ? (mp ? BASE_COSTO : "Otros") : ""); cerrar(); draw(); }, "Guardado"); };
+  // la categoría sale del motivo: los insumos (barquillos, vasos, servilletas…) tienen costo y ya se restan en el costo de lo vendido
+  const cat = S.movTipo !== "gasto" ? "" : mp || mot === "Insumos" ? BASE_COSTO : ({Transporte: "Transporte", Domicilio: "Transporte"})[mot] || "Otros";
+  await guardar(async () => { await movimientoCaja(S.movTipo, m, mot + (nota ? " · " + nota : ""), cat); cerrar(); draw(); }, "Guardado"); };
 ACT.cerrarCaja = (el, d) => { S.cierreId = (d && d.id) || (cajaHoy() || {}).id || ""; const c = cajaSel(); if (!c) return; const k = cajaCalc(c); S.cierreVal = ""; abrir(() => {
   return `${head(c.fecha === S.today ? "Cerrar caja" : "Cerrar la caja del " + diaCorto(c.fecha))}<div class="card flat"><div class="row" style="padding-top:0"><div class="l">Ventas ${c.fecha === S.today ? "de hoy" : "de ese día"}</div><div class="r">${fmt(k.ventas)}</div></div>${Object.entries(k.por).map(([m, v]) => `<div class="row"><div class="l">${esc(m)}</div><div class="r">${fmt(v)}</div></div>`).join("")}
     <div class="row"><div class="l"><b>Efectivo que debería haber</b></div><div class="r big" style="font-size:26px">${fmt(k.esperado)}</div></div></div>
@@ -3088,13 +3102,18 @@ function perdidasHelado(a, b) {
   });
 }
 /* costo de una unidad de una línea vendida: un cono suma barquillo, cucurucho o vaso y sus bolas (costo de la caja ÷ bolas por caja) */
+// si alguna parte no tiene costo, se suma lo que sí tiene (como en Dinero) y la línea queda marcada como costo incompleto
+const PARCIAL = new WeakSet();
 function costoItem(it, t) {
   if (!Array.isArray(it.sab)) return costoUnit(it.pid, t);
-  let s = 0; const q = it.q || 1;
-  for (const x of consumoLinea(it)) { const c = costoUnit(x.pid, t); if (c == null) return null; s += c * x.q / q; }
-  for (const sb of it.sab) { const c = costoUnit(sb, t); if (c == null) return null; s += c / (it.bc || bolasCaja()); }
+  let s = 0, falta = 0, hay = 0; const q = it.q || 1;
+  for (const x of consumoLinea(it)) { const c = costoUnit(x.pid, t); if (c == null) falta++; else { s += c * x.q / q; hay++; } }
+  for (const sb of it.sab) { const c = costoUnit(sb, t); if (c == null) falta++; else { s += c / (it.bc || bolasCaja()); hay++; } }
+  if (!hay) return null;
+  if (falta) PARCIAL.add(it); else PARCIAL.delete(it);   // se recuerda por línea vendida
   return Math.round(s);
 }
+const costoParcial = it => PARCIAL.has(it);
 
 /* ---------- vender un cono: sabor(es) y cucurucho o vaso ---------- */
 S.cono = null;
@@ -4207,7 +4226,7 @@ VIEWS.ajustes = () => {
     <label class="f" for="aj-col">Pedir más en festivos, Semana Santa y puentes (%) ${ayuda("Se suma a la demanda de esos días. Cuando ya tengas al menos 2 festivos con ventas, OLI usa lo que de verdad vendiste en ellos y le suma este porcentaje.")}</label><input class="in plain" id="aj-col" inputmode="numeric" value="${Math.round(colchonFestivo() * 100)}">
     <div class="btns" style="margin-top:10px"><button class="btn pri" data-act="guardarColchon">GUARDAR</button><button class="btn ghost" data-act="verFestivos">Ver festivos de los próximos 2 años</button></div></div>
   <div class="card"><h3>Apariencia</h3><div class="seg">${[["auto", "Automática"], ["light", "Clara"], ["dark", "Oscura"]].map(([k, l]) => `<button data-act="tema" data-v="${k}" aria-pressed="${temaActual() === k}">${l}</button>`).join("")}</div></div>
-  <div class="card"><h3>Datos de demostración</h3><p class="small muted" style="margin-top:-4px">Para explorar OLI con un mes completo de ventas de ejemplo. No se mezcla con tu información real: puedes borrarlos cuando quieras.</p>${demo ? '<div class="notice">Estás usando datos de demostración.</div>' : ""}<div class="btns"><button class="btn ghost" data-act="cargarDemo">Cargar datos de demostración</button>${demo ? '<button class="btn danger" data-act="borrarDemo">Borrar datos de demostración</button>' : ""}</div></div>
+  <div class="card"><h3>Datos de demostración</h3><p class="small muted" style="margin-top:-4px">${conDatosReales() ? "Este negocio ya tiene información real: la demostración no se carga aquí (se mezclaría con tus ventas). Para explorar OLI, usa la versión de prueba en otro navegador." : "Para explorar OLI con un mes completo de ventas de ejemplo antes de empezar. Al borrarlos vuelve tu configuración de antes."}</p>${demo ? '<div class="notice">Estás usando datos de demostración.</div>' : ""}<div class="btns">${conDatosReales() ? "" : '<button class="btn ghost" data-act="cargarDemo">Cargar datos de demostración</button>'}${demo ? '<button class="btn danger" data-act="borrarDemo">Borrar datos de demostración</button>' : ""}</div></div>
   <div class="card"><h3>Estado de OLI</h3><div class="row"><span>Productos</span><b>${n}</b></div><div class="row"><span>Almacenamiento en este equipo</span><b>${IDB.ok ? "IndexedDB" : "Respaldo básico"}</b></div><div class="row"><span>Conexión</span><b>${esc(connInfo().txt)}</b></div><div class="row"><span>Este equipo</span><b>${esc(DEV.nombre || DEV.id)}</b></div><div class="row"><span>Versión</span><b>${esc(versionTxt())}</b></div><div class="btns" style="margin-top:8px"><button class="btn ghost sm" data-act="ayuda">${ic("info", 16)} ¿Necesitas ayuda?</button><button class="btn ghost sm" data-act="verEnvio">Estado de envío</button><button class="btn ghost sm" data-act="acerca">Acerca de OLI</button></div><p class="xs muted" style="margin:10px 0 0">${esc(BRAND.texto)}</p></div>`;
 };
 ACT.guardarAjustes = async () => { await guardar(async () => { const mov = $("#aj-mov").checked; await put("meta", "permisos", Object.assign({}, col("meta").permisos || {}, {movimientosEmpleado: mov})); return guardarConfig({nombre: $("#aj-nom").value.trim() || "OLI", margenObjetivo: clamp(num($("#aj-mo").value) / 100, .05, .95), movimientosEmpleado: mov}); }, "Guardado"); };
@@ -4232,7 +4251,7 @@ const temaActual = () => { try { return localStorage.getItem("oli-tema") || "aut
 function aplicarTema() { const t = temaActual(), r = document.documentElement; if (t === "auto") r.removeAttribute("data-theme"); else r.setAttribute("data-theme", t); }
 ACT.tema = (el, d) => { try { localStorage.setItem("oli-tema", d.v); } catch (e) {} aplicarTema(); draw(); };
 ACT.cargarDemo = async () => { if (await confirmar({titulo: "¿Cargar datos de demostración?", texto: "Se crean productos y un mes de ventas de ejemplo. Puedes borrarlos después.", si: "Sí, cargar", no: "No"})) { toast("Cargando datos de demostración…"); await guardar(() => cargarDemo(), "Datos de demostración listos"); draw(); } };
-ACT.borrarDemo = async () => { if (await confirmar({titulo: "¿Borrar los datos de demostración?", texto: "Se borran los productos y ventas de ejemplo. Tu información real no se toca.", si: "Sí, borrar", no: "No", peligro: true})) { toast("Borrando…"); await guardar(() => borrarDemo(), "Datos de demostración borrados"); draw(); } };
+ACT.borrarDemo = async () => { if (await confirmar({titulo: "¿Borrar los datos de demostración?", texto: "Se borran los productos, ventas y gastos de ejemplo, y vuelve la configuración que tenías antes de cargarlos.", si: "Sí, borrar", no: "No", peligro: true})) { toast("Borrando…"); await guardar(() => borrarDemo(), "Datos de demostración borrados"); draw(); } };
 
 /* >>> 74-liquidez.js */
 /* ============ 74 · ¿cuánta plata hay? (liquidez, administrador) ============
@@ -4411,7 +4430,7 @@ function filasVentas(a, b, F) {
   for (const v of ventasAll()) if (v.fecha >= a && v.fecha <= b && pasaF(v, null, F)) for (const it of (v.items || [])) {
     if (!pasaF(v, it, F)) continue; const neto = lineaNeta(it), iv = (it.imp && it.imp.v) || 0, p = prod(it.pid);
     out.push({id: v.id, num: v.num || "", fecha: v.fecha, hora: hora(v.t), t: v.t, caja: devNombre(v.dev), empleado: empNombre(v.uid), producto: it.n, detalle: it.det || "", pid: it.pid, categoria: (p && p.cat) || "", cantidad: it.q, precio: it.p, descuento: it.d || 0,
-      subtotal: neto - iv, impuesto: iv, impTipo: (it.imp && it.imp.t) || "validar", impTarifa: (it.imp && it.imp.r) || 0, total: neto, metodo: v.m, costoU: costoItem(it, v.t), cliente: v.cliente ? "Pidió factura" : "", estado: v.anulada ? "Anulada" : "Confirmada", sync: ventaSyncTxt(ventaSync(v))});
+      subtotal: neto - iv, impuesto: iv, impTipo: (it.imp && it.imp.t) || "validar", impTarifa: (it.imp && it.imp.r) || 0, total: neto, metodo: v.m, costoU: costoItem(it, v.t), costoParcial: costoParcial(it), cliente: v.cliente ? "Pidió factura" : "", estado: v.anulada ? "Anulada" : "Confirmada", sync: ventaSyncTxt(ventaSync(v))});
   }
   return out.sort((x, y) => x.t - y.t);
 }
@@ -4429,7 +4448,8 @@ function filasInventario(a, b) {
     const ent = sum(en.filter(m => ENTRA[m.tipo]), m => m.q), ven = -sum(en.filter(m => m.tipo === "venta"), m => m.q), mer = -sum(en.filter(m => m.tipo === "perdida"), m => m.q), con = -sum(en.filter(m => m.tipo === "consumo"), m => m.q), ajs = sum(en.filter(m => m.tipo === "conteo"), m => m.q);
     const abr = -sum(en.filter(m => m.tipo === "aperturaCaja"), m => m.q);                        // cajas de helado abiertas: salen del inventario de cajas cerradas
     const ini = fin == null ? null : Math.round((fin - ent + ven + mer + con + abr - ajs) * 1000) / 1000, e = estadoProd(p), c = costoActual(p.id), cov = cobertura(p.id), ag = agotaEn(p.id);
-    const estado = e.k === "agotado" ? "AGOTADO" : e.k === "bajo" ? "BAJO" : ag && ag.dias <= 3 ? "RIESGO" : e.k === "sin" ? "SIN CONTAR" : "NORMAL";
+    // un periodo que ya terminó se juzga con lo que quedó al final de ese periodo (no con el inventario de hoy)
+    const pasado = b < S.today, estado = pasado ? (fin == null ? "SIN CONTAR" : fin <= 0 ? "AGOTADO" : fin <= (p.min || 0) ? "BAJO" : "NORMAL") : e.k === "agotado" ? "AGOTADO" : e.k === "bajo" ? "BAJO" : ag && ag.dias <= 3 ? "RIESGO" : e.k === "sin" ? "SIN CONTAR" : "NORMAL";
     out.push({producto: p.nombre, sku: p.id, categoria: p.cat || "", tipo: p.tipo === "insumo" ? "Insumo" : "Producto terminado", unidad: p.unidad || "und", inicial: ini, entradas: ent, salidas: ven + mer + con + abr, ventas: ven, mermas: mer, consumo: con, abiertas: abr, ajustes: ajs, final: fin, costo: c, minimo: p.min || 0, seguridad: p.seg || 0, cobertura: cov == null || cov === Infinity ? null : Math.round(cov * 10) / 10, estado});
   }
   return out;
@@ -4440,7 +4460,7 @@ function filasCompras(a, b) {
   const out = [];
   for (const [id, c] of Object.entries(col("compras"))) { const f = c.estado === "recibido" ? (c.recFecha || c.fecha) : c.fecha; if (c.estado === "cancelado" || f < a || f > b) continue; const tot = sum(c.lineas || [], l => (l.costo || 0) * (l.q || 0));
     for (const l of (c.lineas || [])) { const val = (l.costo || 0) * (l.q || 0), iva = tot ? Math.round((c.iva || 0) * val / tot) : 0, p = prod(l.pid);
-      out.push({id, proveedor: c.proveedor || "", nit: c.nit || "", fecha: f, factura: c.factura || "", producto: (p && p.nombre) || l.n || "", unidad: (p && p.unidad) || "und", cantidad: l.q || 0, costo: l.costo || 0, iva, total: val + iva, estado: c.estado === "recibido" ? "Recibida" : c.estado === "cancelado" ? "Cancelada" : "Pendiente", recibido: c.estado === "recibido" ? l.q || 0 : 0, pendiente: c.estado === "pedido" ? l.q || 0 : 0, soporte: (c.soporte && c.soporte.ref) || "", tipoSoporte: (c.soporte && c.soporte.tipo) || ""}); } }
+      out.push({id, proveedor: c.proveedor || "", nit: c.nit || "", fecha: f, factura: c.factura || "", producto: (p && p.nombre) || l.n || "", unidad: (p && p.unidad) || "und", cantidad: l.q || 0, costo: l.costo || 0, iva: c.estado === "recibido" ? iva : null, total: c.estado === "recibido" ? val + iva : null, pedido: c.estado === "recibido" ? null : val + iva, estado: c.estado === "recibido" ? "Recibida" : c.estado === "cancelado" ? "Cancelada" : "Pendiente", recibido: c.estado === "recibido" ? l.q || 0 : 0, pendiente: c.estado === "pedido" ? l.q || 0 : 0, soporte: (c.soporte && c.soporte.ref) || "", tipoSoporte: (c.soporte && c.soporte.tipo) || ""}); } }
   return out.sort((x, y) => x.fecha.localeCompare(y.fecha));
 }
 function filasRecomendacion() {
@@ -4452,9 +4472,9 @@ function filasCajas(a, b) {
       explicado: cerr ? r.explicado : null, difFinal: cerr ? r.final : null, esperadoRev: cerr ? r.esperado : null, contadoRev: cerr ? r.contado : null, revisada: cerr ? r.revisada : null,
       revision: !cerr ? "" : r.conAjustes ? r.items.map(ajusteTxt).join(" | ") : Math.abs(r.orig) >= 1 ? "Sin revisar" : "", hAp: hora(c.apertura.t), hCi: cerr ? hora(ci.t) : "", estado: cerr ? "Cerrada" : "Abierta", obs: cerr ? ci.obs || "" : "Caja abierta · efectivo esperado ahora " + fmt(k.esperado), id: c.id}; });
 }
-function filasMovCaja(a, b) { const out = []; for (const c of cajasAll()) if (c.fecha >= a && c.fecha <= b) for (const m of (c.movs || [])) out.push({fecha: c.fecha, hora: hora(m.t), caja: devNombre(c.dev), tipo: m.tipo === "retiro" ? "Salida de dinero" : m.tipo === "ingreso" ? "Entrada de dinero" : "Pago desde caja", valor: m.monto, motivo: m.motivo, usuario: empNombre(m.uid), soporte: ""}); return out; }
+function filasMovCaja(a, b, F) { const out = []; for (const c of cajasAll()) if (c.fecha >= a && c.fecha <= b && !(F && F.dev && c.dev !== F.dev)) for (const m of (c.movs || [])) if (!(F && F.uid && m.uid !== F.uid)) out.push({fecha: c.fecha, hora: hora(m.t), caja: devNombre(c.dev), tipo: m.tipo === "retiro" ? "Salida de dinero" : m.tipo === "ingreso" ? "Entrada de dinero" : "Pago desde caja", valor: m.monto, motivo: m.motivo, usuario: empNombre(m.uid), soporte: ""}); return out; }
 function filasGastos(a, b) { return gastosEn(a, b).map(g => ({fecha: g.fecha, proveedor: g.proveedor || "", categoria: g.cat || "", descripcion: g.desc || "", base: g.base || (g.iva ? g.valor - g.iva : g.valor), iva: g.iva || 0, retencion: g.retencion || 0, total: g.valor, metodo: g.m || "", cuenta: g.origen === "caja" || g.m === "Efectivo" ? "Caja" : "Banco", usuario: empNombre(g.uid), soporte: (g.soporte && g.soporte.ref) || "", estado: g.origen === "caja" ? "Desde caja" : (g.estado || "Registrado")})).sort((x, y) => x.fecha.localeCompare(y.fecha)); }
-function filasMermas(a, b) { return mermasAll().filter(m => m.fecha >= a && m.fecha <= b).map(m => { const p = prod(m.pid), c = costoUnit(m.pid, m.t); return {pid: m.pid, producto: (p && p.nombre) || m.pid, fecha: m.fecha, cantidad: m.q, unidad: (p && p.unidad) || "und", costo: c, total: c == null ? null : c * m.q, motivo: m.motivo, empleado: empNombre(m.uid), obs: m.obs || ""}; }).concat(perdidasHelado(a, b)); }
+function filasMermas(a, b) { return mermasAll().filter(m => m.fecha >= a && m.fecha <= b).map(m => { const p = prod(m.pid), c = costoUnit(m.pid, m.t); return {pid: m.pid, producto: (p && p.nombre) || m.pid, fecha: m.fecha, cantidad: m.q, unidad: (p && p.unidad) || "und", costo: c, total: c == null ? null : c * m.q, motivo: m.motivo, empleado: empNombre(m.uid), obs: m.obs || "", uid: m.uid, dev: m.dev}; }).concat(perdidasHelado(a, b)); }
 function filasRentabilidad(a, b) {
   const mer = {}; for (const m of filasMermas(a, b)) if (m.pid) mer[m.pid] = (mer[m.pid] || 0) + (m.total || 0);
   return rentabilidad(a, b).map(r => ({producto: r.n, pid: r.pid, unidades: r.uds, ventas: r.ing, costo: r.sinCosto ? null : r.costo, descuentos: r.desc || 0, merma: mer[r.pid] || 0}));   // r.ing ya trae el descuento restado
@@ -4493,7 +4513,7 @@ function integridad(a, b) {
   add("warn", "Cierres sin apertura", cajasAll().filter(c => c.fecha >= a && c.fecha <= b && (c.cierres || []).length && !c.apertura).length, "");
   add("warn", "Cajas sin cerrar", cajasAll().filter(c => c.fecha >= a && c.fecha <= b && c.fecha < S.today && c.apertura && cajaEstado(c) !== "cerrada").length, "Cajas de días anteriores que siguen abiertas.");
   add("warn", "Movimientos sin usuario", cajasAll().filter(c => c.fecha >= a && c.fecha <= b).reduce((s, c) => s + (c.movs || []).filter(m => !m.uid).length, 0) + mermasAll().filter(m => m.fecha >= a && m.fecha <= b && !m.uid).length, "");
-  const cr = Object.values(col("compras")).filter(c => c.estado === "recibido" && c.fecha >= a && c.fecha <= b);
+  const cr = Object.values(col("compras")).filter(c => c.estado === "recibido" && (c.recFecha || c.fecha) >= a && (c.recFecha || c.fecha) <= b);
   add("warn", "Compras sin proveedor", cr.filter(c => !c.proveedor).length, "");
   add("warn", "Compras sin soporte", cr.filter(c => !(c.soporte && c.soporte.ref)).length, "Falta la factura o documento soporte.");
   const gs = Object.values(col("gastos")).filter(g => g.fecha >= a && g.fecha <= b);
@@ -4505,15 +4525,18 @@ function integridad(a, b) {
   return out;
 }
 function informacionPendiente(a, b) {
-  const out = [], cr = Object.values(col("compras")).filter(c => c.estado === "recibido" && c.fecha >= a && c.fecha <= b);
+  const out = [], cr = Object.values(col("compras")).filter(c => c.estado === "recibido" && (c.recFecha || c.fecha) >= a && (c.recFecha || c.fecha) <= b);
   const n1 = cr.filter(c => !(c.soporte && c.soporte.ref)).length; if (n1) out.push(n1 + (n1 === 1 ? " compra sin soporte tributario" : " compras sin soporte tributario"));
   const n2 = filasTerceros(a, b).filter(t => !t.completo).length; if (n2) out.push(n2 + (n2 === 1 ? " proveedor sin identificación completa" : " proveedores sin identificación completa"));
   const n3 = filasMovCaja(a, b).filter(m => m.tipo === "Pago desde caja").length; if (n3) out.push(n3 + (n3 === 1 ? " pago desde caja sin soporte" : " pagos desde caja sin soporte"));
   const n4 = pendientes().length; if (n4) out.push(n4 + " documentos pendientes de sincronización");
   const n5 = uniq(filasVentas(a, b, {}).filter(r => r.impTipo === "validar").map(r => r.pid)).length; if (n5) out.push(n5 + " productos sin tratamiento tributario validado");
-  const n6 = ventasOk().filter(v => v.fecha >= a && v.fecha <= b && v.cliente).length; if (n6) out.push(n6 + " ventas en las que el cliente pidió factura (revisar emisión)");
+  const conDoc = new Set(Object.values(col("docelec")).map(x => x && x.ventaId)), n6 = ventasOk().filter(v => v.fecha >= a && v.fecha <= b && v.cliente && !conDoc.has(v.id)).length; if (n6) out.push(n6 + " ventas en las que el cliente pidió factura (revisar emisión)");
   return out;
 }
+// costo de lo vendido solo de los productos que llevan inventario (los mismos que cuenta el lado del inventario): un granizado sin
+// control de inventario no puede aparecer como diferencia
+function cogsInv(a, b) { let s = 0; for (const v of ventasEn(a, b)) for (const l of lineasExp(v)) { const p = prod(l.pid), c = p && p.controla !== false && !p.combo ? costoUnit(l.pid, v.t) : null; if (c != null) s += c * l.q; } return Math.round(s); }
 function conciliacion(a, b) {
   const f = finanzas(a, b), de = Object.values(col("docelec")).filter(d => d.fecha >= a && d.fecha <= b && (d.estado === "aceptado" || d.estado === "registrado")), feCfg = !!(configNeg().tributario && configNeg().tributario.proveedorFE) || de.length > 0;
   const cajas = filasCajas(a, b).filter(c => c.contado != null), cr = filasCompras(a, b).filter(c => c.estado === "Recibida"), crSop = cr.filter(c => c.soporte);
@@ -4524,13 +4547,18 @@ function conciliacion(a, b) {
     feCfg ? row("Ventas OLI vs documentos electrónicos", f.ventas, "Ventas OLI", sum(de, d => d.total || 0), "Documentos aceptados", 1, "") : {n: "Ventas OLI vs documentos electrónicos", x: f.ventas, nx: "Ventas OLI", y: null, ny: "Documentos electrónicos", dif: null, ok: false, nota: "No hay proveedor de facturación electrónica conectado. Requiere contador."},
     row("Caja OLI vs caja declarada", sum(cajas, c => c.esperadoRev), "Efectivo esperado", sum(cajas, c => c.contadoRev), "Efectivo contado", 0, cajas.some(c => c.explicado) ? "Con las diferencias ya revisadas (pagos por otro medio, gastos sin anotar, conteos)." : ""),
     row("Compras vs soportes", sum(cr, c => c.total), "Compras registradas", sum(crSop, c => c.total), "Con soporte", 0, ""),
-    row("Inventario vs costo de ventas", f.cogs, "Costo de ventas (OLI)", Math.round(cvTeo), "Inventario inicial + entradas − final − mermas y ajustes", Math.max(1000, f.cogs * 0.05), "Estimación con costos actuales; diferencias menores al 5% son normales."),
+    row("Inventario vs costo de ventas", cogsInv(a, b), "Costo de ventas (OLI, productos con inventario)", Math.round(cvTeo), "Inventario inicial + entradas − final − mermas y ajustes", Math.max(1000, f.cogs * 0.05), "Estimación con costos actuales; diferencias menores al 5% son normales."),
     row("Pagos digitales vs confirmados", digTot, "Ventas digitales", digConf, "Pagos confirmados", 0, "")
   ];
 }
+// anulaciones que el servidor marcó porque llegaron con la caja de la venta ya cerrada (la venta se descuenta igual; el administrador revisa)
+function anulacionesCajaCerrada(a, b) { const out = []; for (const d of Object.values(col("anulaciones"))) for (const x of ((d && d.items) || [])) if (x && x.cajaCerrada) { const v = ventasAll().find(y => y.id === x.ventaId), f = (v && v.fecha) || d.fecha; if (f >= a && f <= b) out.push(Object.assign({}, x, {fecha: f, venta: v ? v.num : x.ventaId, caja: v ? devNombre(v.dev) : ""})); } return out; }
 function riesgosAuditoria(a, b) {
-  const out = [], R = {ANULACION: "Medio", DESCUENTO: "Bajo", CAMBIO_PRECIO: "Medio", CAMBIO_COSTO: "Medio", AJUSTE_INVENTARIO: "Medio", GASTO_BORRADO: "Alto", REABRIR_CAJA: "Medio", SYNC_RECHAZADA: "Alto", CONFLICTO_INVENTARIO: "Alto", PRODUCTO_DESACTIVADO: "Bajo"};
+  // también lo que se descartó, se borró o se restauró, y las revisiones de diferencias de caja
+  const out = [], R = {ANULACION: "Medio", DESCUENTO: "Bajo", CAMBIO_PRECIO: "Medio", CAMBIO_COSTO: "Medio", AJUSTE_INVENTARIO: "Medio", GASTO_BORRADO: "Alto", REABRIR_CAJA: "Medio", SYNC_RECHAZADA: "Alto", CONFLICTO_INVENTARIO: "Alto", PRODUCTO_DESACTIVADO: "Bajo",
+    CAMBIO_DESCARTADO: "Alto", DATOS_DESCARTADOS: "Alto", ENVIO_PURGADO: "Alto", DATOS_RESTAURADOS: "Medio", PLATA_CONTADA_QUITADA: "Medio", CAJA_AJUSTE: "Medio", CAJA_AJUSTE_DESHECHO: "Medio"};
   for (const x of filasAuditoria(a, b)) if (R[x.codigo]) out.push({riesgo: R[x.codigo], tipo: x.accion, accion: x.detalle, usuario: x.usuario, fecha: x.fecha + " " + x.hora, soporte: x.registro});
+  for (const x of anulacionesCajaCerrada(a, b)) out.push({riesgo: "Alto", tipo: "Anulación recibida con la caja ya cerrada", accion: x.venta + " · " + fmt(x.total) + (x.motivo ? " · " + x.motivo : "") + ". Llegó el " + diaCorto(ymd(new Date(x.recibida))) + " " + hora(x.recibida) + ": revisa si se hizo antes del cierre.", usuario: empNombre(x.uid), fecha: x.fecha + " " + hora(x.t), soporte: x.caja});
   for (const c of filasCajas(a, b)) if (c.difFinal && Math.abs(c.difFinal) >= 1) out.push({riesgo: Math.abs(c.difFinal) >= 20000 ? "Alto" : "Medio", tipo: c.revisada ? "Diferencia de caja (revisada y aceptada)" : "Diferencia de caja sin revisar", accion: fmt(c.difFinal) + (c.obs ? " · " + c.obs : "") + (c.revisada ? " · " + c.revision : ""), usuario: c.empleado, fecha: c.fecha + " " + c.hCi, soporte: c.caja});
   for (const c of filasCompras(a, b)) if (c.estado === "Recibida" && !c.soporte) out.push({riesgo: "Medio", tipo: "Compra sin soporte", accion: c.producto + " · " + fmt(c.total), usuario: "", fecha: c.fecha, soporte: c.proveedor || "sin proveedor"});
   if (pendientes().length) out.push({riesgo: "Medio", tipo: "Sincronización pendiente", accion: pendientes().length + " cambios en este equipo", usuario: "", fecha: S.today, soporte: DEV.nombre});
@@ -4642,8 +4670,8 @@ const OBLIG = [
   {k: "soporte", n: "Documento soporte (compras a no obligados)", g: "Cuando compras a quien no está obligado a facturar. OLI guarda los datos; el documento lo genera quien defina tu contador.", falta: t => [!t.dsResponsable && "Quién genera el documento soporte"].filter(Boolean)},
   {k: "iva", n: "IVA", g: "Si eres responsable de IVA y qué tarifa tiene cada producto lo define tu contador. OLI no asume tarifas por el nombre del producto.", falta: () => { const n = prodsSinTrat().length; return n ? [n + " productos sin tratamiento tributario"] : []; }},
   {k: "inc", n: "Impuesto nacional al consumo", g: "Aplica solo a ciertas actividades. Valídalo con tu contador.", falta: () => { const n = prodsSinTrat().length; return n ? [n + " productos sin tratamiento tributario"] : []; }},
-  {k: "ret", n: "Retenciones en la fuente", g: "Depende de tu calidad de agente retenedor. Las retenciones se registran en cada gasto.", falta: () => []},
-  {k: "autoret", n: "Autorretenciones", g: "Solo para algunos contribuyentes. Valídalo con tu contador.", falta: () => []},
+  {k: "ret", n: "Retenciones en la fuente", g: "Depende de tu calidad de agente retenedor. Las retenciones se registran en cada gasto; OLI no calcula tarifas ni bases.", falta: () => [], soloContador: true},
+  {k: "autoret", n: "Autorretenciones", g: "Solo para algunos contribuyentes. OLI no las calcula: valídalo con tu contador.", falta: () => [], soloContador: true},
   {k: "ica", n: "Obligaciones municipales (ICA y otras)", g: "Dependen del municipio donde operas.", falta: t => [!t.municipio && "Municipio"].filter(Boolean)},
   {k: "exogena", n: "Información exógena", g: "Formatos y montos cambian por año gravable: se parametrizan en la pestaña Exógena.", falta: t => [!(configNeg().exogena || []).some(x => +x.anio === +(t.anio || S.today.slice(0, 4))) && "Formatos del año gravable"].filter(Boolean)},
   {k: "nomina", n: "Nómina electrónica", g: "Depende de si tienes trabajadores y usas la nómina como soporte de costos. OLI registra los pagos como gastos (categoría Nómina).", falta: t => [!t.proveedorNomina && "Proveedor de nómina electrónica"].filter(Boolean)}
@@ -4651,10 +4679,11 @@ const OBLIG = [
 function estadoOblig(o) {
   const c = (trib().oblig || {})[o.k] || {};
   if (c.aplica === "NO APLICA") return "NO APLICA"; if (!c.aplica || c.aplica === "POR VALIDAR") return "REQUIERE CONTADOR";
-  return o.falta(trib()).length ? "PENDIENTE" : c.validado ? "VALIDADO" : "CONFIGURADO";
+  if (o.falta(trib()).length) return "PENDIENTE";
+  return c.validado ? "VALIDADO" : o.soloContador ? "REQUIERE CONTADOR" : "CONFIGURADO";   // lo que OLI no parametriza solo queda bien cuando el contador lo valida
 }
 const tagEstado = e => `<span class="estado-tag ${({"NO APLICA": "NOAPLICA", "REQUIERE CONTADOR": "REQUIERE"})[e] || e}">${esc(e)}</span>`;
-const icoEstado = e => e === "VALIDADO" || e === "CONFIGURADO" ? `<span style="color:var(--ok)">${ic("ok", 20)}</span>` : e === "NO APLICA" ? `<span style="color:var(--muted)">${ic("x", 20)}</span>` : `<span style="color:var(--warn)">${ic("alerta", 20)}</span>`;
+const icoEstado = e => e === "VALIDADO" ? `<span style="color:var(--ok)">${ic("ok", 20)}</span>` : e === "NO APLICA" ? `<span style="color:var(--muted)">${ic("x", 20)}</span>` : `<span style="color:var(--warn)">${ic("alerta", 20)}</span>`;
 const TABS_CON = [["resumen", "Resumen"], ["cumplimiento", "Cumplimiento"], ["facturacion", "Facturación"], ["soporte", "Doc. soporte"], ["exogena", "Exógena"], ["conciliacion", "Conciliación"], ["auditoria", "Auditoría"], ["cierre", "Cierre de mes"]];
 
 /* ---------- resumen ---------- */
@@ -4718,14 +4747,14 @@ ACT.doOblig = async (el, x) => { const ob = Object.assign({}, trib().oblig || {}
 function conFacturacion() {
   const t = trib(), [a, b] = rangoInf(), pidieron = ventasOk().filter(v => v.fecha >= a && v.fecha <= b && v.cliente), docs = Object.values(col("docelec")), docDe = id => docs.find(x => x.ventaId === id);
   return `<div class="card" style="border-color:${FE.conectado() ? "var(--marca)" : "var(--warn)"}"><h3>Proveedor tecnológico</h3><div class="row"><span>Estado</span>${tagEstado(FE.conectado() ? "CONFIGURADO" : "PENDIENTE")}</div><div class="row"><span>Proveedor</span><b>${esc(t.proveedorFE || "Sin definir")}</b></div><div class="row"><span>Integración</span><b>${esc(FE.estado())}</b></div>
-      <p class="small" style="margin:10px 0 0">OLI tiene lista la capa para conectarse a un proveedor tecnológico autorizado (factura electrónica, notas crédito y débito, documento equivalente POS, respuesta de validación, CUFE, QR, prefijos y resoluciones). <b>Mientras no haya un proveedor conectado, OLI no emite documentos electrónicos ni crea facturas ficticias.</b></p>
+      <p class="small" style="margin:10px 0 0"><b>OLI no se conecta con proveedores de facturación electrónica y no emite documentos electrónicos</b> (tampoco crea facturas ficticias). La factura, la nota o el documento equivalente se emiten en el portal de tu proveedor; aquí puedes registrar su número o CUFE para que quede la trazabilidad.</p>
       <button class="btn ghost sm" style="margin-top:10px" data-act="editFE">Datos de facturación y numeración</button></div>
-    <div class="card"><h3>Documentos contemplados</h3>${tablaVista([{h: "Documento", f: r => r}, {h: "Estado", f: () => FE.conectado() ? "Listo para emitir" : '<span class="pill warn">Requiere proveedor conectado</span>'}], ["Factura electrónica de venta", "Nota crédito", "Nota débito", "Documento equivalente electrónico POS"])}
+    <div class="card"><h3>Documentos contemplados</h3>${tablaVista([{h: "Documento", f: r => r}, {h: "Estado", f: () => '<span class="pill warn">Se emite en el portal del proveedor</span>'}], ["Factura electrónica de venta", "Nota crédito", "Nota débito", "Documento equivalente electrónico POS"])}
       <div class="row"><span>Numeración</span><b>${t.prefijo || t.resolucion ? esc((t.prefijo || "") + " · Res. " + (t.resolucion || "—") + " · " + (t.rangoDesde || "?") + " a " + (t.rangoHasta || "?") + (t.resVence ? " · vence " + fCorta(t.resVence) : "")) : "Sin configurar"}</b></div></div>
     <div class="card"><h3>Ventas en las que el cliente pidió factura</h3><p class="small muted" style="margin-top:-4px">${periodoDoc(a, b)}. Si la factura se emitió en el portal de tu proveedor, registra aquí el número o CUFE para que quede la trazabilidad.</p>
       ${pidieron.length ? tablaVista([{h: "Venta", f: v => esc(v.num)}, {h: "Fecha", f: v => fCorta(v.fecha)}, {h: "Cliente", f: v => { const cl = clienteDe(v); return esc((cl && (cl.nombre || cl.doc)) || ""); }}, {h: "Total", n: 1, f: v => fmt(v.total)}, {h: "Documento", f: v => { const dd = docDe(v.id); return dd ? `<span class="pill ok">${esc(dd.numero || dd.cufe || "Registrado")}</span>` : `<button class="btn ghost sm" style="min-height:30px" data-act="regDoc" data-id="${esc(v.id)}">Registrar emisión</button>`; }}], pidieron) : '<p class="muted" style="margin:0">Ningún cliente pidió factura en este periodo.</p>'}</div>`;
 }
-ACT.editFE = () => { const t = trib(); abrir(() => head("Facturación y numeración") + `<p class="small muted" style="margin-top:0">Datos de tu proveedor y de la resolución de numeración. Las credenciales del proveedor nunca se guardan en este equipo: la conexión se hace desde el servidor.</p>
+ACT.editFE = () => { const t = trib(); abrir(() => head("Facturación y numeración") + `<p class="small muted" style="margin-top:0">Datos de tu proveedor y de la resolución de numeración, para tenerlos a mano. OLI no se conecta con el proveedor: no escribas aquí usuarios ni contraseñas.</p>
   <label class="f" for="fe-p">Proveedor tecnológico</label><input class="in plain" id="fe-p" value="${esc(t.proveedorFE || "")}" placeholder="Nombre del proveedor">
   <label class="f">Ambiente</label>${sel("fe-amb", ["Pruebas", "Producción"], t.feAmbiente || "Pruebas")}
   <div class="split"><div><label class="f" for="fe-pre">Prefijo</label><input class="in plain" id="fe-pre" value="${esc(t.prefijo || "")}"></div><div><label class="f" for="fe-res">N.º resolución</label><input class="in plain" id="fe-res" value="${esc(t.resolucion || "")}"></div></div>
@@ -4881,8 +4910,9 @@ function datosInforme(a, b, F) {
   const ventas = filasVentas(a, b, F); for (const r of ventas) { const c = r.costoU !== undefined ? r.costoU : costoUnit(r.pid, r.t); r.costo = c == null ? null : Math.round(c * r.cantidad); }
   const ok = ventas.filter(r => r.estado === "Confirmada"), ids = uniq(ok.map(r => r.id)), tot = sum(ok, r => r.total), desc = sum(ok, r => r.descuento), costo = sum(ok, r => r.costo || 0), bruto = tot + desc;
   const anuladas = uniq(ventas.filter(r => r.estado === "Anulada").map(r => r.id)), anuladoTot = sum(ventas.filter(r => r.estado === "Anulada"), r => r.total);
-  const gastos = filasGastos(a, b), gastosOp = hayFiltro(F) ? null : sum(gastos.filter(g => g.categoria !== BASE_COSTO), g => g.total), bruta = tot - costo, util = gastosOp == null ? null : bruta - gastosOp;
-  const mermas = filasMermas(a, b).filter(m => { const p = prod(m.pid); return (!F.pid || (p && p.id === F.pid)) && (!F.cat || (p && p.cat === F.cat)); });
+  // igual que Dinero: también se restan las devoluciones en efectivo de ventas de cajas ya cerradas
+  const gastos = filasGastos(a, b), devol = hayFiltro(F) ? null : sum(devolucionesEn(a, b), x => x.monto), gastosOp = hayFiltro(F) ? null : sum(gastos.filter(g => g.categoria !== BASE_COSTO), g => g.total) + devol, bruta = tot - costo, util = gastosOp == null ? null : bruta - gastosOp;
+  const mermas = filasMermas(a, b).filter(m => { const p = prod(m.pid); return (!F.pid || (p && p.id === F.pid)) && (!F.cat || (p && p.cat === F.cat)) && (!F.dev || m.dev === F.dev) && (!F.uid || m.uid === F.uid); });
   const rmap = {}; for (const r of ok) { const o = rmap[r.pid] = rmap[r.pid] || {pid: r.pid, producto: r.producto, categoria: r.categoria, unidades: 0, ventas: 0, costo: 0, sinCosto: 0, descuentos: 0, merma: 0}; o.unidades += r.cantidad; o.ventas += r.total; o.descuentos += r.descuento; if (r.costo == null) o.sinCosto += r.cantidad; else o.costo += r.costo; }
   for (const m of mermas) if (m.pid && rmap[m.pid]) rmap[m.pid].merma += m.total || 0;
   const rent = Object.values(rmap).map(o => Object.assign(o, {bruta: o.ventas - o.costo, margen: o.ventas ? (o.ventas - o.costo) / o.ventas : null, neta: o.ventas - o.costo - o.merma, costoOk: o.sinCosto === 0})).sort((x, y) => y.bruta - x.bruta);
@@ -4896,8 +4926,8 @@ function datosInforme(a, b, F) {
   control.push({t: "Total = suma de productos − descuentos", ok: Math.abs(tot - (sum(ok, r => r.precio * r.cantidad) - desc)) < 1, x: tot, y: sum(ok, r => r.precio * r.cantidad) - desc});
   control.push({t: "Base + impuesto = total", ok: Math.abs(sum(ok, r => r.subtotal + r.impuesto) - tot) < 1, x: sum(ok, r => r.subtotal + r.impuesto), y: tot});
   return {a, b, F, filtrado: hayFiltro(F), ventas, ok, n: ids.length, tot, desc, bruto, costo, bruta, gastosOp, util, margen: tot && util != null ? util / tot : null, margenBruto: tot ? bruta / tot : null, ticket: ids.length ? tot / ids.length : 0,
-    uds: sum(ok, r => r.cantidad), anuladas: anuladas.length, anuladoTot, sinCosto: ok.filter(r => r.costo == null).length, rent, dias, cats: agrupa("categoria"), metodos: agrupa("metodo"), empleados: agrupa("empleado"), cajasV: agrupa("caja"),
-    inv: filasInventario(a, b), compras: filasCompras(a, b), rec: filasRecomendacion(), cajas, movCaja: filasMovCaja(a, b), gastos, mermas, clientes: filasClientes(a, b), anul: filasAnulaciones(a, b), audit: filasAuditoria(a, b), ajustes: filasAjustes(a, b),
+    uds: sum(ok, r => r.cantidad), anuladas: anuladas.length, anuladoTot, sinCosto: ok.filter(r => r.costo == null || r.costoParcial).length, rent, dias, cats: agrupa("categoria"), metodos: agrupa("metodo"), empleados: agrupa("empleado"), cajasV: agrupa("caja"),
+    inv: filasInventario(a, b), compras: filasCompras(a, b), rec: filasRecomendacion(), cajas, movCaja: filasMovCaja(a, b, F), gastos, mermas, clientes: filasClientes(a, b), anul: filasAnulaciones(a, b), audit: filasAuditoria(a, b), ajustes: filasAjustes(a, b),
     terceros: filasTerceros(a, b), imp: resumenImpuestos(a, b), integ: integridad(a, b), pend: informacionPendiente(a, b), conc: conciliacion(a, b), riesgos: riesgosAuditoria(a, b), control};
 }
 // periodo anterior de igual duración (para tendencias)
@@ -5009,7 +5039,7 @@ const xlsxBlob = async wb => new Blob([await wb.xlsx.writeBuffer()], {type: "app
 const COLS = {
   ventas: [{h: "ID venta", k: "id"}, {h: "N.º", k: "num"}, {h: "Fecha", k: "fecha", t: "fecha"}, {h: "Hora", k: "hora"}, {h: "Caja", k: "caja"}, {h: "Empleado", k: "empleado"}, {h: "Producto", k: "producto"}, {h: "Detalle", k: "detalle"}, {h: "Categoría", k: "categoria"}, {h: "Cantidad", k: "cantidad", t: "num", tot: 1}, {h: "Precio unitario", k: "precio", t: "money"}, {h: "Descuento", k: "descuento", t: "money", tot: 1}, {h: "Subtotal (base)", k: "subtotal", t: "money", tot: 1}, {h: "Impuesto", k: "impuesto", t: "money", tot: 1}, {h: "Total", k: "total", t: "money", tot: 1}, {h: "Tratamiento tributario", f: r => TIPO_IMP[r.impTipo] || r.impTipo}, {h: "Método de pago", k: "metodo"}, {h: "Cliente", k: "cliente"}, {h: "Estado", k: "estado", estado: 1}, {h: "Estado sincronización", k: "sync"}],
   inventario: [{h: "Producto", k: "producto"}, {h: "SKU / código", k: "sku"}, {h: "Categoría", k: "categoria"}, {h: "Tipo", k: "tipo"}, {h: "Unidad", k: "unidad"}, {h: "Inventario inicial", k: "inicial", t: "num"}, {h: "Entradas", k: "entradas", t: "num", tot: 1}, {h: "Salidas", k: "salidas", t: "num", tot: 1}, {h: "Ventas", k: "ventas", t: "num", tot: 1}, {h: "Mermas", k: "mermas", t: "num", tot: 1}, {h: "Consumo en producción", k: "consumo", t: "num", tot: 1}, {h: "Cajas abiertas (helado)", k: "abiertas", t: "num", tot: 1}, {h: "Ajustes (conteos)", k: "ajustes", t: "num", tot: 1, neg: 1}, {h: "Inventario final", k: "final", t: "num", neg: 1}, {h: "Costo unitario", k: "costo", t: "money"}, {h: "Valor inventario", id: "valor", f: r => r.final != null && r.costo != null ? Math.max(0, r.final) * r.costo : null, t: "money", tot: 1}, {h: "Inventario mínimo", k: "minimo", t: "num"}, {h: "Stock de seguridad", k: "seguridad", t: "num"}, {h: "Días de cobertura", k: "cobertura", t: "num"}, {h: "Estado", k: "estado", estado: 1}],
-  compras: [{h: "Proveedor", k: "proveedor"}, {h: "NIT", k: "nit"}, {h: "Fecha", k: "fecha", t: "fecha"}, {h: "Factura", k: "factura"}, {h: "Producto", k: "producto"}, {h: "Cantidad", k: "cantidad", t: "num", tot: 1}, {h: "Unidad", k: "unidad"}, {h: "Costo unitario", k: "costo", t: "money"}, {h: "IVA", k: "iva", t: "money", tot: 1}, {h: "Total", k: "total", t: "money", tot: 1}, {h: "Estado", k: "estado"}, {h: "Recibido", k: "recibido", t: "num", tot: 1}, {h: "Pendiente", k: "pendiente", t: "num", tot: 1}, {h: "Tipo de soporte", k: "tipoSoporte"}, {h: "Soporte (referencia)", k: "soporte"}],
+  compras: [{h: "Proveedor", k: "proveedor"}, {h: "NIT", k: "nit"}, {h: "Fecha", k: "fecha", t: "fecha"}, {h: "Factura", k: "factura"}, {h: "Producto", k: "producto"}, {h: "Cantidad", k: "cantidad", t: "num", tot: 1}, {h: "Unidad", k: "unidad"}, {h: "Costo unitario", k: "costo", t: "money"}, {h: "IVA", k: "iva", t: "money", tot: 1}, {h: "Total recibido", k: "total", t: "money", tot: 1}, {h: "Valor pedido sin recibir", k: "pedido", t: "money", tot: 1}, {h: "Estado", k: "estado"}, {h: "Recibido", k: "recibido", t: "num", tot: 1}, {h: "Pendiente", k: "pendiente", t: "num", tot: 1}, {h: "Tipo de soporte", k: "tipoSoporte"}, {h: "Soporte (referencia)", k: "soporte"}],
   recomendacion: [{h: "Producto", k: "producto"}, {h: "Inventario", k: "inventario", t: "num"}, {h: "Consumo promedio / día", k: "consumo", t: "num"}, {h: "Demanda estimada (7 días)", k: "demanda", t: "num"}, {h: "Stock de seguridad", k: "seguridad", t: "num"}, {h: "Cantidad recomendada", k: "cantidad", t: "num", tot: 1}, {h: "Proveedor sugerido", k: "proveedor"}, {h: "Costo estimado", k: "costoTotal", t: "money", tot: 1}, {h: "Fecha recomendada de compra", k: "fecha", t: "fecha"}, {h: "Motivo", k: "motivo"}],
   cajas: [{h: "Fecha", k: "fecha", t: "fecha"}, {h: "Caja", k: "caja"}, {h: "Empleado", k: "empleado"}, {h: "Apertura", k: "apertura", t: "money", tot: 1}, {h: "Ventas efectivo", k: "efectivo", t: "money", tot: 1}, {h: "Ventas digitales y tarjeta", k: "digitales", t: "money", tot: 1}, {h: "Entradas de dinero", k: "ingresos", t: "money", tot: 1}, {h: "Retiros", k: "retiros", t: "money", tot: 1}, {h: "Gastos pagados en caja", k: "gastos", t: "money", tot: 1}, {h: "Efectivo esperado", k: "esperado", t: "money", tot: 1}, {h: "Efectivo contado", k: "contado", t: "money", tot: 1}, {h: "Diferencia al cerrar", k: "diferencia", t: "money", tot: 1, neg: 1}, {h: "Explicado al revisar", k: "explicado", t: "money", tot: 1}, {h: "Diferencia final", k: "difFinal", t: "money", tot: 1, neg: 1}, {h: "Revisión", k: "revision"}, {h: "Hora apertura", k: "hAp"}, {h: "Hora cierre", k: "hCi"}, {h: "Estado", k: "estado"}, {h: "Observación", k: "obs"}],
   movCaja: [{h: "Fecha", k: "fecha", t: "fecha"}, {h: "Hora", k: "hora"}, {h: "Caja", k: "caja"}, {h: "Tipo", k: "tipo"}, {h: "Valor", k: "valor", t: "money", tot: 1}, {h: "Motivo", k: "motivo"}, {h: "Usuario", k: "usuario"}, {h: "Soporte", k: "soporte"}],
@@ -5063,7 +5093,7 @@ function hojaResumen(wb, d, hojas, titulo) {
   const masV = top5(d.rent, "unidades", 3).map(r => r.producto + " (" + fmtN(r.unidades, 0) + ")").join(", "), masR = d.rent.filter(r => r.costoOk).slice(0, 3).map(r => r.producto + " (" + fmt(r.bruta) + ")").join(", ");
   y = lineaTexto(ws, y, "Más vendidos: " + (masV || "—")); y = lineaTexto(ws, y, "Más rentables: " + (masR || "—"));
   if (d.metodos.length) y = lineaTexto(ws, y, "Medios de pago: " + d.metodos.map(m => m.n + " " + fmt(m.v) + " (" + pct(d.tot ? m.v / d.tot : 0) + ")").join(" · "));
-  const ag = d.inv.filter(r => r.estado === "AGOTADO").map(r => r.producto); y = lineaTexto(ws, y, "Agotados al cierre: " + (ag.length ? ag.join(", ") : "ninguno"));
+  const ag = d.inv.filter(r => r.estado === "AGOTADO").map(r => r.producto); y = lineaTexto(ws, y, (d.b < S.today ? "Agotados al " + d.b : "Agotados hoy") + ": " + (ag.length ? ag.join(", ") : "ninguno"));
   if (d.rec.length) y = lineaTexto(ws, y, "Comprar: " + d.rec.slice(0, 5).map(r => r.cantidad + " " + r.producto).join(", "));
   y++; y = lineaTexto(ws, y, NOTA_COSTOS, {color: XC.gris, font: {italic: true, size: 9}, h: 26});
   lineaTexto(ws, y, "OLI · Software propiedad de VP Visual Project · Creado por Víctor Palacio", {color: XC.gris, font: {size: 8}});
@@ -5096,7 +5126,7 @@ const MODULOS = {
   gastos: {t: "Gastos", hojas: d => [["Gastos", COLS.gastos, d.gastos], ["Por categoría", [{h: "Categoría", k: "n"}, {h: "Total", k: "v", t: "money", tot: 1}], agruparPor(d.gastos, "categoria", "total")]]},
   rentabilidad: {t: "Rentabilidad", hojas: d => [["Rentabilidad por producto", COLS.rent, d.rent, {notas: [NOTA_COSTOS]}], ["Más vendidos", COLS.rent, top5(d.rent, "unidades", 50)], ["Mayor margen", COLS.rent, d.rent.filter(r => r.margen != null).sort((x, y) => y.margen - x.margen)], ["Menor margen", COLS.rent, d.rent.filter(r => r.margen != null).sort((x, y) => x.margen - y.margen)], ["Baja rotación", [{h: "Producto", f: r => r.p.nombre}, {h: "Inventario", k: "st", t: "num"}, {h: "Vendidas en 30 días", k: "u30", t: "int"}, {h: "Días de inventario", f: r => r.cov === Infinity ? null : Math.round(r.cov), t: "int"}, {h: "Recomendación", k: "rec"}], productosLentos()]]},
   mermas: {t: "Mermas", hojas: d => [["Mermas", COLS.mermas, d.mermas, {notas: resumenMermas(d)}]]},
-  clientes: {t: "Clientes", hojas: d => [["Clientes", COLS.clientes, d.clientes, {vacio: "No hay clientes registrados (solo se guardan datos cuando el cliente pide factura).", notas: ["Solo se exportan los datos necesarios para facturación (identificación, nombre y correo). No se recolecta información personal adicional."]}]]},
+  clientes: {t: "Clientes", hojas: d => [["Clientes", COLS.clientes, d.clientes, {vacio: "No hay clientes registrados (solo se guardan datos cuando el cliente pide factura).", notas: ["Incluye identificación, nombre y correo (los que dio el cliente al pedir factura) y su historial de compras en OLI (última compra, número de compras, total, ticket promedio y producto favorito). Es información personal: compártela solo con quien la necesite."]}]]},
   auditoria: {t: "Auditoría", hojas: d => [["Auditoría del periodo", COLS.riesgos, d.riesgos, {vacio: "Sin eventos de riesgo en el periodo.", notas: ["Un riesgo indica algo para revisar, no una falta comprobada."]}], ["Registro de acciones", COLS.audit, d.audit], ["Anulaciones", COLS.anul, d.anul]]},
   impuestos: {t: "Impuestos", hojas: d => [["Impuestos", COLS_IMP, filasImpuestos(d), {notas: [AVISO_TRIB, "Las tarifas salen del tratamiento configurado en cada producto. OLI no asume tarifas por el nombre del producto."]}]]},
   terceros: {t: "Terceros", hojas: d => [["Terceros", COLS.terceros, d.terceros, {notas: ["Base para preparar información exógena. Formatos y versiones se parametrizan en Contabilidad → Exógena."]}]]}
@@ -5108,7 +5138,8 @@ function resumenMermas(d) {
 }
 const COLS_IMP = [{h: "Concepto", k: "c"}, {h: "Tratamiento", k: "t"}, {h: "Tarifa", k: "r", t: "pct"}, {h: "Base", k: "base", t: "money", tot: 1}, {h: "Impuesto", k: "imp", t: "money", tot: 1}, {h: "Total", k: "total", t: "money", tot: 1}, {h: "Estado", k: "e"}];
 function filasImpuestos(d) {
-  const out = d.imp.ventas.map(x => ({c: "Ventas", t: TIPO_IMP[x.tipo] || x.tipo, r: x.tarifa, base: x.base, imp: x.impuesto, total: x.total, e: x.tipo === "validar" ? "POR VALIDAR con el contador" : "Configurado"}));
+  // las ventas sin tratamiento validado no tienen tarifa ni base: no se muestran como 0 %
+  const out = d.imp.ventas.map(x => x.tipo === "validar" ? {c: "Ventas", t: TIPO_IMP[x.tipo] || x.tipo, r: null, base: null, imp: null, total: x.total, e: "POR VALIDAR con el contador: sin tarifa ni base"} : {c: "Ventas", t: TIPO_IMP[x.tipo] || x.tipo, r: x.tarifa, base: x.base, imp: x.impuesto, total: x.total, e: "Configurado"});
   out.push({c: "IVA en compras registradas", t: "IVA descontable (por validar)", r: null, base: null, imp: d.imp.ivaCompras, total: null, e: "Según soportes registrados"});
   out.push({c: "IVA en gastos registrados", t: "IVA (por validar)", r: null, base: null, imp: d.imp.ivaGastos, total: null, e: "Según soportes registrados"});
   out.push({c: "Retenciones registradas en gastos", t: "Retención", r: null, base: null, imp: d.imp.retenciones, total: null, e: "Según registro"});
@@ -5117,6 +5148,7 @@ function filasImpuestos(d) {
 async function excelModulo(k, d) {
   await lib("ExcelJS"); const M = MODULOS[k], wb = nuevoLibro();
   for (const [n, cols, rows, o] of M.hojas(d)) hojaTabla(wb, n, n === M.t ? M.t : M.t + " · " + n, cols, rows || [], d, o || {});
+  if (d.integ && d.integ.length) hojaIntegridad(wb, d);   // las inconsistencias del periodo van también en el archivo por tema
   return xlsxBlob(wb);
 }
 
@@ -5212,7 +5244,7 @@ async function pdfEmpresarial(d) {
   const recs = recsNoCompra(d); if (recs.length) for (const r of recs) pdfTxt(doc, "• " + r.t + (r.d ? " " + r.d : ""), {size: 9.5}); else pdfTxt(doc, "Sin recomendaciones pendientes.");
   pdfTxt(doc, "Recomendaciones calculadas con la información disponible al " + generadoTxt() + ". OLI recomienda; las decisiones son del administrador.", {c: PDFC.gris, size: 8.5});
   pdfH(doc, "Anexos", 14);
-  pdfTxt(doc, "Metodología: ventas = suma de ventas confirmadas (sin anuladas). Costo de ventas = costo registrado del producto en la fecha de cada venta. Utilidad estimada = utilidad bruta − gastos operativos (sin materia prima, que ya está en el costo). Recomendación de compra = demanda estimada + stock de seguridad − inventario − pedidos pendientes.", {size: 9});
+  pdfTxt(doc, "Metodología: ventas = suma de ventas confirmadas (sin anuladas). Costo de ventas = costo registrado del producto en la fecha de cada venta. Utilidad estimada = utilidad bruta − gastos operativos registrados y devoluciones en efectivo (sin materia prima, que ya está en el costo); no descuenta los gastos fijos del plan que no se hayan registrado. Recomendación de compra = demanda estimada + stock de seguridad − inventario − pedidos pendientes.", {size: 9});
   for (const c of d.control) pdfTxt(doc, (c.ok ? "OK  " : "X  ") + "Control: " + c.t, {size: 9, c: c.ok ? PDFC.verdeO : PDFC.rojo});
   return pdfCierre(doc, "Informe empresarial · " + periodoDoc(d.a, d.b));
 }
@@ -5228,7 +5260,7 @@ async function pdfDueno(d) {
   const [pa, pb] = periodoAnterior(d.a, d.b), ant = datosVentasRapido(pa, pb, d.F), cmp = comparable(d, ant);
   const P = (q, a) => { pdfH2(doc, q); pdfTxt(doc, a, {size: 10.5}); doc._y += 1; };
   P("¿Cuánto vendí?", `${fmt(d.tot)} en ${fmtN(d.n, 0)} ventas (ticket promedio ${fmt(d.ticket)}).${cmp ? " Frente al periodo anterior: " + (d.tot >= ant.tot ? "subió " : "bajó ") + pct(Math.abs(d.tot - ant.tot) / ant.tot) + "." : ""}`);
-  P("¿Cuánto gané?", `Utilidad bruta ${fmt(d.bruta)} (margen ${pct(d.margenBruto || 0)}).${d.util != null ? " Después de gastos (" + fmt(d.gastosOp) + "): " + fmt(d.util) + "." : ""}${d.sinCosto ? " Ojo: faltan costos en " + d.sinCosto + " líneas, la ganancia real puede ser menor." : ""}`);
+  P("¿Cuánto gané?", `Utilidad bruta ${fmt(d.bruta)} (margen ${pct(d.margenBruto || 0)}).${d.util != null ? " Después de los gastos registrados (" + fmt(d.gastosOp) + "): " + fmt(d.util) + "." + (totalFijos() > 0 ? " No incluye los gastos fijos del plan que todavía no estén registrados (el plan es de " + fmt(totalFijos()) + " al mes)." : "") : ""}${d.sinCosto ? " Ojo: faltan costos en " + d.sinCosto + " líneas, la ganancia real puede ser menor." : ""}`);
   P("¿Qué vendí?", top5(d.rent, "unidades", 5).map(r => r.producto + ": " + fmtN(r.unidades, 0) + " (" + fmt(r.ventas) + ")").join(" · ") || "Sin ventas.");
   const ag = d.inv.filter(r => r.estado === "AGOTADO").map(r => r.producto); P("¿Qué se agotó?", ag.length ? ag.join(", ") + "." : "Nada está agotado ahora.");
   P("¿Qué debo comprar?", d.rec.length ? "Para los próximos 7 días: " + d.rec.slice(0, 6).map(r => r.cantidad + " " + r.producto).join(", ") + (sum(d.rec, r => r.costoTotal || 0) ? ". Costo estimado " + fmt(sum(d.rec, r => r.costoTotal || 0)) + "." : ".") : "Por ahora no hace falta comprar.");
@@ -5246,16 +5278,17 @@ function resumenContable(d) {
   const cc = d.cajas.filter(c => c.contado != null), sinRev = cc.filter(c => c.revisada === false).length, impV = sum(d.imp.ventas, x => x.impuesto);
   return [
     ["Periodo", periodoDoc(d.a, d.b), ""], ["Ventas brutas (antes de descuentos)", fmt(d.bruto), "Ventas confirmadas"], ["Devoluciones / anulaciones", fmt(d.anuladoTot), d.anuladas + " ventas anuladas (no se suman)"], ["Descuentos", fmt(d.desc), ""],
-    ["Ingresos netos", fmt(d.tot), "Ventas brutas − descuentos (impuestos incluidos)"], ["Base gravable / no gravada de ventas", fmt(sum(d.imp.ventas, x => x.base)), "Según tratamiento configurado"], ["Costo de ventas", fmt(d.costo), d.sinCosto ? d.sinCosto + " líneas sin costo" : "Costo registrado"],
-    ["Utilidad bruta", fmt(d.bruta), ""], ["Gastos", d.gastosOp == null ? "–" : fmt(d.gastosOp), "Operativos, sin materia prima"], ["Utilidad estimada", d.util == null ? "–" : fmt(d.util), "Estimación de gestión, no es un estado financiero"],
+    ["Ingresos netos", fmt(d.tot), "Ventas brutas − descuentos (impuestos incluidos)"], ["Base de ventas con tratamiento configurado", fmt(sum(d.imp.ventas.filter(x => x.tipo !== "validar"), x => x.base)), "Las ventas por validar (" + fmt(sum(d.imp.ventas.filter(x => x.tipo === "validar"), x => x.total)) + ") no tienen base: las define el contador"], ["Costo de ventas", fmt(d.costo), d.sinCosto ? d.sinCosto + " líneas sin costo" : "Costo registrado"],
+    ["Utilidad bruta", fmt(d.bruta), ""], ["Gastos", d.gastosOp == null ? "–" : fmt(d.gastosOp), "Operativos registrados y devoluciones, sin materia prima ni gastos fijos sin registrar"], ["Utilidad estimada", d.util == null ? "–" : fmt(d.util), "Estimación de gestión, no es un estado financiero"],
     ["Impuestos en ventas (según configuración)", fmt(impV), d.imp.porValidar ? fmt(d.imp.porValidar) + " de ventas con tratamiento POR VALIDAR" : ""], ["IVA en compras y gastos registrado", fmt(d.imp.ivaCompras + d.imp.ivaGastos), "Por validar contra soportes"], ["Retenciones registradas", fmt(d.imp.retenciones), ""],
-    ["Compras recibidas", fmt(sum(recib, c => c.total)), recib.length + " líneas"], ["Cuentas por pagar", "No registrado", "OLI no lleva cartera de proveedores. Pedidos sin recibir: " + fmt(sum(pedidas, c => c.total))],
+    ["Compras recibidas", fmt(sum(recib, c => c.total)), recib.length + " líneas"], ["Cuentas por pagar", "No registrado", "OLI no lleva cartera de proveedores. Pedidos sin recibir: " + fmt(sum(pedidas, c => c.pedido || 0))],
     ["Cuentas por cobrar", fmt(sum(porConf, v => v.total)), "Pagos digitales sin confirmar (" + porConf.length + "). OLI no vende a crédito."],
     ["Inventarios (a costo actual)", fmt(valIni) + " → " + fmt(valFin), "Inicial → final"], ["Caja (efectivo esperado / contado)", fmt(sum(cc, c => c.esperado)) + " / " + fmt(sum(cc, c => c.contado)), cc.length + " cierres"],
     ["Diferencias de caja", fmt(sum(cc, c => c.difFinal || 0)), cc.filter(c => Math.abs(c.difFinal || 0) >= 1).length + " cierres con diferencia" + (sinRev ? " · " + sinRev + " sin revisar" : "")], ["Novedades", d.ajustes.length + " movimientos de inventario · " + d.mermas.length + " mermas", "Mermas a costo: " + fmt(sum(d.mermas, m => m.total || 0))]
   ];
 }
-function consecutivos(d) { const m = {}; for (const v of ventasAll()) if (v.fecha >= d.a && v.fecha <= d.b) { const k = devNombre(v.dev), o = m[k] = m[k] || {caja: k, min: Infinity, max: -Infinity, n: 0, anul: 0}; o.min = Math.min(o.min, v.n || 0); o.max = Math.max(o.max, v.n || 0); o.n++; if (v.anulada) o.anul++; } return Object.values(m); }
+function consecutivos(d) { const m = {}, nombres = {}; for (const v of ventasAll()) if (v.fecha >= d.a && v.fecha <= d.b) (nombres[devNombre(v.dev)] = nombres[devNombre(v.dev)] || new Set()).add(v.dev);
+  for (const v of ventasAll()) if (v.fecha >= d.a && v.fecha <= d.b) { const k = v.dev, nom = devNombre(v.dev), o = m[k] = m[k] || {caja: nom + (nombres[nom].size > 1 ? " (" + String(v.dev).slice(-4) + ")" : ""), min: Infinity, max: -Infinity, n: 0, anul: 0}; o.min = Math.min(o.min, v.n || 0); o.max = Math.max(o.max, v.n || 0); o.n++; if (v.anulada) o.anul++; } return Object.values(m); }
 async function pdfContador(d) {
   await lib("autotable"); const doc = pdfNuevo();
   doc.setFont("helvetica", "bold"); doc.setFontSize(16); doc.setTextColor(...PDFC.tinta); doc.text("Resumen contable", PM, 20); doc.setFont("helvetica", "normal"); doc.setFontSize(9.5); doc.setTextColor(...PDFC.gris);
@@ -5300,7 +5333,7 @@ async function zipContador(d, conGerencia) {
   await un("06_COSTO_VENTAS.xlsx", [["Costo de ventas", [{h: "Producto", k: "producto"}, {h: "Unidades vendidas", k: "unidades", t: "num", tot: 1}, {h: "Costo unitario promedio", k: "cu", t: "money"}, {h: "Costo de ventas", k: "costo", t: "money", tot: 1}, {h: "Ventas", k: "ventas", t: "money", tot: 1}, {h: "Costo completo", k: "completo"}], costoVentas, {notas: [NOTA_COSTOS]}],
     ["Conciliación inventario", [{h: "Comparación", k: "n"}, {h: "Valor A", k: "x", t: "money"}, {h: "Valor B", k: "y", t: "money"}, {h: "Diferencia", k: "dif", t: "money", neg: 1}, {h: "Nota", k: "nota"}], d.conc.filter(c => /Inventario/.test(c.n))]]);
   await un("07_IMPUESTOS.xlsx", [["Impuestos", COLS_IMP, filasImpuestos(d), {notas: [AVISO_TRIB]}]]);
-  await un("08_CLIENTES.xlsx", [["Clientes", COLS.clientes, d.clientes, {vacio: "No hay clientes con datos de facturación en el periodo.", notas: ["Solo datos necesarios para facturación."]}]]);
+  await un("08_CLIENTES.xlsx", [["Clientes", COLS.clientes, d.clientes, {vacio: "No hay clientes con datos de facturación en el periodo.", notas: ["Identificación, nombre y correo de quien pidió factura, y su historial de compras en OLI. Es información personal: compártela solo con quien la necesite."]}]]);
   await un("09_PROVEEDORES.xlsx", [["Proveedores", COLS.terceros, prov]]);
   await un("10_TERCEROS.xlsx", [["Terceros", COLS.terceros, d.terceros]]);
   await un("11_MERMAS.xlsx", [["Mermas", COLS.mermas, d.mermas, {notas: resumenMermas(d)}]]);
@@ -5361,8 +5394,13 @@ async function cargarCatalogoOLI() {
 async function empezarVacio() { exigirAdmin(); await guardarConfig({nombre: "OLI", margenObjetivo: .6, gastosFijos: [], movimientosEmpleado: true, preciosIncluyenImpuesto: true}); await put("meta", "app", {modo: "real", creado: Date.now(), version: 2}); }
 
 /* ---------- datos de demostración: un mes completo, reproducible ---------- */
+// un negocio con información real no carga la demostración: se mezclaría con sus ventas y le cambiaría la configuración
+const conDatosReales = () => { const app = col("meta").app; return !!(app && app.modo === "real") || ventasAll().some(v => !esDemoId(v.docId) && !esDemoId(v.id)); };
 async function cargarDemo() {
-  exigirAdmin(); const R = rng(20261004), now = Date.now(), hoy = S.today, nDias = 34, mid = hoy0();
+  exigirAdmin(); if (conDatosReales()) throw new Error("Este negocio ya tiene información real: la demostración no se carga aquí porque se mezclaría con tus ventas y cambiaría tu configuración.");
+  // lo que había antes (nombre, gastos fijos, configuración tributaria…) se guarda para devolverlo al borrar la demostración
+  if (!col("config").antesDemo && !(col("meta").app && col("meta").app.modo === "demo")) await put("config", "antesDemo", {negocio: col("config").negocio || null, app: col("meta").app || null, t: Date.now()});
+  const R = rng(20261004), now = Date.now(), hoy = S.today, nDias = 34, mid = hoy0();
   const PR = [  // id, nombre, cat, precio, costo, min, seg, stockDespuesDeHoy, peso
     ["mango", "Paleta Mango", "Paletas", 8000, 3360, 8, 6, 9, 0.22], ["fresa", "Paleta Fresa", "Paletas", 8000, 4200, 8, 6, 14, 0.17], ["maracuya", "Paleta Maracuyá", "Paletas", 8000, 2500, 8, 6, 7, 0.14],
     ["chocolate", "Paleta Chocolate", "Paletas", 9000, 4000, 6, 5, 28, 0.11], ["mora", "Paleta Mora", "Paletas", 8000, 3200, 6, 5, 25, 0.08], ["coco", "Paleta Coco", "Paletas", 8500, 3500, 4, 3, 42, 0.012], ["limon", "Paleta Limón", "Paletas", 7500, 2800, 6, 4, 18, 0.07],
@@ -5427,7 +5465,13 @@ async function borrarDemo() {
   exigirAdmin(); const cols = SHARED_COLS.concat(ADMIN_COLS).filter(c => c !== "meta");
   for (const c of cols) for (const id of Object.keys(DS.c[c] || {})) if (esDemoId(id)) await remove(c, id);
   for (const id of Object.keys(DS.c.stock || {})) if (esDemoId(id)) await remove("stock", id);
-  const m = col("meta").app; if (m && m.modo === "demo") { await remove("meta", "app"); await remove("config", "negocio").catch(() => {}); const sv = col("config").saldos; if (sv && (sv.guardado || 0) >= (m.creado || 0)) await remove("config", "saldos").catch(() => {}); }   // la plata anotada durante la demo no es real (la de antes, sí)
+  const m = col("meta").app; if (m && m.modo === "demo") {
+    // se devuelve la configuración de antes de la demostración (si no había ninguna, el negocio vuelve a empezar)
+    const antes = col("config").antesDemo;
+    if (antes && antes.app) await put("meta", "app", antes.app); else await remove("meta", "app");
+    if (antes && antes.negocio) await put("config", "negocio", antes.negocio); else await remove("config", "negocio").catch(() => {});
+    if (antes) await remove("config", "antesDemo").catch(() => {});
+    const sv = col("config").saldos; if (sv && (sv.guardado || 0) >= (m.creado || 0)) await remove("config", "saldos").catch(() => {}); }   // la plata anotada durante la demo no es real (la de antes, sí)
 }
 
 /* >>> 99-main.js */
@@ -5537,7 +5581,10 @@ function drawAuto() {
   const ae = document.activeElement, v = $("#view"), tk = $("#ticket");
   const escribiendo = ae && ae !== document.body && /INPUT|TEXTAREA|SELECT/.test(ae.tagName) && (v.contains(ae) || tk.contains(ae)) && ae.id !== "qsearch";
   if (escribiendo) { drawHeader(); banners(); return; }
+  // escribiendo en «Buscar producto»: se redibuja, pero se le devuelve el foco y el cursor (antes se cortaba lo que se escribía)
+  const q = ae && ae.id === "qsearch" ? {a: ae.selectionStart, b: ae.selectionEnd} : null;
   const sc = window.scrollY; draw(); if (!sheetFn) window.scrollTo(0, sc); if (sheetLive) redrawSheet();
+  if (q) { const el = $("#qsearch"); if (el) { el.focus({preventScroll: true}); try { el.setSelectionRange(q.a, q.b); } catch (e) {} } }
 }
 window.draw = drawAuto;
 ACT.buscar = () => abrir(() => `${head("Buscar")}<div class="search">${ic("buscar", 20)}<input class="in plain" id="gq" type="search" placeholder="Producto, venta, gasto, compra o persona" autofocus autocomplete="off"></div><div id="gres" style="margin-top:12px"></div>`, {wide: true});
@@ -5576,7 +5623,7 @@ ACT.anular = (el, d) => { const v = ventasAll().find(x => x.id === d.id); if (!v
     <button class="btn danger xl wide" style="margin-top:14px" data-act="doAnular" data-id="${esc(v.id)}">SÍ, ANULAR</button>`); };
 ACT.doAnular = async (el, d) => { const v = ventasAll().find(x => x.id === d.id); if (!v) return; const mot = selVal("an-mot"), nota = ($("#an-nota") || {value: ""}).value.trim();
   if (!mot) { toast("Elige el motivo.", true); return; }
-  await guardar(async () => { await anularVenta(v, mot + (nota ? " · " + nota : "")); cerrar(); }, "Venta anulada · queda en el historial"); };
+  await unaVez("act:anular", () => guardar(async () => { await anularVenta(v, mot + (nota ? " · " + nota : "")); cerrar(); }, "Venta anulada · queda en el historial")); };   // doble toque: una sola anulación
 /* ventas de hoy en Caja: la empleada ve las de su equipo; el administrador, todas */
 function ventasHoyHTML() {
   const vs = ventasAll().filter(v => v.fecha === S.today && (esAdmin() || v.dev === DEV.id)).sort((a, b) => b.t - a.t);

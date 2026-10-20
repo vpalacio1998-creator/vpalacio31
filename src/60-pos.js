@@ -78,7 +78,7 @@ function cobroHTML() {
   ${S.metodo === "Efectivo" ? `<label class="f">¿Con cuánto paga?</label><div class="btns">${billetes.map(b => `<button class="btn ${!otro && rec === b ? "pri" : "ghost"}" style="flex:1;min-width:30%" data-act="recibido" data-v="${b}">${b === total ? "Exacto" : fmt(b)}</button>`).join("")}<button class="btn ${otro ? "pri" : "ghost"}" style="flex:1;min-width:30%" data-act="recibidoOtro">Otro valor</button></div>
     ${otro ? `<label class="f" for="rc-v">Valor que entregó el cliente</label><input class="in money" id="rc-v" inputmode="numeric" autocomplete="off" value="${S.recibido !== "" ? fmt(num(S.recibido)) : ""}" placeholder="$0" style="font-size:24px;min-height:56px">${teclado("rc-v")}` : ""}
     <div class="row" style="border:0;margin-top:6px"><b>Cambio</b><span class="big" id="rc-cambio" style="font-size:30px;color:${cambio < 0 ? "var(--danger)" : "var(--marca-d)"}">${cambio < 0 ? "Faltan " + fmt(-cambio) : fmt(cambio)}</span></div>`
-  : esDigital(S.metodo) ? `<div class="notice ok" style="margin-top:12px">Cuando veas el aviso de que llegó el pago, toca <b>CONFIRMAR</b>. Si aún no llega, el administrador lo verá como “por confirmar”.</div>` : ""}
+  : esDigital(S.metodo) ? `<label class="check" style="margin-top:12px"><input type="checkbox" id="pago-visto" ${S.pagoVisto ? "checked" : ""}> Ya vi el aviso de que llegó el pago</label><p class="xs muted" style="margin:4px 0 0">Si todavía no llega, deja la casilla sin marcar: la venta queda «por confirmar» y se confirma después en Caja («Ya llegó»).</p>` : ""}
   <details style="margin:14px 0"${S.mas ? " open" : ""}><summary class="small" style="font-weight:700;cursor:pointer;min-height:40px;display:flex;align-items:center" data-act="masOpc">Más opciones</summary>
     <label class="f">Descuento</label><div class="btns">${[0, 5, 10].map(p => `<button class="btn ${S.descModo === String(p) ? "pri" : "ghost"} sm" data-act="descuento" data-p="${p}">${p === 0 ? "Sin descuento" : p + "%"}</button>`).join("")}</div>
     <label class="check" style="margin-top:12px"><input type="checkbox" id="pidefactura" data-act-change="pideFactura" ${S.cliente ? "checked" : ""}> El cliente pide factura a su nombre</label>
@@ -91,15 +91,16 @@ ACT.cobrar = () => {
   if (!S.cart.length) { toast("Toca un producto para empezar.", true); return; }
   if (!DS.canWrite) { toast("Tienes acceso de solo lectura.", true); return; }
   const c = cajaHoy(), st = cajaEstado(c); if (st === "sin") { ACT.abrirCaja(); return; } if (st === "cerrada") { toast("La caja de hoy está cerrada.", true); return; }
-  S.recibido = ""; S.recOtro = false; S.desc = 0; S.descModo = ""; S.cliente = null; S.mas = false; S.metodo = "Efectivo";   // cada venta empieza en efectivo (no hereda el método de la anterior)
+  S.recibido = ""; S.recOtro = false; S.desc = 0; S.descModo = ""; S.cliente = null; S.mas = false; S.metodo = "Efectivo"; S.pagoVisto = false;   // cada venta empieza en efectivo (no hereda el método de la anterior)
   abrir(() => cobroHTML());
 };
-ACT.metodo = (el, d) => { S.metodo = d.v; if (d.v !== "Efectivo") { S.recibido = ""; S.recOtro = false; } redrawSheet(true); };
+ACT.metodo = (el, d) => { S.metodo = d.v; S.pagoVisto = false; if (d.v !== "Efectivo") { S.recibido = ""; S.recOtro = false; } redrawSheet(true); };
 ACT.recibido = (el, d) => { S.recibido = d.v; S.recOtro = false; redrawSheet(true); };
 ACT.recibidoOtro = () => { S.recOtro = true; S.recibido = ""; redrawSheet(true); const i = $("#rc-v"); if (i) i.focus(); };
 ACT.descuento = (el, d) => { const p = Number(d.p); S.descModo = String(p); S.desc = Math.round(totalCarrito() * p / 100); S.mas = true; redrawSheet(true); };
 document.addEventListener("change", e => {
   if (e.target.id === "pidefactura") { S.cliente = e.target.checked ? {doc: "", nombre: "", correo: ""} : null; S.mas = true; redrawSheet(true); }
+  if (e.target.id === "pago-visto") S.pagoVisto = e.target.checked;
   if (e.target.id === "c-doc" || e.target.id === "c-nom" || e.target.id === "c-mail") S.cliente = {doc: $("#c-doc").value.trim(), nombre: $("#c-nom").value.trim(), correo: $("#c-mail").value.trim()};
 });
 ACT.confirmarVenta = async () => {
@@ -107,10 +108,12 @@ ACT.confirmarVenta = async () => {
   if (S.metodo === "Efectivo" && rec < total) { toast("El efectivo recibido no alcanza.", true); return; }
   if (S.cliente) S.cliente = {doc: ($("#c-doc") || {value: S.cliente.doc}).value.trim(), nombre: ($("#c-nom") || {value: S.cliente.nombre}).value.trim(), correo: ($("#c-mail") || {value: S.cliente.correo}).value.trim()};
   if (S.cliente && (!S.cliente.doc || !S.cliente.nombre)) { toast("Para la factura escribe el documento y el nombre.", true); return; }
+  const casilla = $("#pago-visto"); if (casilla) S.pagoVisto = casilla.checked;
+  const visto = esDigital(S.metodo) && !!S.pagoVisto;
   cobrando = true; redrawSheet(true);
   try {
-    const v = await registrarVenta({m: S.metodo, desc: S.desc, recibido: rec, cliente: S.cliente});
-    S.cart = []; saveCart(); S.cliente = null; S.desc = 0; S.recibido = ""; S.recOtro = false;
+    const v = await registrarVenta({m: S.metodo, desc: S.desc, recibido: rec, cliente: S.cliente, confirmada: visto});
+    S.cart = []; saveCart(); S.cliente = null; S.desc = 0; S.recibido = ""; S.recOtro = false; S.pagoVisto = false;
     const off = DS.mode === "db" && !SYNC.online;
     abrir(() => `<div class="done" data-v="${esc(v.id)}"><div class="tick">${ic("ok", 52)}</div><h2 style="margin:14px 0 4px">Venta realizada</h2><div class="big">${fmt(v.total)}</div><p class="muted" style="margin:6px 0 0">${esc(v.m)}${v.m === "Efectivo" && v.cambio > 0 ? " · Cambio: <b>" + fmt(v.cambio) + "</b>" : ""}</p>${off ? '<p class="small muted">Guardada en este equipo. Se enviará sola cuando vuelva Internet.</p>' : ""}<button class="btn pri xl wide" style="margin-top:16px" data-act="cerrar" autofocus>Nueva venta</button><button class="btn ghost wide" style="margin-top:8px" data-act="anular" data-id="${esc(v.id)}">Fue un error: anular</button></div>`);
     clearTimeout(doneTimer); const vid = v.id; doneTimer = setTimeout(() => { const el = $("#panel .done"); if (sheetFn && el && el.dataset.v === vid) cerrar(); }, 2600); draw();
@@ -159,7 +162,7 @@ VIEWS.caja = () => {
   const pend = ventasOk().filter(v => v.pend && (adm || v.fecha >= addDays(S.today, -3)));
   if (adm && S.cajaVista === "mes") return cabecera("Caja", "Acumulado del mes") + vistaCajaSeg() + cajaMesHTML();
   return cabecera("Caja", "Hoy · " + diaLargo(S.today) + (DEV.nombre ? " · " + esc(DEV.nombre) : "")) + (adm ? vistaCajaSeg() : "") + avisoCajaPendiente() + (st === "sin" ? principal : cajaCardHTML(c, true)) +
-    (st !== "sin" ? checklistHTML("apertura", CHECK_AP) : "") + (st === "abierta" ? checklistHTML("tarde", CHECK_TARDE) + checklistHTML("cierre", CHECK_CI) : "") +
+    (st !== "sin" ? checklistHTML("apertura", CHECK_AP) : "") + (st === "abierta" ? checklistHTML("tarde", CHECK_TARDE) + checklistHTML("cierre", CHECK_CI) : st === "cerrada" ? checklistHTML("cierre", CHECK_CI) : "") +
     (pend.length ? `<div class="card"><h3>Pagos por confirmar</h3><p class="small muted" style="margin-top:-4px">Mira el aviso de tu banco o billetera. Si ya llegó, toca “Ya llegó”.</p>${(adm ? pend : pend.slice(-8)).slice().reverse().map(v => `<div class="row"><div class="l"><b>${fmt(v.total)}</b> <span class="pill">${esc(v.m)}</span><div class="small muted">${v.fecha !== S.today ? diaCorto(v.fecha) + " " : ""}${hora(v.t)}${v.ref ? " · " + esc(v.ref) : ""}</div></div><button class="btn pri sm" data-act="ya" data-id="${esc(v.id)}">Ya llegó</button></div>`).join("")}</div>` : "") +
     (st === "abierta" ? `<div class="btns" style="margin-bottom:14px"><button class="btn ghost" style="flex:1" data-act="movCaja" data-t="retiro">Sacar dinero</button><button class="btn ghost" style="flex:1" data-act="movCaja" data-t="ingreso">Entró dinero</button><button class="btn ghost" style="flex:1" data-act="movCaja" data-t="gasto">Pagué algo</button></div><button class="btn pri xl wide" data-act="cerrarCaja">${ic("lock", 22)} CERRAR CAJA</button>` : "") +
     ventasHoyHTML() +
@@ -173,7 +176,7 @@ ACT.abrirCajaHoy = () => abrir(() => `${head("Abrir caja")}<p style="margin-top:
   <label class="f" for="ap-monto">Otro valor</label><input class="in money" id="ap-monto" inputmode="numeric" value="${S.apMonto ? fmt(S.apMonto) : ""}" placeholder="$0">${teclado("ap-monto")}
   <button class="btn pri xl wide" style="margin-top:14px" data-act="doAbrir">${ic("ok", 22)} ABRIR CAJA</button>`, {});
 ACT.aperturaMonto = (el, d) => { $("#ap-monto").value = Number(d.v) ? fmt(Number(d.v)) : "$0"; };
-ACT.doAbrir = async () => { const v = num($("#ap-monto").value); await guardar(async () => { await abrirCaja(v); cerrar(); draw(); }, "Caja abierta. ¡A vender!"); };
+ACT.doAbrir = async () => { if (!$("#ap-monto").value.trim()) { toast("Escribe con cuánto efectivo empiezas, o toca «$0 (sin base)».", true); return; } const v = num($("#ap-monto").value); await guardar(async () => { await abrirCaja(v); cerrar(); draw(); }, "Caja abierta. ¡A vender!"); };
 const MOT_MOV = {retiro: ["Retiro del dueño", "Consignación", "Devolución a cliente", "Cambio de billetes", "Otro"], ingreso: ["Base adicional", "Cambio de billetes", "Otro"], gasto: ["Insumos", "Domicilio", "Aseo", "Transporte", "Otro"]};
 const TIT_MOV = {retiro: "Sacar dinero de la caja", ingreso: "Entró dinero a la caja", gasto: "Pagué algo con dinero de la caja"};
 const permisoMov = () => esAdmin() || ((col("meta").permisos || {}).movimientosEmpleado !== false);
@@ -183,7 +186,9 @@ ACT.movCaja = (el, d) => { if (!permisoMov()) { toast("Pídele al administrador 
   <button class="btn pri xl wide" style="margin-top:14px" data-act="doMov">GUARDAR</button>`); };
 ACT.doMov = async () => { const m = num($("#mv-monto").value), mot = selVal("mv-mot"), nota = $("#mv-nota").value.trim(); if (!mot) { toast("Elige para qué fue.", true); return; }
   const mp = S.movTipo === "gasto" && esAdmin() && !!($("#mv-mp") || {}).checked;   // mercancía con costo: categoría «Materia prima» (Dinero no la resta dos veces)
-  await guardar(async () => { await movimientoCaja(S.movTipo, m, mot + (nota ? " · " + nota : ""), S.movTipo === "gasto" ? (mp ? BASE_COSTO : "Otros") : ""); cerrar(); draw(); }, "Guardado"); };
+  // la categoría sale del motivo: los insumos (barquillos, vasos, servilletas…) tienen costo y ya se restan en el costo de lo vendido
+  const cat = S.movTipo !== "gasto" ? "" : mp || mot === "Insumos" ? BASE_COSTO : ({Transporte: "Transporte", Domicilio: "Transporte"})[mot] || "Otros";
+  await guardar(async () => { await movimientoCaja(S.movTipo, m, mot + (nota ? " · " + nota : ""), cat); cerrar(); draw(); }, "Guardado"); };
 ACT.cerrarCaja = (el, d) => { S.cierreId = (d && d.id) || (cajaHoy() || {}).id || ""; const c = cajaSel(); if (!c) return; const k = cajaCalc(c); S.cierreVal = ""; abrir(() => {
   return `${head(c.fecha === S.today ? "Cerrar caja" : "Cerrar la caja del " + diaCorto(c.fecha))}<div class="card flat"><div class="row" style="padding-top:0"><div class="l">Ventas ${c.fecha === S.today ? "de hoy" : "de ese día"}</div><div class="r">${fmt(k.ventas)}</div></div>${Object.entries(k.por).map(([m, v]) => `<div class="row"><div class="l">${esc(m)}</div><div class="r">${fmt(v)}</div></div>`).join("")}
     <div class="row"><div class="l"><b>Efectivo que debería haber</b></div><div class="r big" style="font-size:26px">${fmt(k.esperado)}</div></div></div>

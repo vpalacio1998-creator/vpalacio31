@@ -1,6 +1,6 @@
 /* ============ 20 · dominio: productos, inventario, ventas, caja y finanzas ============ */
 const CATS = ["Paletas", "Helados", "Bebidas", "Combos", "Otros"];
-const METODOS = ["Efectivo", "Nequi", "Daviplata", "QR Bancolombia", "Tarjeta", "Otro"];
+const METODOS = ["Efectivo", "Nequi", "Daviplata", "QR Bancolombia", "Transferencia", "Tarjeta", "Otro"];
 const esDigital = m => m === "Nequi" || m === "Daviplata" || m === "QR Bancolombia";
 const CATS_GASTO = ["Arrendamiento", "Servicios", "Nómina", "Materia prima", "Transporte", "Publicidad", "Mantenimiento", "Otros"];
 const MOTIVOS_MERMA = ["Vencimiento", "Daño", "Preparación", "Error", "Devolución", "Otro"];

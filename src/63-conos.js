@@ -64,13 +64,18 @@ function perdidasHelado(a, b) {
   });
 }
 /* costo de una unidad de una línea vendida: un cono suma barquillo, cucurucho o vaso y sus bolas (costo de la caja ÷ bolas por caja) */
+// si alguna parte no tiene costo, se suma lo que sí tiene (como en Dinero) y la línea queda marcada como costo incompleto
+const PARCIAL = new WeakSet();
 function costoItem(it, t) {
   if (!Array.isArray(it.sab)) return costoUnit(it.pid, t);
-  let s = 0; const q = it.q || 1;
-  for (const x of consumoLinea(it)) { const c = costoUnit(x.pid, t); if (c == null) return null; s += c * x.q / q; }
-  for (const sb of it.sab) { const c = costoUnit(sb, t); if (c == null) return null; s += c / (it.bc || bolasCaja()); }
+  let s = 0, falta = 0, hay = 0; const q = it.q || 1;
+  for (const x of consumoLinea(it)) { const c = costoUnit(x.pid, t); if (c == null) falta++; else { s += c * x.q / q; hay++; } }
+  for (const sb of it.sab) { const c = costoUnit(sb, t); if (c == null) falta++; else { s += c / (it.bc || bolasCaja()); hay++; } }
+  if (!hay) return null;
+  if (falta) PARCIAL.add(it); else PARCIAL.delete(it);   // se recuerda por línea vendida
   return Math.round(s);
 }
+const costoParcial = it => PARCIAL.has(it);
 
 /* ---------- vender un cono: sabor(es) y cucurucho o vaso ---------- */
 S.cono = null;
