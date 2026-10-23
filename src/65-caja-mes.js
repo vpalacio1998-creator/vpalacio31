@@ -28,6 +28,11 @@ function resumenMes(mes) {
   return {a, b, L, filas, porMedio, porCat, sinCerrar, cerradas, pendientes, incompleto: DS.mode === "db" && a < addDays(S.today, -HIST_DIAS)};
 }
 
+S.detGasto = {};   // categorías abiertas en «En qué se gastó» (siguen abiertas cuando la pantalla se redibuja)
+document.addEventListener("toggle", e => { const d = e.target; if (d && d.classList && d.classList.contains("det-gasto")) S.detGasto[d.dataset.cat] = d.open; }, true);
+// cada gasto de una categoría (los de Dinero y los pagados desde la caja): qué fue, qué día, cuánto y quién
+const detGastos = (a, b, cat, filaHTML) => { const gs = gastosEn(a, b).filter(g => (g.cat || "Otros") === cat); pedirNombres(uniq(gs.map(g => g.uid).filter(Boolean)));
+  return `<details class="det-gasto" data-cat="${esc(cat)}"${S.detGasto[cat] ? " open" : ""}><summary style="list-style:none;cursor:pointer">${filaHTML}</summary><div style="padding:0 0 8px 12px">${gs.map(g => `<div class="small" style="padding:3px 0">${esc(diaCorto(g.fecha))} · ${esc(g.desc || "Sin detalle")} · <b>${fmt(g.valor)}</b><span class="muted">${g.origen === "caja" ? " · desde la caja" : ""}${nombreDe(g.uid) ? " · " + esc(nombreDe(g.uid)) : ""}</span></div>`).join("")}</div></details>`; };
 function cajaMesHTML() {
   const mes = mesCaja(), R = resumenMes(mes), L = R.L, completo = R.b === lastOfMonth(R.a);
   const plata = v => (v < 0 ? "− " : "") + fmt(Math.abs(v)), plural = (n, uno, varios) => n + " " + (n === 1 ? uno : varios);
@@ -50,7 +55,7 @@ function cajaMesHTML() {
     ${R.sinCerrar.length ? `<div class="notice bad" style="margin-bottom:12px"><b>${R.sinCerrar.length === 1 ? "Una caja quedó sin cerrar" : R.sinCerrar.length + " cajas quedaron sin cerrar"}:</b> ${esc(R.sinCerrar.map(c => nombreEq(c) + " (" + diaCorto(c.fecha) + ")").join(", "))}. Ciérrenla en ese equipo para que su efectivo y su diferencia entren en la cuenta.</div>` : ""}
     <div class="two">
       <div class="card"><h3>Cómo pagaron</h3>${medios.map(([m, v]) => fila(esc(m), "", v)).join("")}</div>
-      <div class="card"><h3>En qué se gastó</h3>${cats.length ? cats.map(([c, v]) => fila(esc(c), "", v)).join("") : '<p class="muted" style="margin:0">No hay gastos registrados este mes.</p>'}${L.devol ? fila("Devoluciones a clientes", "“Sacar dinero” → “Devolución a cliente”", L.devol) : ""}</div>
+      <div class="card"><h3>En qué se gastó</h3>${cats.length ? `<p class="small muted" style="margin-top:-4px">Toca una categoría para ver cada gasto.</p>` + cats.map(([c, v]) => detGastos(R.a, R.b, c, fila(esc(c), "", v))).join("") : '<p class="muted" style="margin:0">No hay gastos registrados este mes.</p>'}${L.devol ? fila("Devoluciones a clientes", "“Sacar dinero” → “Devolución a cliente”", L.devol) : ""}</div>
     </div>
     ${L.retDueno || L.consig || L.otrosRet || L.otrosIng || L.sinAnotar || L.aCuentas ? `<div class="card"><h3>Movimientos de caja que no suman ni restan</h3><p class="small muted" style="margin-top:-4px">La plata cambia de lugar o no se sabe qué fue.</p>
       ${L.retDueno ? fila("Retiros del dueño", "Sigue siendo plata del negocio", L.retDueno) : ""}${L.consig ? fila("Consignaciones", "Del efectivo al banco", L.consig) : ""}

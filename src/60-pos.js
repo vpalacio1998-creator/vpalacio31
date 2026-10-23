@@ -123,15 +123,17 @@ ACT.confirmarVenta = async () => {
 };
 
 /* ---------- caja ---------- */
+// el detalle de cada entrada, salida o pago de la caja (hora, para qué, cuánto y quién), para encontrarlo sin ir a otra pantalla
+const detMovs = (c, tipo) => (c.movs || []).filter(m => m.tipo === tipo).sort((a, b) => (a.t || 0) - (b.t || 0)).map(m => `<div class="small muted">${m.t ? hora(m.t) + " · " : ""}${esc(m.motivo || "Sin detalle")} · ${fmt(m.monto)}${nombreDe(m.uid) ? " · " + esc(nombreDe(m.uid)) : ""}</div>`).join("");
 function cajaCardHTML(c, mia) {
   const st = cajaEstado(c), ci = (c.cierres || []).slice(-1)[0], adm = esAdmin(), k = st === "cerrada" && ci ? cajaAlCerrar(c, ci) : cajaCalc(c);   // cerrada: tal como se cerró (lo revisado después va abajo)
   return `<div class="card"><div class="row" style="padding-top:0"><div class="l"><h3 style="margin:0">${esc(c.devNombre || (col("dispositivos")[c.dev] || {}).nombre || "Caja")}</h3><div class="small muted">${st === "abierta" ? "Abierta " + hora(c.apertura.t) : st === "cerrada" ? "Cerrada " + (ci ? hora(ci.t) : "") : "Sin abrir"}</div></div>
     <span class="pill ${st === "abierta" ? "ok" : st === "cerrada" ? "" : "warn"}">${st === "abierta" ? "Abierta" : st === "cerrada" ? "Cerrada" : "Sin abrir"}</span></div>
     ${c.apertura ? `<div class="row"><div class="l">Empezó con</div><div class="r">${fmt(k.apertura)}</div></div>
     <div class="row"><div class="l">Ventas en efectivo</div><div class="r">+ ${fmt(k.efectivo)}</div></div>
-    ${k.ingresos ? `<div class="row"><div class="l">Entró dinero</div><div class="r">+ ${fmt(k.ingresos)}</div></div>` : ""}
-    ${k.retiros ? `<div class="row"><div class="l">Salió dinero</div><div class="r">− ${fmt(k.retiros)}</div></div>` : ""}
-    ${k.gastos ? `<div class="row"><div class="l">Pagos hechos</div><div class="r">− ${fmt(k.gastos)}</div></div>` : ""}
+    ${k.ingresos ? `<div class="row"><div class="l">Entró dinero${detMovs(c, "ingreso")}</div><div class="r">+ ${fmt(k.ingresos)}</div></div>` : ""}
+    ${k.retiros ? `<div class="row"><div class="l">Salió dinero${detMovs(c, "retiro")}</div><div class="r">− ${fmt(k.retiros)}</div></div>` : ""}
+    ${k.gastos ? `<div class="row"><div class="l">Pagos hechos${detMovs(c, "gasto")}</div><div class="r">− ${fmt(k.gastos)}</div></div>` : ""}
     <div class="row"><div class="l"><b>Debería haber en efectivo</b></div><div class="r big" style="font-size:26px">${fmt(k.esperado)}</div></div>
     ${Object.entries(k.por).filter(([m]) => m !== "Efectivo").map(([m, v]) => `<div class="row"><div class="l">${esc(m)}</div><div class="r">${fmt(v)}</div></div>`).join("")}
     ${ci ? (() => { const r = difCierre(c), ok = Math.abs(r.final) < 1, rev = r.revisada && !ok;   // la diferencia que queda después de lo que revisó el administrador
@@ -187,7 +189,7 @@ ACT.movCaja = (el, d) => { if (!permisoMov()) { toast("Pídele al administrador 
 ACT.doMov = async () => { const m = num($("#mv-monto").value), mot = selVal("mv-mot"), nota = $("#mv-nota").value.trim(); if (!mot) { toast("Elige para qué fue.", true); return; }
   const mp = S.movTipo === "gasto" && esAdmin() && !!($("#mv-mp") || {}).checked;   // mercancía con costo: categoría «Materia prima» (Dinero no la resta dos veces)
   // la categoría sale del motivo: los insumos (barquillos, vasos, servilletas…) tienen costo y ya se restan en el costo de lo vendido
-  const cat = S.movTipo !== "gasto" ? "" : mp || mot === "Insumos" ? BASE_COSTO : ({Transporte: "Transporte", Domicilio: "Transporte"})[mot] || "Otros";
+  const cat = S.movTipo !== "gasto" ? "" : mp ? BASE_COSTO : ({Transporte: "Transporte", Domicilio: "Transporte"})[mot] || "Otros";   // materia prima solo si el administrador lo marca: «Insumos» puede ser leche, vasos o una jarra, que sí se restan
   await guardar(async () => { await movimientoCaja(S.movTipo, m, mot + (nota ? " · " + nota : ""), cat); cerrar(); draw(); }, "Guardado"); };
 ACT.cerrarCaja = (el, d) => { S.cierreId = (d && d.id) || (cajaHoy() || {}).id || ""; const c = cajaSel(); if (!c) return; const k = cajaCalc(c); S.cierreVal = ""; abrir(() => {
   return `${head(c.fecha === S.today ? "Cerrar caja" : "Cerrar la caja del " + diaCorto(c.fecha))}<div class="card flat"><div class="row" style="padding-top:0"><div class="l">Ventas ${c.fecha === S.today ? "de hoy" : "de ese día"}</div><div class="r">${fmt(k.ventas)}</div></div>${Object.entries(k.por).map(([m, v]) => `<div class="row"><div class="l">${esc(m)}</div><div class="r">${fmt(v)}</div></div>`).join("")}

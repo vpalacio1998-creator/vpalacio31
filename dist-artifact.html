@@ -238,6 +238,8 @@ tr.click{cursor:pointer}tr.click:hover td{background:var(--marca-soft)}
 details.help{display:inline-block;vertical-align:middle;position:relative}
 details.help summary{list-style:none;display:inline-grid;place-items:center;width:20px;height:20px;border-radius:50%;background:var(--surface-2);color:var(--muted);font-size:12px;font-weight:700;cursor:pointer}
 details.help summary::-webkit-details-marker{display:none}
+details.det-gasto summary::-webkit-details-marker{display:none}
+details.det-gasto[open] summary .row{border-bottom:0}
 details.help span{display:block;font-weight:500;font-size:13px;line-height:1.35;color:var(--ink);background:var(--surface-2);border-radius:10px;padding:8px 10px;margin:6px 0;max-width:280px;text-transform:none;letter-spacing:0}
 .gate-mode .top,.gate-mode .rail,.gate-mode .tabs{display:none!important}
 .gate-mode{display:block!important}
@@ -333,7 +335,7 @@ details.help span{display:block;font-weight:500;font-size:13px;line-height:1.35;
 <div class="sheet hidden" id="sheet"><div class="bg"></div><div class="panel" role="dialog" aria-modal="true" id="panel"></div></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script>window.OLI_BUILD="ef01772b";</script>
+<script>window.OLI_BUILD="f41f7e69";</script>
 <script>
 (function(){
 "use strict";
@@ -2670,15 +2672,17 @@ ACT.confirmarVenta = async () => {
 };
 
 /* ---------- caja ---------- */
+// el detalle de cada entrada, salida o pago de la caja (hora, para qué, cuánto y quién), para encontrarlo sin ir a otra pantalla
+const detMovs = (c, tipo) => (c.movs || []).filter(m => m.tipo === tipo).sort((a, b) => (a.t || 0) - (b.t || 0)).map(m => `<div class="small muted">${m.t ? hora(m.t) + " · " : ""}${esc(m.motivo || "Sin detalle")} · ${fmt(m.monto)}${nombreDe(m.uid) ? " · " + esc(nombreDe(m.uid)) : ""}</div>`).join("");
 function cajaCardHTML(c, mia) {
   const st = cajaEstado(c), ci = (c.cierres || []).slice(-1)[0], adm = esAdmin(), k = st === "cerrada" && ci ? cajaAlCerrar(c, ci) : cajaCalc(c);   // cerrada: tal como se cerró (lo revisado después va abajo)
   return `<div class="card"><div class="row" style="padding-top:0"><div class="l"><h3 style="margin:0">${esc(c.devNombre || (col("dispositivos")[c.dev] || {}).nombre || "Caja")}</h3><div class="small muted">${st === "abierta" ? "Abierta " + hora(c.apertura.t) : st === "cerrada" ? "Cerrada " + (ci ? hora(ci.t) : "") : "Sin abrir"}</div></div>
     <span class="pill ${st === "abierta" ? "ok" : st === "cerrada" ? "" : "warn"}">${st === "abierta" ? "Abierta" : st === "cerrada" ? "Cerrada" : "Sin abrir"}</span></div>
     ${c.apertura ? `<div class="row"><div class="l">Empezó con</div><div class="r">${fmt(k.apertura)}</div></div>
     <div class="row"><div class="l">Ventas en efectivo</div><div class="r">+ ${fmt(k.efectivo)}</div></div>
-    ${k.ingresos ? `<div class="row"><div class="l">Entró dinero</div><div class="r">+ ${fmt(k.ingresos)}</div></div>` : ""}
-    ${k.retiros ? `<div class="row"><div class="l">Salió dinero</div><div class="r">− ${fmt(k.retiros)}</div></div>` : ""}
-    ${k.gastos ? `<div class="row"><div class="l">Pagos hechos</div><div class="r">− ${fmt(k.gastos)}</div></div>` : ""}
+    ${k.ingresos ? `<div class="row"><div class="l">Entró dinero${detMovs(c, "ingreso")}</div><div class="r">+ ${fmt(k.ingresos)}</div></div>` : ""}
+    ${k.retiros ? `<div class="row"><div class="l">Salió dinero${detMovs(c, "retiro")}</div><div class="r">− ${fmt(k.retiros)}</div></div>` : ""}
+    ${k.gastos ? `<div class="row"><div class="l">Pagos hechos${detMovs(c, "gasto")}</div><div class="r">− ${fmt(k.gastos)}</div></div>` : ""}
     <div class="row"><div class="l"><b>Debería haber en efectivo</b></div><div class="r big" style="font-size:26px">${fmt(k.esperado)}</div></div>
     ${Object.entries(k.por).filter(([m]) => m !== "Efectivo").map(([m, v]) => `<div class="row"><div class="l">${esc(m)}</div><div class="r">${fmt(v)}</div></div>`).join("")}
     ${ci ? (() => { const r = difCierre(c), ok = Math.abs(r.final) < 1, rev = r.revisada && !ok;   // la diferencia que queda después de lo que revisó el administrador
@@ -2734,7 +2738,7 @@ ACT.movCaja = (el, d) => { if (!permisoMov()) { toast("Pídele al administrador 
 ACT.doMov = async () => { const m = num($("#mv-monto").value), mot = selVal("mv-mot"), nota = $("#mv-nota").value.trim(); if (!mot) { toast("Elige para qué fue.", true); return; }
   const mp = S.movTipo === "gasto" && esAdmin() && !!($("#mv-mp") || {}).checked;   // mercancía con costo: categoría «Materia prima» (Dinero no la resta dos veces)
   // la categoría sale del motivo: los insumos (barquillos, vasos, servilletas…) tienen costo y ya se restan en el costo de lo vendido
-  const cat = S.movTipo !== "gasto" ? "" : mp || mot === "Insumos" ? BASE_COSTO : ({Transporte: "Transporte", Domicilio: "Transporte"})[mot] || "Otros";
+  const cat = S.movTipo !== "gasto" ? "" : mp ? BASE_COSTO : ({Transporte: "Transporte", Domicilio: "Transporte"})[mot] || "Otros";   // materia prima solo si el administrador lo marca: «Insumos» puede ser leche, vasos o una jarra, que sí se restan
   await guardar(async () => { await movimientoCaja(S.movTipo, m, mot + (nota ? " · " + nota : ""), cat); cerrar(); draw(); }, "Guardado"); };
 ACT.cerrarCaja = (el, d) => { S.cierreId = (d && d.id) || (cajaHoy() || {}).id || ""; const c = cajaSel(); if (!c) return; const k = cajaCalc(c); S.cierreVal = ""; abrir(() => {
   return `${head(c.fecha === S.today ? "Cerrar caja" : "Cerrar la caja del " + diaCorto(c.fecha))}<div class="card flat"><div class="row" style="padding-top:0"><div class="l">Ventas ${c.fecha === S.today ? "de hoy" : "de ese día"}</div><div class="r">${fmt(k.ventas)}</div></div>${Object.entries(k.por).map(([m, v]) => `<div class="row"><div class="l">${esc(m)}</div><div class="r">${fmt(v)}</div></div>`).join("")}
@@ -3345,6 +3349,11 @@ function resumenMes(mes) {
   return {a, b, L, filas, porMedio, porCat, sinCerrar, cerradas, pendientes, incompleto: DS.mode === "db" && a < addDays(S.today, -HIST_DIAS)};
 }
 
+S.detGasto = {};   // categorías abiertas en «En qué se gastó» (siguen abiertas cuando la pantalla se redibuja)
+document.addEventListener("toggle", e => { const d = e.target; if (d && d.classList && d.classList.contains("det-gasto")) S.detGasto[d.dataset.cat] = d.open; }, true);
+// cada gasto de una categoría (los de Dinero y los pagados desde la caja): qué fue, qué día, cuánto y quién
+const detGastos = (a, b, cat, filaHTML) => { const gs = gastosEn(a, b).filter(g => (g.cat || "Otros") === cat); pedirNombres(uniq(gs.map(g => g.uid).filter(Boolean)));
+  return `<details class="det-gasto" data-cat="${esc(cat)}"${S.detGasto[cat] ? " open" : ""}><summary style="list-style:none;cursor:pointer">${filaHTML}</summary><div style="padding:0 0 8px 12px">${gs.map(g => `<div class="small" style="padding:3px 0">${esc(diaCorto(g.fecha))} · ${esc(g.desc || "Sin detalle")} · <b>${fmt(g.valor)}</b><span class="muted">${g.origen === "caja" ? " · desde la caja" : ""}${nombreDe(g.uid) ? " · " + esc(nombreDe(g.uid)) : ""}</span></div>`).join("")}</div></details>`; };
 function cajaMesHTML() {
   const mes = mesCaja(), R = resumenMes(mes), L = R.L, completo = R.b === lastOfMonth(R.a);
   const plata = v => (v < 0 ? "− " : "") + fmt(Math.abs(v)), plural = (n, uno, varios) => n + " " + (n === 1 ? uno : varios);
@@ -3367,7 +3376,7 @@ function cajaMesHTML() {
     ${R.sinCerrar.length ? `<div class="notice bad" style="margin-bottom:12px"><b>${R.sinCerrar.length === 1 ? "Una caja quedó sin cerrar" : R.sinCerrar.length + " cajas quedaron sin cerrar"}:</b> ${esc(R.sinCerrar.map(c => nombreEq(c) + " (" + diaCorto(c.fecha) + ")").join(", "))}. Ciérrenla en ese equipo para que su efectivo y su diferencia entren en la cuenta.</div>` : ""}
     <div class="two">
       <div class="card"><h3>Cómo pagaron</h3>${medios.map(([m, v]) => fila(esc(m), "", v)).join("")}</div>
-      <div class="card"><h3>En qué se gastó</h3>${cats.length ? cats.map(([c, v]) => fila(esc(c), "", v)).join("") : '<p class="muted" style="margin:0">No hay gastos registrados este mes.</p>'}${L.devol ? fila("Devoluciones a clientes", "“Sacar dinero” → “Devolución a cliente”", L.devol) : ""}</div>
+      <div class="card"><h3>En qué se gastó</h3>${cats.length ? `<p class="small muted" style="margin-top:-4px">Toca una categoría para ver cada gasto.</p>` + cats.map(([c, v]) => detGastos(R.a, R.b, c, fila(esc(c), "", v))).join("") : '<p class="muted" style="margin:0">No hay gastos registrados este mes.</p>'}${L.devol ? fila("Devoluciones a clientes", "“Sacar dinero” → “Devolución a cliente”", L.devol) : ""}</div>
     </div>
     ${L.retDueno || L.consig || L.otrosRet || L.otrosIng || L.sinAnotar || L.aCuentas ? `<div class="card"><h3>Movimientos de caja que no suman ni restan</h3><p class="small muted" style="margin-top:-4px">La plata cambia de lugar o no se sabe qué fue.</p>
       ${L.retDueno ? fila("Retiros del dueño", "Sigue siendo plata del negocio", L.retDueno) : ""}${L.consig ? fila("Consignaciones", "Del efectivo al banco", L.consig) : ""}
@@ -3591,6 +3600,7 @@ S.comp = "dow";
 function eventosHoy(max = 60) {
   const t = S.today, ev = [], disp = col("dispositivos"), dn = dev => (disp[dev] || {}).nombre || "";
   for (const v of ventasAll().filter(v => v.fecha === t)) ev.push({t: v.t, k: v.anulada ? "anul" : "venta", ic: v.anulada ? "x" : "ok", a: v.anulada ? "Venta anulada" : "Nueva venta", b: (v.items || []).slice(0, 3).map(i => nombreCorto({nombre: i.n}) + " × " + i.q).join(", ") + ((v.items || []).length > 3 ? "…" : ""), c: fmt(v.total) + " · " + v.m, quien: v.uid, dev: dn(v.dev)});
+  for (const c of cajasAll().filter(c => c.fecha === t)) for (const m of (c.movs || [])) if (m.t) ev.push({t: m.t, k: "caja", ic: m.tipo === "gasto" ? "finanzas" : "caja", a: m.tipo === "gasto" ? "Pago desde la caja" : m.tipo === "retiro" ? "Salió dinero de la caja" : "Entró dinero a la caja", b: m.motivo || "", c: fmt(m.monto), quien: m.uid});
   for (const c of cajasAll().filter(c => c.fecha === t)) { if (c.apertura) ev.push({t: c.apertura.t, k: "caja", ic: "caja", a: "Caja abierta", b: dn(c.dev) || c.devNombre || "", c: fmt(c.apertura.monto), quien: c.apertura.uid}); for (const ci of (c.cierres || [])) ev.push({t: ci.t, k: "caja", ic: "lock", a: "Caja cerrada", b: dn(c.dev) || c.devNombre || "", c: ci.dif === 0 ? "Cuadró" : "Diferencia " + fmt(ci.dif), quien: ci.uid}); for (const m of (c.movs || [])) ev.push({t: m.t, k: "caja", ic: "moneda", a: (m.tipo === "retiro" ? "Salió dinero de caja" : m.tipo === "ingreso" ? "Entró dinero a caja" : "Pago desde caja") + (m.sinPermiso ? " (sin permiso)" : ""), b: m.motivo, c: fmt(m.monto), quien: m.uid}); }
   for (const g of Object.values(col("gastos"))) if (g.fecha === t && g.t) ev.push({t: g.t, k: "gasto", ic: "finanzas", a: "Gasto registrado", b: (g.cat || "") + (g.desc ? " · " + g.desc : ""), c: fmt(g.valor), quien: g.uid});
   for (const m of mermasAll().filter(m => m.fecha === t)) ev.push({t: m.t, k: "merma", ic: "merma", a: "Pérdida anotada", b: ((prod(m.pid) || {}).nombre || "") + " × " + m.q, c: m.motivo, quien: m.uid});
