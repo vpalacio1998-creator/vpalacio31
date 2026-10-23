@@ -13,15 +13,49 @@ const masMes = (mes, n) => { const d = parse(mes + "-01"); d.setMonth(d.getMonth
 
 VIEWS.ventas = () => {
   const f = vdFecha(), hoy = f === S.today, ayer = addDays(S.today, -1);
-  return cabecera("Ventas por día", "Escoge un día en el calendario y mira qué se vendió.") +
+  return cabecera("Día a día", "Escoge un día: lo que entró, lo que salió y qué se vendió.") +
     `<div class="vd-bar">
       <button class="btn ghost vd-flecha" data-act="vdMover" data-v="-1" aria-label="Día anterior">‹</button>
       <button class="btn vd-fecha ${S.vdCal ? "pri" : "ghost"}" data-act="vdCal" aria-expanded="${S.vdCal}" aria-controls="vd-cal">${ic("calendario", 20)}<span><b>${esc(diaLargo(f))}</b>${hoy ? " · hoy" : f === ayer ? " · ayer" : ""}</span><span aria-hidden="true">${S.vdCal ? "▴" : "▾"}</span></button>
       <button class="btn ghost vd-flecha" data-act="vdMover" data-v="1" aria-label="Día siguiente" ${hoy ? "disabled" : ""}>›</button>
     </div>
     <div class="btns vd-r"><button class="btn ghost sm" data-act="vdElegir" data-f="${S.today}" aria-pressed="${hoy}">Hoy</button><button class="btn ghost sm" data-act="vdElegir" data-f="${ayer}" aria-pressed="${f === ayer}">Ayer</button><button class="btn ghost sm" data-act="vdElegir" data-f="${addDays(f, -7)}">Mismo día, semana anterior</button></div>
-    ${S.vdCal ? calendarioVentasHTML(f) : ""}${diaVentasHTML(f)}`;
+    ${S.vdCal ? calendarioVentasHTML(f) : ""}${flujoDiaHTML(f)}${diaVentasHTML(f)}`;
 };
+
+/* flujo de caja del día: lo que entró (ventas por medio de pago, plata que entró a la caja) y lo que salió (pagos desde la caja, gastos
+   anotados en Dinero, devoluciones), cada uno con su detalle y quién lo anotó, y cómo quedó el efectivo de cada caja. El resultado usa la
+   misma cuenta que Caja → Acumulado del mes (resumenMes), para que los dos cuadren. Los retiros del dueño, consignaciones y cambios de
+   billetes se muestran aparte: mueven el efectivo pero no son gasto. */
+function flujoDiaHTML(f) {
+  const R = resumenMes(f.slice(0, 7)), d = R.filas.find(x => x.f === f), ok = ventasDelDia(f).filter(v => !v.anulada);
+  const cajas = cajasAll().filter(c => c.fecha === f && c.apertura), movs = [].concat(...cajas.map(c => (c.movs || []).map(m => Object.assign({dev: c.dev}, m)))).sort((a, b) => (a.t || 0) - (b.t || 0));
+  const gDinero = gastosEn(f, f).filter(g => g.origen !== "caja");
+  if (!ok.length && !cajas.length && !gDinero.length) return "";
+  pedirNombres(uniq(movs.map(m => m.uid).concat(gDinero.map(g => g.uid)).filter(Boolean)));
+  const quien = uid => nombreDe(uid) ? " · " + esc(nombreDe(uid)) : "";
+  const linea = (txt, sub, v, signo) => `<div class="row" style="align-items:flex-start"><div class="l" style="flex:1;min-width:0">${txt}${sub ? `<div class="small muted">${sub}</div>` : ""}</div><div class="r">${signo}${fmt(v)}</div></div>`;
+  const porMedio = {}; for (const v of ok) porMedio[v.m || "Otro"] = (porMedio[v.m || "Otro"] || 0) + (Number(v.total) || 0);
+  const ing = movs.filter(m => m.tipo === "ingreso"), pagos = movs.filter(m => m.tipo === "gasto"), devs = movs.filter(esDevolucion), otrosRet = movs.filter(m => m.tipo === "retiro" && !esDevolucion(m));
+  const vendido = d ? d.vendido : 0, gastos = d ? d.gastos : 0, devol = d ? d.devol : 0, dif = d ? d.dif : 0, neto = d ? d.neto : 0;
+  const nombreCaja = c => c.devNombre || (col("dispositivos")[c.dev] || {}).nombre || "Caja";
+  return `<div class="card"><h3>Flujo de caja del día</h3><p class="small muted" style="margin-top:-4px">Lo que entró y lo que salió el ${esc(diaMes(f))}.</p>
+    <h4 style="margin:12px 0 2px">Entró</h4>
+    ${Object.entries(porMedio).sort((a, b) => b[1] - a[1]).map(([m, v]) => linea("Ventas · " + esc(m), "", v, "+ ")).join("") || '<p class="small muted" style="margin:4px 0">Sin ventas.</p>'}
+    ${ing.map(m => linea("Entró a la caja · " + esc(m.motivo || "Sin detalle"), (m.t ? hora(m.t) : "") + quien(m.uid) + " · no es venta", m.monto, "+ ")).join("")}
+    <h4 style="margin:14px 0 2px">Salió</h4>
+    ${pagos.map(m => linea("Pago desde la caja · " + esc(m.motivo || "Sin detalle"), (m.t ? hora(m.t) : "") + quien(m.uid) + (m.cat ? " · " + esc(m.cat) : ""), m.monto, "− ")).join("")}
+    ${gDinero.map(g => linea("Gasto anotado en Dinero · " + esc(g.cat || "Otros") + (g.desc ? " · " + esc(g.desc) : ""), esc(g.m || "") + quien(g.uid), g.valor, "− ")).join("")}
+    ${devs.map(m => linea("Devolución a cliente", (m.t ? hora(m.t) : "") + quien(m.uid) + (m.motivo ? " · " + esc(m.motivo) : ""), m.monto, "− ")).join("")}
+    ${!pagos.length && !gDinero.length && !devs.length ? '<p class="small muted" style="margin:4px 0">No se anotaron pagos ni gastos.</p>' : ""}
+    ${dif ? linea(dif < 0 ? "Faltó al cerrar caja" : "Sobró al cerrar caja", "Lo que quedó después de lo que revisó el administrador", Math.abs(dif), dif < 0 ? "− " : "+ ") : ""}
+    <div class="row" style="border-top:2px solid var(--line);margin-top:6px"><div class="l"><b>Vendido menos lo que salió</b><div class="small muted">${fmt(vendido)} vendido − ${fmt(gastos + devol)} en pagos y gastos${dif ? (dif < 0 ? " − " : " + ") + fmt(Math.abs(dif)) + (dif < 0 ? " que faltó" : " que sobró") : ""}</div></div><div class="r big" style="font-size:22px">${(neto < 0 ? "− " : "") + fmt(Math.abs(neto))}</div></div>
+    ${otrosRet.length ? `<h4 style="margin:14px 0 2px">Plata que cambió de lugar <span class="xs muted">· no es gasto</span></h4>${otrosRet.map(m => linea("Salió de la caja · " + esc(m.motivo || "Sin detalle"), (m.t ? hora(m.t) : "") + quien(m.uid), m.monto, "− ")).join("")}` : ""}
+    ${cajas.length ? `<h4 style="margin:14px 0 2px">Efectivo en cada caja</h4>${cajas.map(c => { const st = cajaEstado(c), ci = (c.cierres || []).slice(-1)[0], k = st === "cerrada" && ci ? cajaAlCerrar(c, ci) : cajaCalc(c);
+      return linea(esc(nombreCaja(c)), "Empezó con " + fmt(k.apertura) + (st === "cerrada" && ci ? " · contaron " + fmt(ci.contado) : " · sigue abierta"), k.esperado, "Debería haber "); }).join("")}` : ""}
+    <p class="xs muted" style="margin:10px 0 0">Las ventas por QR, Nequi, Daviplata, transferencia o tarjeta entran a la cuenta, no a la caja. Esta cuenta no resta el costo de lo vendido: la utilidad está en Dinero.</p>
+  </div>`;
+}
 
 function calendarioVentasHTML(sel) {
   const mes = S.vdMes || sel.slice(0, 7), mesHoy = S.today.slice(0, 7), primero = mes + "-01";

@@ -1,7 +1,7 @@
 /* ============ 50 · interfaz: base (navegación, ventanas, componentes) ============
    Principios: una acción principal por pantalla, botones grandes, texto humano, ícono + texto, errores recuperables. */
 const RUTAS = {
-  hoy: {t: "Inicio", i: "hoy", rol: "admin"}, vender: {t: "Vender", i: "vender", rol: "all"}, caja: {t: "Caja", i: "caja", rol: "all"}, ventas: {t: "Ventas por día", i: "calendario", rol: "admin"}, inventario: {t: "Inventario", i: "inventario", rol: "all"},
+  hoy: {t: "Inicio", i: "hoy", rol: "admin"}, vender: {t: "Vender", i: "vender", rol: "all"}, caja: {t: "Caja", i: "caja", rol: "all"}, ventas: {t: "Día a día", i: "calendario", rol: "admin"}, inventario: {t: "Inventario", i: "inventario", rol: "all"},
   compras: {t: "Compras", i: "compras", rol: "admin"}, productos: {t: "Productos", i: "productos", rol: "admin"}, analisis: {t: "Análisis", i: "analisis", rol: "admin"}, finanzas: {t: "Dinero", i: "finanzas", rol: "admin"},
   contabilidad: {t: "Contabilidad", i: "reportes", rol: "admin"}, reportes: {t: "Informes", i: "descargar", rol: "admin"}, equipo: {t: "Equipo", i: "equipo", rol: "admin"}, ajustes: {t: "Ajustes", i: "ajustes", rol: "admin"}
 };
@@ -212,7 +212,7 @@ function badgeDe(r) {
 function drawNav() {
   const adm = esAdmin(), nm = adm ? Object.keys(RUTAS).filter(r => !["hoy", "vender", "caja", "inventario", "compras"].includes(r)).reduce((a, r) => a + ((badgeDe(r) || {}).n || 0), 0) : 0;
   const mobile = adm ? ["hoy", "vender", "inventario", "compras"] : ["vender", "caja", "inventario"];
-  $("#tabs").innerHTML = mobile.map(r => navBtn(r, "")).join("") + (adm ? `<button data-act="mas" aria-current="${["productos", "analisis", "finanzas", "contabilidad", "reportes", "equipo", "ajustes", "caja"].includes(S.tab) ? "page" : "false"}"${nm ? ` data-n="${nm}"` : ""}>${ic("mas", 22)}<span>Más</span></button>` : "");
+  $("#tabs").innerHTML = mobile.map(r => navBtn(r, "")).join("") + (adm ? `<button data-act="mas" aria-current="${["productos", "analisis", "finanzas", "contabilidad", "reportes", "equipo", "ajustes", "caja", "ventas"].includes(S.tab) ? "page" : "false"}"${nm ? ` data-n="${nm}"` : ""}>${ic("mas", 22)}<span>Más</span></button>` : "");
   const items = adm ? `${navBtn("hoy", "nv")}${GRUPOS_ADMIN.map(([g, rs]) => `<div class="grp">${g}</div>${rs.map(r => navBtn(r, "nv")).join("")}`).join("")}` : ["vender", "caja", "inventario"].map(r => navBtn(r, "nv")).join("");
   $("#rail").innerHTML = `<div class="logo">OLI</div>${items}<div class="sp"></div><button class="nv" data-act="ayuda" style="display:flex;align-items:center;gap:12px;border:0;background:none;padding:10px 12px;font-weight:600;color:var(--muted);border-radius:12px">${ic("info", 22)}<span>¿Necesitas ayuda?</span></button>
     ${puedeInstalar() ? `<button class="nv" data-act="instalar" style="display:flex;align-items:center;gap:12px;border:0;background:none;padding:10px 12px;font-weight:600;color:var(--marca-d);border-radius:12px">${ic("descargar", 22)}<span>Instalar OLI</span></button>` : ""}

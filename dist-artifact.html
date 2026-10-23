@@ -335,7 +335,7 @@ details.help span{display:block;font-weight:500;font-size:13px;line-height:1.35;
 <div class="sheet hidden" id="sheet"><div class="bg"></div><div class="panel" role="dialog" aria-modal="true" id="panel"></div></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script>window.OLI_BUILD="f41f7e69";</script>
+<script>window.OLI_BUILD="1c91c49a";</script>
 <script>
 (function(){
 "use strict";
@@ -2317,7 +2317,7 @@ async function guardarConfig(patch) { exigirAdmin(); const cur = configNeg(); aw
 /* ============ 50 · interfaz: base (navegación, ventanas, componentes) ============
    Principios: una acción principal por pantalla, botones grandes, texto humano, ícono + texto, errores recuperables. */
 const RUTAS = {
-  hoy: {t: "Inicio", i: "hoy", rol: "admin"}, vender: {t: "Vender", i: "vender", rol: "all"}, caja: {t: "Caja", i: "caja", rol: "all"}, ventas: {t: "Ventas por día", i: "calendario", rol: "admin"}, inventario: {t: "Inventario", i: "inventario", rol: "all"},
+  hoy: {t: "Inicio", i: "hoy", rol: "admin"}, vender: {t: "Vender", i: "vender", rol: "all"}, caja: {t: "Caja", i: "caja", rol: "all"}, ventas: {t: "Día a día", i: "calendario", rol: "admin"}, inventario: {t: "Inventario", i: "inventario", rol: "all"},
   compras: {t: "Compras", i: "compras", rol: "admin"}, productos: {t: "Productos", i: "productos", rol: "admin"}, analisis: {t: "Análisis", i: "analisis", rol: "admin"}, finanzas: {t: "Dinero", i: "finanzas", rol: "admin"},
   contabilidad: {t: "Contabilidad", i: "reportes", rol: "admin"}, reportes: {t: "Informes", i: "descargar", rol: "admin"}, equipo: {t: "Equipo", i: "equipo", rol: "admin"}, ajustes: {t: "Ajustes", i: "ajustes", rol: "admin"}
 };
@@ -2528,7 +2528,7 @@ function badgeDe(r) {
 function drawNav() {
   const adm = esAdmin(), nm = adm ? Object.keys(RUTAS).filter(r => !["hoy", "vender", "caja", "inventario", "compras"].includes(r)).reduce((a, r) => a + ((badgeDe(r) || {}).n || 0), 0) : 0;
   const mobile = adm ? ["hoy", "vender", "inventario", "compras"] : ["vender", "caja", "inventario"];
-  $("#tabs").innerHTML = mobile.map(r => navBtn(r, "")).join("") + (adm ? `<button data-act="mas" aria-current="${["productos", "analisis", "finanzas", "contabilidad", "reportes", "equipo", "ajustes", "caja"].includes(S.tab) ? "page" : "false"}"${nm ? ` data-n="${nm}"` : ""}>${ic("mas", 22)}<span>Más</span></button>` : "");
+  $("#tabs").innerHTML = mobile.map(r => navBtn(r, "")).join("") + (adm ? `<button data-act="mas" aria-current="${["productos", "analisis", "finanzas", "contabilidad", "reportes", "equipo", "ajustes", "caja", "ventas"].includes(S.tab) ? "page" : "false"}"${nm ? ` data-n="${nm}"` : ""}>${ic("mas", 22)}<span>Más</span></button>` : "");
   const items = adm ? `${navBtn("hoy", "nv")}${GRUPOS_ADMIN.map(([g, rs]) => `<div class="grp">${g}</div>${rs.map(r => navBtn(r, "nv")).join("")}`).join("")}` : ["vender", "caja", "inventario"].map(r => navBtn(r, "nv")).join("");
   $("#rail").innerHTML = `<div class="logo">OLI</div>${items}<div class="sp"></div><button class="nv" data-act="ayuda" style="display:flex;align-items:center;gap:12px;border:0;background:none;padding:10px 12px;font-weight:600;color:var(--muted);border-radius:12px">${ic("info", 22)}<span>¿Necesitas ayuda?</span></button>
     ${puedeInstalar() ? `<button class="nv" data-act="instalar" style="display:flex;align-items:center;gap:12px;border:0;background:none;padding:10px 12px;font-weight:600;color:var(--marca-d);border-radius:12px">${ic("descargar", 22)}<span>Instalar OLI</span></button>` : ""}
@@ -3248,15 +3248,49 @@ const masMes = (mes, n) => { const d = parse(mes + "-01"); d.setMonth(d.getMonth
 
 VIEWS.ventas = () => {
   const f = vdFecha(), hoy = f === S.today, ayer = addDays(S.today, -1);
-  return cabecera("Ventas por día", "Escoge un día en el calendario y mira qué se vendió.") +
+  return cabecera("Día a día", "Escoge un día: lo que entró, lo que salió y qué se vendió.") +
     `<div class="vd-bar">
       <button class="btn ghost vd-flecha" data-act="vdMover" data-v="-1" aria-label="Día anterior">‹</button>
       <button class="btn vd-fecha ${S.vdCal ? "pri" : "ghost"}" data-act="vdCal" aria-expanded="${S.vdCal}" aria-controls="vd-cal">${ic("calendario", 20)}<span><b>${esc(diaLargo(f))}</b>${hoy ? " · hoy" : f === ayer ? " · ayer" : ""}</span><span aria-hidden="true">${S.vdCal ? "▴" : "▾"}</span></button>
       <button class="btn ghost vd-flecha" data-act="vdMover" data-v="1" aria-label="Día siguiente" ${hoy ? "disabled" : ""}>›</button>
     </div>
     <div class="btns vd-r"><button class="btn ghost sm" data-act="vdElegir" data-f="${S.today}" aria-pressed="${hoy}">Hoy</button><button class="btn ghost sm" data-act="vdElegir" data-f="${ayer}" aria-pressed="${f === ayer}">Ayer</button><button class="btn ghost sm" data-act="vdElegir" data-f="${addDays(f, -7)}">Mismo día, semana anterior</button></div>
-    ${S.vdCal ? calendarioVentasHTML(f) : ""}${diaVentasHTML(f)}`;
+    ${S.vdCal ? calendarioVentasHTML(f) : ""}${flujoDiaHTML(f)}${diaVentasHTML(f)}`;
 };
+
+/* flujo de caja del día: lo que entró (ventas por medio de pago, plata que entró a la caja) y lo que salió (pagos desde la caja, gastos
+   anotados en Dinero, devoluciones), cada uno con su detalle y quién lo anotó, y cómo quedó el efectivo de cada caja. El resultado usa la
+   misma cuenta que Caja → Acumulado del mes (resumenMes), para que los dos cuadren. Los retiros del dueño, consignaciones y cambios de
+   billetes se muestran aparte: mueven el efectivo pero no son gasto. */
+function flujoDiaHTML(f) {
+  const R = resumenMes(f.slice(0, 7)), d = R.filas.find(x => x.f === f), ok = ventasDelDia(f).filter(v => !v.anulada);
+  const cajas = cajasAll().filter(c => c.fecha === f && c.apertura), movs = [].concat(...cajas.map(c => (c.movs || []).map(m => Object.assign({dev: c.dev}, m)))).sort((a, b) => (a.t || 0) - (b.t || 0));
+  const gDinero = gastosEn(f, f).filter(g => g.origen !== "caja");
+  if (!ok.length && !cajas.length && !gDinero.length) return "";
+  pedirNombres(uniq(movs.map(m => m.uid).concat(gDinero.map(g => g.uid)).filter(Boolean)));
+  const quien = uid => nombreDe(uid) ? " · " + esc(nombreDe(uid)) : "";
+  const linea = (txt, sub, v, signo) => `<div class="row" style="align-items:flex-start"><div class="l" style="flex:1;min-width:0">${txt}${sub ? `<div class="small muted">${sub}</div>` : ""}</div><div class="r">${signo}${fmt(v)}</div></div>`;
+  const porMedio = {}; for (const v of ok) porMedio[v.m || "Otro"] = (porMedio[v.m || "Otro"] || 0) + (Number(v.total) || 0);
+  const ing = movs.filter(m => m.tipo === "ingreso"), pagos = movs.filter(m => m.tipo === "gasto"), devs = movs.filter(esDevolucion), otrosRet = movs.filter(m => m.tipo === "retiro" && !esDevolucion(m));
+  const vendido = d ? d.vendido : 0, gastos = d ? d.gastos : 0, devol = d ? d.devol : 0, dif = d ? d.dif : 0, neto = d ? d.neto : 0;
+  const nombreCaja = c => c.devNombre || (col("dispositivos")[c.dev] || {}).nombre || "Caja";
+  return `<div class="card"><h3>Flujo de caja del día</h3><p class="small muted" style="margin-top:-4px">Lo que entró y lo que salió el ${esc(diaMes(f))}.</p>
+    <h4 style="margin:12px 0 2px">Entró</h4>
+    ${Object.entries(porMedio).sort((a, b) => b[1] - a[1]).map(([m, v]) => linea("Ventas · " + esc(m), "", v, "+ ")).join("") || '<p class="small muted" style="margin:4px 0">Sin ventas.</p>'}
+    ${ing.map(m => linea("Entró a la caja · " + esc(m.motivo || "Sin detalle"), (m.t ? hora(m.t) : "") + quien(m.uid) + " · no es venta", m.monto, "+ ")).join("")}
+    <h4 style="margin:14px 0 2px">Salió</h4>
+    ${pagos.map(m => linea("Pago desde la caja · " + esc(m.motivo || "Sin detalle"), (m.t ? hora(m.t) : "") + quien(m.uid) + (m.cat ? " · " + esc(m.cat) : ""), m.monto, "− ")).join("")}
+    ${gDinero.map(g => linea("Gasto anotado en Dinero · " + esc(g.cat || "Otros") + (g.desc ? " · " + esc(g.desc) : ""), esc(g.m || "") + quien(g.uid), g.valor, "− ")).join("")}
+    ${devs.map(m => linea("Devolución a cliente", (m.t ? hora(m.t) : "") + quien(m.uid) + (m.motivo ? " · " + esc(m.motivo) : ""), m.monto, "− ")).join("")}
+    ${!pagos.length && !gDinero.length && !devs.length ? '<p class="small muted" style="margin:4px 0">No se anotaron pagos ni gastos.</p>' : ""}
+    ${dif ? linea(dif < 0 ? "Faltó al cerrar caja" : "Sobró al cerrar caja", "Lo que quedó después de lo que revisó el administrador", Math.abs(dif), dif < 0 ? "− " : "+ ") : ""}
+    <div class="row" style="border-top:2px solid var(--line);margin-top:6px"><div class="l"><b>Vendido menos lo que salió</b><div class="small muted">${fmt(vendido)} vendido − ${fmt(gastos + devol)} en pagos y gastos${dif ? (dif < 0 ? " − " : " + ") + fmt(Math.abs(dif)) + (dif < 0 ? " que faltó" : " que sobró") : ""}</div></div><div class="r big" style="font-size:22px">${(neto < 0 ? "− " : "") + fmt(Math.abs(neto))}</div></div>
+    ${otrosRet.length ? `<h4 style="margin:14px 0 2px">Plata que cambió de lugar <span class="xs muted">· no es gasto</span></h4>${otrosRet.map(m => linea("Salió de la caja · " + esc(m.motivo || "Sin detalle"), (m.t ? hora(m.t) : "") + quien(m.uid), m.monto, "− ")).join("")}` : ""}
+    ${cajas.length ? `<h4 style="margin:14px 0 2px">Efectivo en cada caja</h4>${cajas.map(c => { const st = cajaEstado(c), ci = (c.cierres || []).slice(-1)[0], k = st === "cerrada" && ci ? cajaAlCerrar(c, ci) : cajaCalc(c);
+      return linea(esc(nombreCaja(c)), "Empezó con " + fmt(k.apertura) + (st === "cerrada" && ci ? " · contaron " + fmt(ci.contado) : " · sigue abierta"), k.esperado, "Debería haber "); }).join("")}` : ""}
+    <p class="xs muted" style="margin:10px 0 0">Las ventas por QR, Nequi, Daviplata, transferencia o tarjeta entran a la cuenta, no a la caja. Esta cuenta no resta el costo de lo vendido: la utilidad está en Dinero.</p>
+  </div>`;
+}
 
 function calendarioVentasHTML(sel) {
   const mes = S.vdMes || sel.slice(0, 7), mesHoy = S.today.slice(0, 7), primero = mes + "-01";
@@ -3324,7 +3358,7 @@ ACT.vdMover = (el, d) => { const f = addDays(vdFecha(), Number(d.v) || 0); if (f
    la caja), las devoluciones y lo que faltó o sobró al cerrar caja, día por día y acumulado. Usa las mismas reglas que
    "¿Cuánta plata hay?" (74-liquidez) para que los dos números cuadren. La utilidad con el costo de lo vendido está en Dinero → Mes. */
 S.cajaVista = "hoy"; S.cajaMes = null;
-const vistaCajaSeg = () => `<div class="seg" role="group" aria-label="Qué ver" style="margin-bottom:14px"><button data-act="cajaVista" data-v="hoy" aria-pressed="${S.cajaVista !== "mes"}">Hoy</button><button data-act="cajaVista" data-v="mes" aria-pressed="${S.cajaVista === "mes"}">Acumulado del mes</button></div>`;
+const vistaCajaSeg = () => `<div class="seg" role="group" aria-label="Qué ver" style="margin-bottom:14px"><button data-act="cajaVista" data-v="hoy" aria-pressed="${S.cajaVista !== "mes"}">Hoy</button><button data-act="cajaVista" data-v="mes" aria-pressed="${S.cajaVista === "mes"}">Acumulado del mes</button></div><button class="lnk" style="margin:-6px 0 14px" data-act="verDiaVentas" data-f="${addDays(S.today, -1)}">${ic("calendario", 16)} Ver lo que entró y salió ayer</button>`;
 const mesCaja = () => S.cajaMes && S.cajaMes <= S.today.slice(0, 7) ? S.cajaMes : S.today.slice(0, 7);
 const primerMesDatos = () => { const fs = ventasOk().map(v => v.fecha).concat(cajasAll().map(c => c.fecha), Object.values(col("gastos")).map(g => g && g.fecha)).filter(Boolean).sort(); return (fs[0] || S.today).slice(0, 7); };
 
@@ -3383,7 +3417,7 @@ function cajaMesHTML() {
       ${L.otrosRet ? fila("Salió de la caja por «Otro»", "Si fue un pago, anótenlo como gasto", L.otrosRet) : ""}${L.otrosIng ? fila("Entró a la caja por «Otro»", "", L.otrosIng) : ""}
       ${L.sinAnotar ? fila("Faltó por «Gasto sin anotar»", "Se resta cuando anoten ese gasto en Dinero", L.sinAnotar) : ""}
       ${L.aCuentas ? fila("Cobrado por transferencia o QR (se marcó efectivo)", "No faltó: esa plata está en la cuenta, no en la caja", L.aCuentas) : ""}</div>` : ""}
-    <div class="card"><h3>Día por día</h3><p class="small muted" style="margin-top:-4px">Toca un día para ver qué se vendió.</p>
+    <div class="card"><h3>Día por día</h3><p class="small muted" style="margin-top:-4px">Toca un día para ver lo que entró y lo que salió, y qué se vendió.</p>
       ${tablaVista([{h: "Día", f: d => `<button class="lnk" data-act="verDiaVentas" data-f="${esc(d.f)}">${esc(diaCorto(d.f))}</button>`}, {h: "Vendido", n: 1, f: d => fmt(d.vendido)}, {h: "Gastos", n: 1, f: d => d.gastos || d.devol ? "− " + fmt(d.gastos + d.devol) : "–"},
         {h: "Caja", n: 1, f: d => [d.dif ? `<span style="color:${d.dif < 0 ? "var(--danger)" : "inherit"}">${d.dif < 0 ? "Faltó " : "Sobró "}${fmt(Math.abs(d.dif))}</span>` : "",
           d.sinAnotar ? `<span class="muted">Faltó ${fmt(d.sinAnotar)} (gasto sin anotar)</span>` : "", d.aCuentas ? `<span class="muted">${fmt(d.aCuentas)} pagados por transferencia o QR</span>` : "", d.abiertas ? '<span class="muted">abierta</span>' : "",

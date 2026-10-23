@@ -3,7 +3,7 @@
    la caja), las devoluciones y lo que faltó o sobró al cerrar caja, día por día y acumulado. Usa las mismas reglas que
    "¿Cuánta plata hay?" (74-liquidez) para que los dos números cuadren. La utilidad con el costo de lo vendido está en Dinero → Mes. */
 S.cajaVista = "hoy"; S.cajaMes = null;
-const vistaCajaSeg = () => `<div class="seg" role="group" aria-label="Qué ver" style="margin-bottom:14px"><button data-act="cajaVista" data-v="hoy" aria-pressed="${S.cajaVista !== "mes"}">Hoy</button><button data-act="cajaVista" data-v="mes" aria-pressed="${S.cajaVista === "mes"}">Acumulado del mes</button></div>`;
+const vistaCajaSeg = () => `<div class="seg" role="group" aria-label="Qué ver" style="margin-bottom:14px"><button data-act="cajaVista" data-v="hoy" aria-pressed="${S.cajaVista !== "mes"}">Hoy</button><button data-act="cajaVista" data-v="mes" aria-pressed="${S.cajaVista === "mes"}">Acumulado del mes</button></div><button class="lnk" style="margin:-6px 0 14px" data-act="verDiaVentas" data-f="${addDays(S.today, -1)}">${ic("calendario", 16)} Ver lo que entró y salió ayer</button>`;
 const mesCaja = () => S.cajaMes && S.cajaMes <= S.today.slice(0, 7) ? S.cajaMes : S.today.slice(0, 7);
 const primerMesDatos = () => { const fs = ventasOk().map(v => v.fecha).concat(cajasAll().map(c => c.fecha), Object.values(col("gastos")).map(g => g && g.fecha)).filter(Boolean).sort(); return (fs[0] || S.today).slice(0, 7); };
 
@@ -62,7 +62,7 @@ function cajaMesHTML() {
       ${L.otrosRet ? fila("Salió de la caja por «Otro»", "Si fue un pago, anótenlo como gasto", L.otrosRet) : ""}${L.otrosIng ? fila("Entró a la caja por «Otro»", "", L.otrosIng) : ""}
       ${L.sinAnotar ? fila("Faltó por «Gasto sin anotar»", "Se resta cuando anoten ese gasto en Dinero", L.sinAnotar) : ""}
       ${L.aCuentas ? fila("Cobrado por transferencia o QR (se marcó efectivo)", "No faltó: esa plata está en la cuenta, no en la caja", L.aCuentas) : ""}</div>` : ""}
-    <div class="card"><h3>Día por día</h3><p class="small muted" style="margin-top:-4px">Toca un día para ver qué se vendió.</p>
+    <div class="card"><h3>Día por día</h3><p class="small muted" style="margin-top:-4px">Toca un día para ver lo que entró y lo que salió, y qué se vendió.</p>
       ${tablaVista([{h: "Día", f: d => `<button class="lnk" data-act="verDiaVentas" data-f="${esc(d.f)}">${esc(diaCorto(d.f))}</button>`}, {h: "Vendido", n: 1, f: d => fmt(d.vendido)}, {h: "Gastos", n: 1, f: d => d.gastos || d.devol ? "− " + fmt(d.gastos + d.devol) : "–"},
         {h: "Caja", n: 1, f: d => [d.dif ? `<span style="color:${d.dif < 0 ? "var(--danger)" : "inherit"}">${d.dif < 0 ? "Faltó " : "Sobró "}${fmt(Math.abs(d.dif))}</span>` : "",
           d.sinAnotar ? `<span class="muted">Faltó ${fmt(d.sinAnotar)} (gasto sin anotar)</span>` : "", d.aCuentas ? `<span class="muted">${fmt(d.aCuentas)} pagados por transferencia o QR</span>` : "", d.abiertas ? '<span class="muted">abierta</span>' : "",
