@@ -600,6 +600,28 @@ begin
   perform t_assert((select (xx->>'cajaCerrada')::boolean and (xx->>'recibida')::bigint > 0 from oli_docs o, jsonb_array_elements(o.data->'items') xx where o.collection = 'anulaciones' and o.doc_id = '2026-10-14_d1' and xx->>'id' = 'an-ac-1')
     and (select coalesce((xx->>'cajaCerrada')::boolean, false) from oli_docs o, jsonb_array_elements(o.data->'items') xx where o.collection = 'anulaciones' and o.doc_id = '2026-10-14_d1' and xx->>'id' = 'an-ac-2') = false,
     '…pero queda marcada «caja cerrada» con la hora en que llegó (la que ya estaba no se toca)');
+  -- T41: recordatorios (9 a. m.: cajas que quedaron abiertas y pagos sin confirmar; pedido semanal 3 h y 1 h antes del límite)
+  reset role;
+  insert into oli_push_subs (endpoint, org_id, user_id, device_id, p256dh, auth) values ('https://push.example/rec', org, a, 'dA', 'k', 'x') on conflict (endpoint) do update set baja = null;
+  insert into cash_sessions (org_id, id, store_id, device_id, local_date, status, opened_at, opening_amount) values (org, '2026-10-20_dz', st, 'dz', '2026-10-20', 'abierta', now(), 0);
+  insert into oli_docs (org_id, store_id, collection, doc_id, data) values (org, st, 'config', 'negocio', '{"pedidoSemanal":{"activo":true,"cats":["Paletas"],"llega":2,"cierreDia":1,"cierreHora":12,"paquete":10}}')
+    on conflict (org_id, collection, doc_id) do update set data = oli_docs.data || excluded.data;
+  n := oli.push_recordatorios('2026-10-26 14:30:00+00');                                   -- lunes 9:30 a. m. en Colombia
+  perform t_assert(n = 2, 'el lunes a las 9 a. m. salen dos recordatorios (pendientes y pedido): ' || n);
+  perform t_assert((select body from oli_push_queue where org_id = org and tag = 'pend-2026-10-26') like '%caja%20/10%'
+    and (select body from oli_push_queue where org_id = org and tag = 'pend-2026-10-26') like '%sin confirmar (%', 'pendientes: la caja que quedó abierta (con su fecha) y los pagos sin confirmar con su total');
+  perform t_assert((select title from oli_push_queue where org_id = org and tag = 'pedido-2026-10-26-9') = 'Hoy hasta las 12 m. se hace el pedido de Paletas'
+    and (select body from oli_push_queue where org_id = org and tag = 'pedido-2026-10-26-9') like '%llega el 27/10%', 'pedido: la hora límite, qué categoría y cuándo llega (sin inventar cantidades)');
+  perform t_assert(oli.push_recordatorios('2026-10-26 14:50:00+00') = 0, 'en la misma hora no se repite');
+  n := oli.push_recordatorios('2026-10-26 16:10:00+00');
+  perform t_assert(n = 1 and exists (select 1 from oli_push_queue where org_id = org and tag = 'pedido-2026-10-26-11'), 'a las 11 a. m. (1 h antes) se recuerda otra vez el pedido');
+  perform t_assert(oli.push_recordatorios('2026-10-27 15:30:00+00') = 0, 'el martes a las 10 a. m. no sale nada (ni pedido ni pendientes fuera de las 9)');
+  insert into oli_docs (org_id, store_id, collection, doc_id, data) values (org, st, 'compras', 'c-rec', '{"fecha":"2026-11-02","estado":"pedido","lineas":[]}');
+  n := oli.push_recordatorios('2026-11-02 14:30:00+00');
+  perform t_assert(n = 1 and exists (select 1 from oli_push_queue where org_id = org and tag = 'pend-2026-11-02') and not exists (select 1 from oli_push_queue where org_id = org and tag = 'pedido-2026-11-02-9'), 'si ese lunes ya se registró el pedido, no se recuerda (los pendientes sí)');
+  update cash_sessions set status = 'cerrada' where org_id = org and status = 'abierta';
+  update payments set confirmed = true where org_id = org;
+  perform t_assert(oli.push_recordatorios('2026-11-03 14:30:00+00') = 0, 'sin cajas abiertas ni pagos por confirmar, a las 9 a. m. no se manda nada');
   -- T16: coherencia de totales
   reset role;
   perform t_assert((select sum(total) from sales) = (select sum(amount) from payments), 'total de ventas = total de pagos');

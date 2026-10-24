@@ -343,6 +343,7 @@ function alertas() {
           d: rechTxt(d) + ". " + (dias >= DIAS_EQUIPO_VIEJO
             ? "Ese equipo no se conecta desde hace " + dias + " días: si se borró o se reemplazó, " + (uno ? "ese cambio se perdió" : "esos cambios se perdieron") + " (no llegaron al servidor). Si ya no existe, quita este aviso en Equipo → «Quitar el aviso»."
             : (uno ? "Sigue guardado" : "Siguen guardados") + " en ese equipo, no en el servidor: allá toca «Hay datos que revisar» (arriba) y luego «Reintentar el envío». Si vuelve a fallar, ingresa en ese equipo con tu cuenta: como administrador puedes reintentarlo" + (DS.backend === "supabase" ? " o descartarlo" : "") + ". Última conexión de ese equipo: " + haceTxt(d.vis) + "."), tab: "equipo"}); }
+      for (const c of cajasAbiertasViejas()) out.push({sev: "warn", tipo: "caja", t: "La caja " + ((col("dispositivos")[c.dev] || {}).nombre || c.devNombre || "") + " del " + diaCorto(c.fecha) + " sigue abierta.", d: "Cuenta el efectivo de esa caja y ciérrala; si no se usó, ciérrala con lo que tenga.", tab: "caja", act: "cerrarCaja", id: c.id});
       for (const x of anulacionesCajaCerrada(addDays(S.today, -30), S.today)) out.push({sev: "bad", tipo: "caja", t: "Se anuló " + x.venta + " (" + fmt(x.total) + ") con la caja ya cerrada.", d: "La anulación llegó al servidor después del cierre. Revisa si de verdad se hizo antes de cerrar: la plata de esa venta ya se había contado.", tab: "reportes"});
       for (const a of anomalias()) out.push({sev: a.sev, tipo: "anomalia", t: a.t, d: a.d, tab: a.ir === "hoy" ? "hoy" : a.ir === "compras" ? "compras" : a.ir === "inventario" ? "inventario" : a.ir === "cierres" ? "reportes" : "reportes", anom: true});
       for (const a of alertasCostos()) out.push({sev: a.tipo === "sube" ? "warn" : "ok", tipo: "costo", t: (a.insumo ? "El costo de " : "El costo de ") + a.p.nombre + (a.tipo === "sube" ? " aumentó " : " bajó ") + Math.round(Math.abs(a.ch) * 100) + "%.", d: a.insumo ? "Costo anterior " + fmt(a.prev) + ", nuevo " + fmt(a.nuevo) + ". Revisa precio o receta." : "Margen de " + pct(a.mPrev) + " a " + pct(a.mNuevo) + ". Revisa precio o receta.", tab: "productos", pid: a.p.id});
@@ -357,6 +358,9 @@ function alertas() {
   });
 }
 
+/* cajas de días anteriores que siguen abiertas (de cualquier equipo), sin importar cuántos días lleven: antes solo se miraba la última
+   semana y una caja olvidada dejaba de avisarse aunque siguiera abierta (sus cuentas no cuadran hasta que se cierre) */
+const cajasAbiertasViejas = () => cajasAll().filter(c => c.fecha < S.today && c.fecha >= addDays(S.today, -HIST_DIAS) && c.apertura && cajaEstado(c) === "abierta").sort((a, b) => b.fecha.localeCompare(a.fecha));
 /* ---- ¿qué debería hacer hoy? (centro de decisiones) ---- */
 function decisionesHoy() {
   return memo("decisiones", () => {
@@ -367,7 +371,7 @@ function decisionesHoy() {
     const ps = pedidoSemanalResumen(); if (ps && !ps.hecho && ps.paquetes > 0 && ps.horas <= 36) (ps.horas <= 6 ? urg : imp).unshift({t: "Hacer el pedido de " + ps.cats + ": " + ps.paquetes + (ps.paquetes === 1 ? " paquete" : " paquetes") + ".", d: "Se puede pedir hasta el " + diaCorto(ps.L.cierre) + " a las " + horaTxt(ps.cierreHora) + " (llega el " + diaCorto(ps.L.llega) + ").", tab: "compras"});
     for (const r of riesgosInsumos()) (r.sev === "bad" ? urg : imp).push({t: "Reponer " + prod(r.pid).nombre + ".", d: r.d, tab: "compras"});
     // cajas de días anteriores que siguen abiertas (de cualquier equipo): RESOLVER abre el cierre de esa caja
-    for (const c of cajasAll().filter(c => c.fecha < t && c.fecha >= addDays(t, -7) && c.apertura && cajaEstado(c) === "abierta").sort((a, b) => b.fecha.localeCompare(a.fecha))) urgCaja.push({t: "Cerrar la caja " + (c.fecha === addDays(t, -1) ? "de ayer" : "del " + diaCorto(c.fecha)) + " (" + ((col("dispositivos")[c.dev] || {}).nombre || c.devNombre || "caja") + ").", d: "Quedó abierta. Cuenta el efectivo de esa caja y ciérrala.", tab: "caja", act: "cerrarCaja", id: c.id});
+    for (const c of cajasAbiertasViejas()) urgCaja.push({t: "Cerrar la caja " + (c.fecha === addDays(t, -1) ? "de ayer" : "del " + diaCorto(c.fecha)) + " (" + ((col("dispositivos")[c.dev] || {}).nombre || c.devNombre || "caja") + ").", d: "Quedó abierta. Cuenta el efectivo de esa caja y ciérrala.", tab: "caja", act: "cerrarCaja", id: c.id});
     // diferencias de cierre de la última semana que nadie ha revisado: RESOLVER abre la revisión (qué pasó y cómo corregirlo)
     for (const c of cajasAll().filter(c => c.fecha >= addDays(t, -7) && cajaEstado(c) === "cerrada").sort((a, b) => b.fecha.localeCompare(a.fecha))) { const r = difCierre(c); if (r && Math.abs(r.final) >= 1000 && !r.revisada) urgDif.push({t: "Revisar diferencia de caja de " + fmt(r.final) + " (" + ((col("dispositivos")[c.dev] || {}).nombre || c.devNombre || "caja") + ", " + diaCorto(c.fecha) + ").", d: r.ci.obs || "Sin observación.", tab: "caja", act: "resolverDif", id: c.id}); }
     for (const a of anomalias().filter(x => x.sev === "bad")) urg.push({t: a.t, d: a.d, tab: "inventario"});

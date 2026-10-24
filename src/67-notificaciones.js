@@ -7,7 +7,7 @@
    Si la sesión del administrador termina (cerrar sesión, vencida o revocada), el equipo deja de recibirlos y se borran los
    avisos que ya estaban a la vista: el equipo puede quedar en manos de un empleado. */
 const NOTI = {perm: "default", sub: null, info: null, registrada: false, verificado: false, cargando: false, revisado: false, guardando: Promise.resolve()};
-const TIPOS_NOTI = [["venta", "Cada venta"], ["anulacion", "Ventas anuladas"], ["caja", "Abrir y cerrar caja (con faltantes o sobrantes)"], ["dinero", "Plata que entra o sale de la caja"], ["problema", "Cambios que no llegan al servidor"]];
+const TIPOS_NOTI = [["venta", "Cada venta"], ["anulacion", "Ventas anuladas"], ["caja", "Abrir y cerrar caja (con faltantes o sobrantes)"], ["dinero", "Plata que entra o sale de la caja"], ["problema", "Cambios que no llegan al servidor"], ["pendientes", "Lo que quedó pendiente (9 a. m.): cajas abiertas de otros días y pagos sin confirmar"], ["pedido", "Recordatorio del pedido semanal (el día límite)"]];
 const pushSoportado = () => { try { return !!window.OLI_PWA && "serviceWorker" in navigator && "PushManager" in window && "Notification" in window; } catch (e) { return false; } };
 const notisPosibles = () => DS.backend === "supabase" && esAdmin();
 const b64uBytes = s => { const b = atob(s.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((s.length + 3) % 4)); const u = new Uint8Array(b.length); for (let i = 0; i < b.length; i++) u[i] = b.charCodeAt(i); return u; };
