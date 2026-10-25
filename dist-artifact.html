@@ -335,7 +335,7 @@ details.help span{display:block;font-weight:500;font-size:13px;line-height:1.35;
 <div class="sheet hidden" id="sheet"><div class="bg"></div><div class="panel" role="dialog" aria-modal="true" id="panel"></div></div>
 <div class="toast" id="toast" role="status" aria-live="polite"></div>
 
-<script>window.OLI_BUILD="ca7af8ef";</script>
+<script>window.OLI_BUILD="6b03ffc3";</script>
 <script>
 (function(){
 "use strict";
@@ -1924,6 +1924,7 @@ function decisionesHoy() {
     for (const {c, r} of difsSinRevisar().filter(x => Math.abs(x.r.final) >= DIF_GRANDE)) { urgDif.push({t: "Revisar diferencia de caja de " + fmt(r.final) + " (" + ((col("dispositivos")[c.dev] || {}).nombre || c.devNombre || "caja") + ", " + diaCorto(c.fecha) + ").", d: r.ci.obs || "Sin observación.", tab: "caja", act: "resolverDif", id: c.id}); }
     for (const a of anomalias().filter(x => x.sev === "bad")) urg.push({t: a.t, d: a.d, tab: "inventario"});
     const pq = difsPequenas(); if (pq.length) imp.push({t: "Revisar " + (pq.length === 1 ? "una diferencia pequeña de caja" : pq.length + " diferencias pequeñas de caja") + " (" + fmt(sum(pq, x => x.r.final)) + ").", d: pq.map(x => diaCorto(x.c.fecha) + ": " + fmt(x.r.final) + (x.r.ci.obs ? " · " + x.r.ci.obs : "")).join(" · "), tab: "caja"});
+    for (const x of pedidosPendientes().filter(y => y.llega === S.today)) imp.push({t: "Registrar llegada del pedido de " + resumenPedido(x.c) + ".", d: "Llega hoy. Así el inventario queda al día.", tab: "compras"});
     for (const x of pedidosAtrasados()) imp.push({t: "¿Llegó el pedido de " + resumenPedido(x.c) + "?", d: "Debía llegar el " + diaCorto(x.llega) + ". Registra la llegada o cancélalo.", tab: "compras"});
     const pend = ventasOk().filter(v => v.pend).length; if (pend) imp.push({t: "Confirmar " + pend + " pagos digitales.", d: "Verifica que llegaron al banco.", tab: "caja"});
     for (const a of alertasCostos().filter(x => x.tipo === "sube").slice(0, 2)) imp.push({t: "Revisar el costo de " + a.p.nombre + ": subió " + Math.round(a.ch * 100) + "%.", d: "Margen " + pct(a.mPrev) + " → " + pct(a.mNuevo) + ".", tab: "productos"});
