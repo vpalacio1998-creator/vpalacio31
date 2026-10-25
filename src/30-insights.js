@@ -22,7 +22,12 @@ function dowFactors() {
   });
 }
 /* ---- promedio diario y tendencia por producto ---- */
-function avgDaily(pid, win = 14) { const dias = histInfo().dias.slice(-win); if (dias.length < 3) return null; const u = unidadesDia()[pid] || {}; return sum(dias, d => u[d] || 0) / dias.length; }
+/* promedio diario de los últimos días con ventas, con más peso a los recientes: con pocos días (tienda nueva) el peso se reduce a la
+   mitad cada 2 días, para que unos primeros días fuera de lo común (la apertura) no inflen lo que viene; con 14 días o más, cada 5.
+   Medido con las ventas reales de la tienda (17 al 23-oct): el promedio simple esperaba bastante más de lo que se vendió; este, menos. */
+const vidaMedia = () => histInfo().n < MIN_DIAS ? 2 : 5;
+function promPesado(dias, u) { let s = 0, w = 0; const hl = vidaMedia(); dias.forEach((d, i) => { const k = Math.pow(0.5, (dias.length - 1 - i) / hl); s += (u[d] || 0) * k; w += k; }); return w ? s / w : 0; }
+function avgDaily(pid, win = 14) { const dias = histInfo().dias.slice(-win); if (dias.length < 3) return null; return promPesado(dias, unidadesDia()[pid] || {}); }
 function unidadesVent(pid, n, desfase = 0) { const dias = histInfo().dias; const sl = dias.slice(Math.max(0, dias.length - n - desfase), dias.length - desfase); const u = unidadesDia()[pid] || {}; return {u: sum(sl, d => u[d] || 0), dias: sl.length}; }
 function tendencia(pid) { const a = unidadesVent(pid, 7, 0), b = unidadesVent(pid, 7, 7); if (a.dias < 7 || b.dias < 7 || b.u < 5) return null; return a.u / b.u; }
 const tendTienda = () => memo("tt", () => { const a = sum(histInfo().dias.slice(-7), d => histVentasDia()[d].total), b = sum(histInfo().dias.slice(-14, -7), d => histVentasDia()[d].total); return histInfo().n >= 14 && b > 0 ? a / b : null; });
@@ -54,7 +59,7 @@ function demanda(pid, fechas) { let s = 0; for (const f of fechas) { const d = d
 // unidades que se espera VENDER de un producto en esas fechas (para plata). Igual que demanda, pero los conos y combos cuentan como tales.
 function demandaVendida(pid, fechas) {
   const p = prod(pid); if (!p || !(p.cono || p.combo)) return demanda(pid, fechas);
-  const dias = histInfo().dias.slice(-14); if (dias.length < 3) return null; const u = vendidasDia()[pid] || {}, base = sum(dias, d => u[d] || 0) / dias.length;
+  const dias = histInfo().dias.slice(-14); if (dias.length < 3) return null; const u = vendidasDia()[pid] || {}, base = promPesado(dias, u);
   const tr = clamp(tendTienda() != null ? tendTienda() : 1, 0.75, 1.35); let s = 0;
   for (const f of fechas) { let d = base * factorDia(f).fac * tr; if (f === S.today) d = Math.max(0, d - (u[S.today] || 0)); s += d; }
   return s;
@@ -106,6 +111,16 @@ function planSemanal(p, st) {
   return {L, antes, semana, demAntes, demSem, pack, alLlegar, need, comprar, paquetes: comprar == null ? null : comprar / pack, yaPedido: pp.ese};
 }
 
+/* cómo viene acertando el cálculo con los productos del pedido semanal: en cada uno de los últimos días con ventas (hasta 7), lo que el
+   promedio de ahora habría esperado con los días de antes, contra lo que se vendió. Es una comprobación con las ventas reales, no una promesa. */
+function aciertoSemanal() {
+  return memo("acierto", () => {
+    if (!pedidoSemanalCfg()) return null; const ps = terminados().filter(p => esSemanal(p) && p.controla !== false && !p.combo), dias = histInfo().dias, ud = unidadesDia(), ult = dias.slice(-7);
+    let esp = 0, real = 0, n = 0;
+    for (const D of ult) { const prev = dias.filter(d => d < D).slice(-14); if (prev.length < 3) continue; n++; for (const p of ps) { const u = ud[p.id] || {}; esp += promPesado(prev, u); real += u[D] || 0; } }
+    return {n, esp, real, vendidas: sum(ult, d => sum(ps, p => (ud[p.id] || {})[d] || 0)), dias: ult.length, hist: histInfo().n};
+  });
+}
 // para Inicio y los recordatorios: cuánto pedir en el próximo pedido semanal y si ya se hizo
 function pedidoSemanalResumen() {
   const c = pedidoSemanalCfg(), L = c && proximaLlegada(); if (!L) return null;
@@ -114,10 +129,23 @@ function pedidoSemanalResumen() {
   return {L, cats: c.cats.join(", "), cierreHora: c.cierreHora, rows, yaPedido, hecho: yaPedido && !rows.length, sinDatos: todas.length > 0 && todas.every(r => r.comprar == null), paquetes: sum(rows, r => r.semanal.paquetes || 0), unidades: sum(rows, r => r.comprar), horas: (L.lim - Date.now()) / 3600000, agotan: todas.filter(r => r.semanal.alLlegar != null && r.semanal.alLlegar < 0)};
 }
 
+/* ---- lo pedido que todavía no llega ----
+   Cada pedido llega el día que dice (llega); si no lo dice, un pedido semanal llega el siguiente día de llegada después de pedirlo y los
+   demás al día siguiente. Lo que ya debió llegar y no se ha registrado no se cuenta como inventario: se pregunta si llegó. */
+function llegadaEsperada(c) {
+  if (c.llega) return c.llega; const cfg = pedidoSemanalCfg(), base = c.fecha || S.today;
+  if (cfg && (c.lineas || []).some(l => esSemanal(prod(l.pid)))) for (let i = 1; i <= 7; i++) { const f = addDays(base, i); if (dowOf(f) === Number(cfg.llega)) return f; }
+  return addDays(base, 1);
+}
+const pedidosPendientes = () => Object.entries(col("compras")).filter(([, c]) => c && c.estado === "pedido").map(([id, c]) => ({id, c, llega: llegadaEsperada(c)}));
+const porLlegar = () => memo("porLlegar", () => { const m = {}; for (const x of pedidosPendientes()) if (x.llega >= S.today) for (const l of (x.c.lineas || [])) { const o = m[l.pid] = m[l.pid] || {}; o[x.llega] = (o[x.llega] || 0) + (Number(l.q) || 0); } return m; });
+const pedidosAtrasados = () => pedidosPendientes().filter(x => x.llega < S.today).sort((a, b) => a.llega.localeCompare(b.llega));
+
 /* ---- cuándo se agota ---- */
 function agotaEn(pid) {
   const p = prod(pid), st = stockDe(pid); if (st == null || p.controla === false) return null; if (st <= 0) return {dias: 0, fecha: S.today};
-  let s = st; for (let i = 0; i < 14; i++) { const f = addDays(S.today, i), d = demandaDia(pid, f, i === 0); if (d == null) return null; s -= d; if (s <= 0) return {dias: i, fecha: f, frac: i === 0}; } return null;
+  const viene = porLlegar()[pid] || {};   // lo que llega ese día se suma antes de vender (no avisa «se agota mañana» si el pedido llega hoy)
+  let s = st; for (let i = 0; i < 14; i++) { const f = addDays(S.today, i), d = demandaDia(pid, f, i === 0); if (d == null) return null; s += viene[f] || 0; s -= d; if (s <= 0) return {dias: i, fecha: f, frac: i === 0}; } return null;
 }
 const cobertura = pid => { const st = stockDe(pid), a = avgDaily(pid); if (st == null || a == null) return null; return a > 0 ? Math.max(0, st) / a : Infinity; };
 function cuandoTxt(f) { const d = diffDays(f, S.today); return d <= 0 ? "hoy" : d === 1 ? "mañana" : d < 7 ? "antes del " + DOW[dowOf(f)] : "en " + d + " días"; }
@@ -243,9 +271,9 @@ function alertasCostos() {
   for (const p of terminados()) {
     const c = costos()[p.id]; const h = (c && c.hist) || [];
     if (h.length >= 2) { const a = h[h.length - 2].c, b = h[h.length - 1].c, ch = a ? (b - a) / a : 0;
-      if (Math.abs(ch) >= 0.05 && S.today <= addDays(ymd(new Date(h[h.length - 1].t)), 60)) out.push({p, tipo: ch > 0 ? "sube" : "baja", prev: a, nuevo: b, ch, mPrev: p.precio ? (p.precio - a) / p.precio : NaN, mNuevo: p.precio ? (p.precio - b) / p.precio : NaN, t: h[h.length - 1].t}); }
+      if (Math.abs(ch) >= 0.05 && S.today <= addDays(ymd(new Date(h[h.length - 1].t)), 14)) out.push({p, tipo: ch > 0 ? "sube" : "baja", prev: a, nuevo: b, ch, mPrev: p.precio ? (p.precio - a) / p.precio : NaN, mNuevo: p.precio ? (p.precio - b) / p.precio : NaN, t: h[h.length - 1].t}); }
   }
-  for (const p of insumos()) { const c = costos()[p.id], h = (c && c.hist) || []; if (h.length >= 2) { const a = h[h.length - 2].c, b = h[h.length - 1].c, ch = a ? (b - a) / a : 0; if (Math.abs(ch) >= 0.05 && S.today <= addDays(ymd(new Date(h[h.length - 1].t)), 60)) out.push({p, insumo: true, tipo: ch > 0 ? "sube" : "baja", prev: a, nuevo: b, ch, t: h[h.length - 1].t}); } }
+  for (const p of insumos()) { const c = costos()[p.id], h = (c && c.hist) || []; if (h.length >= 2) { const a = h[h.length - 2].c, b = h[h.length - 1].c, ch = a ? (b - a) / a : 0; if (Math.abs(ch) >= 0.05 && S.today <= addDays(ymd(new Date(h[h.length - 1].t)), 14)) out.push({p, insumo: true, tipo: ch > 0 ? "sube" : "baja", prev: a, nuevo: b, ch, t: h[h.length - 1].t}); } }
   return out.sort((a, b) => b.t - a.t);
 }
 function difRecetas() { if (!esAdmin()) return []; const out = []; for (const p of terminados()) { const cr = costoReceta(p.id), cu = costoActual(p.id); if (cr != null && cu != null && cu > 0 && Math.abs(cr - cu) / cu >= 0.08) out.push({p, receta: cr, registrado: cu}); } return out; }
@@ -305,7 +333,7 @@ function anomalias() {
       if (d30.length >= 30 && h0.length >= 5) for (const m of ["Nequi", "Daviplata", "QR Bancolombia", "Tarjeta"]) { const s30 = d30.filter(v => v.m === m).length / d30.length, s0 = h0.filter(v => v.m === m).length / h0.length; if (s0 - s30 > 0.2) out.push({sev: "warn", t: `Las ventas por ${m} están por encima del comportamiento normal.`, d: Math.round(s0 * 100) + "% de las ventas de hoy contra " + Math.round(s30 * 100) + "% habitual.", ir: "reportes"}); }
     }
     const difs = cajasAll().filter(c => c.fecha >= addDays(t, -29) && cajaEstado(c) === "cerrada" && Math.abs(difFinal(c)) >= 1000);   // después de lo que el administrador ya explicó
-    if (difs.length >= 3) out.push({sev: "warn", t: `Se registraron ${difs.length} cierres con diferencias en 30 días.`, d: "Conviene revisar los cierres y el conteo de efectivo.", ir: "cierres"});
+    if (difs.length >= 3 && sum(difs, c => Math.abs(difFinal(c))) >= 10000) out.push({sev: "warn", t: `Se registraron ${difs.length} cierres con diferencias en 30 días.`, d: "Conviene revisar los cierres y el conteo de efectivo.", ir: "cierres"});
     for (const [pid, st] of Object.entries(stockMap())) { const p = prod(pid); if (st != null && st < 0 && (!p || (p.activo !== false && !p.combo))) out.push({sev: "bad", t: `El inventario de ${(p || {}).nombre || pid} quedó negativo (${st}).`, d: "Puede ser un conflicto entre dispositivos o un conteo desactualizado. Haz un conteo.", ir: "inventario"}); }   // un combo o un producto desactivado no se cuenta: su alerta sale en el insumo
     const viejos = conteosViejos(); if (viejos.length) { const malos = viejos.filter(x => x.dias >= HIST_DIAS - 2);
       out.push({sev: malos.length ? "bad" : "warn", t: malos.length ? `El inventario de ${malos.slice(0, 3).map(x => x.p.nombre).join(", ")}${malos.length > 3 ? " y " + (malos.length - 3) + " más" : ""} ya no es confiable en este equipo: hay que contarlo.` : `Hay ${viejos.length === 1 ? "1 producto que no se cuenta" : viejos.length + " productos que no se cuentan"} hace más de 70 días: ${viejos.slice(0, 3).map(x => x.p.nombre).join(", ")}${viejos.length > 3 ? "…" : ""}.`,
@@ -328,6 +356,13 @@ const rechInfoDe = d => (Array.isArray(d.rechInfo) ? d.rechInfo : []).filter(x =
 const rechTxt = d => d.rechInfo.map(x => x.c + (x.e ? " (" + x.e + ")" : "")).join("; ");
 const DIAS_EQUIPO_VIEJO = 3;
 
+/* diferencias de caja de la última semana sin revisar: desde DIF_GRANDE cada una es urgente; las pequeñas (de $1.000 a DIF_GRANDE: un
+   error de cambio, unas monedas) se juntan en un solo aviso que no es urgente. Antes tres diferencias de ±$1.000 salían como urgentes. */
+const DIF_GRANDE = 5000;
+const difsSinRevisar = () => cajasAll().filter(c => c.fecha >= addDays(S.today, -7) && cajaEstado(c) === "cerrada").map(c => ({c, r: difCierre(c)})).filter(x => x.r && Math.abs(x.r.final) >= 1000 && !x.r.revisada).sort((a, b) => b.c.fecha.localeCompare(a.c.fecha));
+const difsPequenas = () => difsSinRevisar().filter(x => Math.abs(x.r.final) < DIF_GRANDE);
+const resumenPedido = c => { const ls = (c.lineas || []).filter(l => l && l.pid); return ls.slice(0, 2).map(l => ((prod(l.pid) || {}).nombre || l.pid) + " (" + fmtN(Number(l.q) || 0, 0) + ")").join(", ") + (ls.length > 2 ? " y " + (ls.length - 2) + " más" : "") || "un pedido"; };
+
 /* ---- alertas unificadas (cada rol ve lo que le corresponde) ---- */
 function alertas() {
   return memo("alertas:" + (DS.isAdmin ? "a" : "e"), () => {
@@ -335,7 +370,8 @@ function alertas() {
     for (const r of riesgosStock()) out.push({sev: r.sev, tipo: "inventario", t: r.t, d: r.d, tab: "inventario", pid: r.pid});
     for (const r of riesgosInsumos()) out.push({sev: r.sev, tipo: "inventario", t: r.t, d: r.d, tab: "inventario", pid: r.pid});
     const pend = ventasOk().filter(v => v.pend && (adm || v.fecha >= addDays(S.today, -3))).length; if (pend) out.push({sev: "warn", tipo: "caja", t: pend + (pend === 1 ? " pago digital por confirmar." : " pagos digitales por confirmar."), d: "Verifica que llegó el dinero.", tab: "caja"});
-    for (const c of adm ? cajasAll().filter(x => x.fecha >= addDays(S.today, -7) && cajaEstado(x) === "cerrada") : [cajaHoy()].filter(x => x && cajaEstado(x) === "cerrada")) { const r = difCierre(c); if (r && Math.abs(r.final) >= (c.fecha === S.today ? 1 : 1000) && !r.revisada) out.push({sev: "warn", tipo: "caja", t: "Diferencia de caja de " + fmt(r.final) + " en " + ((col("dispositivos")[c.dev] || {}).nombre || c.devNombre || "la caja") + (c.fecha === S.today ? "" : " (" + diaCorto(c.fecha) + ")") + ".", d: (r.ci.obs ? "Observación: " + r.ci.obs + ". " : "Sin observación. ") + (adm ? "Toca para decir qué pasó." : "El administrador la revisa."), tab: "caja", act: adm ? "resolverDif" : "", id: c.id}); }
+    if (adm) { const pq = difsPequenas(); if (pq.length) out.push({sev: "ok", tipo: "caja", t: pq.length === 1 ? "Una diferencia pequeña de caja sin revisar (" + fmt(pq[0].r.final) + ")." : pq.length + " diferencias pequeñas de caja sin revisar (" + fmt(sum(pq, x => x.r.final)) + " en total).", d: "Menos de " + fmt(DIF_GRANDE) + " cada una. Revísalas en Caja → Acumulado del mes cuando puedas.", tab: "caja"}); }
+    for (const c of adm ? cajasAll().filter(x => x.fecha >= addDays(S.today, -7) && cajaEstado(x) === "cerrada") : [cajaHoy()].filter(x => x && cajaEstado(x) === "cerrada")) { const r = difCierre(c); if (r && Math.abs(r.final) >= (c.fecha === S.today ? 1 : DIF_GRANDE) && !r.revisada) out.push({sev: "warn", tipo: "caja", t: "Diferencia de caja de " + fmt(r.final) + " en " + ((col("dispositivos")[c.dev] || {}).nombre || c.devNombre || "la caja") + (c.fecha === S.today ? "" : " (" + diaCorto(c.fecha) + ")") + ".", d: (r.ci.obs ? "Observación: " + r.ci.obs + ". " : "Sin observación. ") + (adm ? "Toca para decir qué pasó." : "El administrador la revisa."), tab: "caja", act: adm ? "resolverDif" : "", id: c.id}); }
     if (SYNC.rechazadas) out.push({sev: "bad", tipo: "sync", t: SYNC.rechazadas === 1 ? "Un cambio de este equipo no se pudo enviar: el servidor no lo aceptó." : SYNC.rechazadas + " cambios de este equipo no se pudieron enviar: el servidor no los aceptó.", d: rechazadas().map(descCambio).join("; ") + ". Toca «Hay datos que revisar» (arriba) para ver por qué y reintentar.", tab: "equipo"});
     if (adm) {
       for (const d of dispositivosEstado()) if (!d.mine && d.rech > 0) { const uno = d.rech === 1, dias = Math.floor(d.hace / 86400000);
@@ -346,13 +382,12 @@ function alertas() {
       for (const c of cajasAbiertasViejas()) out.push({sev: "warn", tipo: "caja", t: "La caja " + ((col("dispositivos")[c.dev] || {}).nombre || c.devNombre || "") + " del " + diaCorto(c.fecha) + " sigue abierta.", d: "Cuenta el efectivo de esa caja y ciérrala; si no se usó, ciérrala con lo que tenga.", tab: "caja", act: "cerrarCaja", id: c.id});
       for (const x of anulacionesCajaCerrada(addDays(S.today, -30), S.today)) out.push({sev: "bad", tipo: "caja", t: "Se anuló " + x.venta + " (" + fmt(x.total) + ") con la caja ya cerrada.", d: "La anulación llegó al servidor después del cierre. Revisa si de verdad se hizo antes de cerrar: la plata de esa venta ya se había contado.", tab: "reportes"});
       for (const a of anomalias()) out.push({sev: a.sev, tipo: "anomalia", t: a.t, d: a.d, tab: a.ir === "hoy" ? "hoy" : a.ir === "compras" ? "compras" : a.ir === "inventario" ? "inventario" : a.ir === "cierres" ? "reportes" : "reportes", anom: true});
-      for (const a of alertasCostos()) out.push({sev: a.tipo === "sube" ? "warn" : "ok", tipo: "costo", t: (a.insumo ? "El costo de " : "El costo de ") + a.p.nombre + (a.tipo === "sube" ? " aumentó " : " bajó ") + Math.round(Math.abs(a.ch) * 100) + "%.", d: a.insumo ? "Costo anterior " + fmt(a.prev) + ", nuevo " + fmt(a.nuevo) + ". Revisa precio o receta." : "Margen de " + pct(a.mPrev) + " a " + pct(a.mNuevo) + ". Revisa precio o receta.", tab: "productos", pid: a.p.id});
+      for (const a of alertasCostos().filter(x => x.tipo === "sube")) out.push({sev: a.tipo === "sube" ? "warn" : "ok", tipo: "costo", t: (a.insumo ? "El costo de " : "El costo de ") + a.p.nombre + (a.tipo === "sube" ? " aumentó " : " bajó ") + Math.round(Math.abs(a.ch) * 100) + "%.", d: a.insumo ? "Costo anterior " + fmt(a.prev) + ", nuevo " + fmt(a.nuevo) + ". Revisa precio o receta." : "Margen de " + pct(a.mPrev) + " a " + pct(a.mNuevo) + ". Revisa precio o receta.", tab: "productos", pid: a.p.id});
       const pp = proximoPuente(7); if (pp) out.push({sev: "warn", tipo: "compra", t: "Se viene fin de semana largo: " + rangoFechasTxt(pp.fechas) + ".", d: (pp.nombres.join(", ") || "Festivo") + ". Haz el pedido para los " + pp.fechas.length + " días: OLI ya pide " + Math.round(colchonFestivo() * 100) + " % más para esos días.", tab: "compras"});
       for (const a of alertasHelado()) out.push({sev: a.sev, tipo: "helado", t: a.t, d: a.d, tab: "inventario"});
-      const cp = Object.values(col("compras")).filter(x => x.estado === "pedido"); if (cp.length) out.push({sev: "ok", tipo: "compra", t: cp.length + (cp.length === 1 ? " compra pendiente por recibir." : " compras pendientes por recibir."), d: "Registra la llegada para actualizar el inventario.", tab: "compras"});
+      for (const x of pedidosAtrasados()) out.push({sev: "warn", tipo: "compra", t: "¿Llegó el pedido de " + resumenPedido(x.c) + "?", d: "Se pidió el " + diaCorto(x.c.fecha) + " y debía llegar el " + diaCorto(x.llega) + ". Si llegó, registra la llegada (el inventario lo necesita); si no va a llegar, cancélalo.", tab: "compras"});
       const ta = dispositivosEstado().filter(d => !d.mine && !d.online && d.hace > 10 * 60000 && d.hace < 12 * 3600000);
       for (const d of ta) { const cj = cajaDe(S.today, d.dev); if (cj && cajaEstado(cj) === "abierta") out.push({sev: "warn", tipo: "sync", t: d.nombre + " lleva " + Math.round(d.hace / 60000) + " minutos sin sincronizar.", d: "Puede estar sin Internet. Sus ventas aparecerán cuando se reconecte.", tab: "equipo"}); }
-      const rd = recomendarPrecios(); if (rd.length) out.push({sev: "ok", tipo: "oportunidad", t: rd.length + (rd.length === 1 ? " producto con margen mejorable." : " productos con margen mejorable."), d: "Revisa las recomendaciones de precio.", tab: "analisis"});
     }
     const rank = {bad: 0, warn: 1, ok: 2}; return out.sort((a, b) => rank[a.sev] - rank[b.sev]);
   });
@@ -373,9 +408,10 @@ function decisionesHoy() {
     // cajas de días anteriores que siguen abiertas (de cualquier equipo): RESOLVER abre el cierre de esa caja
     for (const c of cajasAbiertasViejas()) urgCaja.push({t: "Cerrar la caja " + (c.fecha === addDays(t, -1) ? "de ayer" : "del " + diaCorto(c.fecha)) + " (" + ((col("dispositivos")[c.dev] || {}).nombre || c.devNombre || "caja") + ").", d: "Quedó abierta. Cuenta el efectivo de esa caja y ciérrala.", tab: "caja", act: "cerrarCaja", id: c.id});
     // diferencias de cierre de la última semana que nadie ha revisado: RESOLVER abre la revisión (qué pasó y cómo corregirlo)
-    for (const c of cajasAll().filter(c => c.fecha >= addDays(t, -7) && cajaEstado(c) === "cerrada").sort((a, b) => b.fecha.localeCompare(a.fecha))) { const r = difCierre(c); if (r && Math.abs(r.final) >= 1000 && !r.revisada) urgDif.push({t: "Revisar diferencia de caja de " + fmt(r.final) + " (" + ((col("dispositivos")[c.dev] || {}).nombre || c.devNombre || "caja") + ", " + diaCorto(c.fecha) + ").", d: r.ci.obs || "Sin observación.", tab: "caja", act: "resolverDif", id: c.id}); }
+    for (const {c, r} of difsSinRevisar().filter(x => Math.abs(x.r.final) >= DIF_GRANDE)) { urgDif.push({t: "Revisar diferencia de caja de " + fmt(r.final) + " (" + ((col("dispositivos")[c.dev] || {}).nombre || c.devNombre || "caja") + ", " + diaCorto(c.fecha) + ").", d: r.ci.obs || "Sin observación.", tab: "caja", act: "resolverDif", id: c.id}); }
     for (const a of anomalias().filter(x => x.sev === "bad")) urg.push({t: a.t, d: a.d, tab: "inventario"});
-    const cp = Object.values(col("compras")).filter(c => c.estado === "pedido"); if (cp.length) imp.push({t: "Registrar llegada de " + cp.length + (cp.length === 1 ? " pedido." : " pedidos."), d: "Así el inventario queda al día.", tab: "compras"});
+    const pq = difsPequenas(); if (pq.length) imp.push({t: "Revisar " + (pq.length === 1 ? "una diferencia pequeña de caja" : pq.length + " diferencias pequeñas de caja") + " (" + fmt(sum(pq, x => x.r.final)) + ").", d: pq.map(x => diaCorto(x.c.fecha) + ": " + fmt(x.r.final) + (x.r.ci.obs ? " · " + x.r.ci.obs : "")).join(" · "), tab: "caja"});
+    for (const x of pedidosAtrasados()) imp.push({t: "¿Llegó el pedido de " + resumenPedido(x.c) + "?", d: "Debía llegar el " + diaCorto(x.llega) + ". Registra la llegada o cancélalo.", tab: "compras"});
     const pend = ventasOk().filter(v => v.pend).length; if (pend) imp.push({t: "Confirmar " + pend + " pagos digitales.", d: "Verifica que llegaron al banco.", tab: "caja"});
     for (const a of alertasCostos().filter(x => x.tipo === "sube").slice(0, 2)) imp.push({t: "Revisar el costo de " + a.p.nombre + ": subió " + Math.round(a.ch * 100) + "%.", d: "Margen " + pct(a.mPrev) + " → " + pct(a.mNuevo) + ".", tab: "productos"});
     const dw = dowOf(t); if (dw >= 3 && dw <= 5 && histInfo().ok) { const pf = prepararFinde(); if (pf.enRiesgo.length) imp.push({t: "Preparar producción para el fin de semana.", d: pf.enRiesgo.length + " productos presentan riesgo de agotamiento.", tab: "compras"}); else opo.push({t: "Fin de semana: inventario cubre la demanda esperada.", d: "Ventas esperadas ~" + fmt(pf.ventasEsp) + ".", tab: "compras"}); }

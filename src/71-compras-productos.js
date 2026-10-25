@@ -37,6 +37,12 @@ function filaCompra(r) {
     <button class="btn ghost sm" style="margin-top:8px" data-act="porque" data-id="${esc(r.pid)}" data-h="${esc(S.horiz)}">¿Por qué?</button></div>`;
 }
 // los productos que llegan un solo día de la semana: su pedido, para cuándo y hasta cuándo se puede pedir
+// lo que de verdad se vendió y qué tanto se equivoca el cálculo (para decidir con los ojos abiertos, sobre todo con pocos días de ventas)
+function aciertoHTML(c) {
+  const a = aciertoSemanal(); if (!a || !a.dias) return ""; const cats = esc(c.cats.join(", "));
+  return `<p class="small" style="margin:10px 0 0">En los últimos ${a.dias} días con ventas se vendieron <b>${fmtN(a.vendidas, 0)}</b> de ${cats}.${a.n && a.real ? ` Con el cálculo de ahora, esos días OLI habría esperado ~${fmtN(a.esp, 0)} (${a.esp >= a.real ? "+" : "−"}${Math.abs(Math.round((a.esp / a.real - 1) * 100))} %).` : ""}</p>
+    ${a.hist < MIN_DIAS ? `<div class="notice" style="margin:8px 0 0">OLI lleva ${a.hist} ${a.hist === 1 ? "día" : "días"} con ventas: las cantidades de abajo son aproximadas. Compáralas con lo que ves en la nevera antes de pedir.</div>` : ""}`;
+}
 function bloqueSemanal(sem) {
   const c = pedidoSemanalCfg(); if (!c) return ""; const L = proximaLlegada(); if (!L) return "";
   const ya = Object.values(col("compras")).filter(x => x && x.estado === "pedido" && x.llega === L.llega), elegidas = sem.filter(r => S.sel.has(r.pid) && r.comprar > 0);
@@ -44,7 +50,7 @@ function bloqueSemanal(sem) {
   const paq = sum(elegidas, r => r.semanal.paquetes || 0), costo = sum(elegidas, r => (costoActual(r.pid) || 0) * r.comprar);
   return `<div class="card" style="border-left:4px solid ${horas < 24 && !ya.length ? "var(--warn)" : "var(--marca)"}"><div class="row" style="padding-top:0;border:0;align-items:flex-start"><div class="l"><b>Pedido de ${esc(c.cats.join(", "))} · llega el ${esc(diaLargo(L.llega))}</b>
       <div class="small muted">Pídelo hasta el ${esc(diaCorto(L.cierre))} a las ${horaTxt(c.cierreHora)}${faltan ? " · " + faltan : ""}. Tiene que alcanzar del ${esc(diaCorto(L.llega))} al ${esc(diaCorto(addDays(L.sig, -1)))}.</div></div><button class="btn ghost sm" data-act="cfgSemanal">Configurar</button></div>
-    ${ya.length ? `<div class="notice ok" style="margin:8px 0 0">Ya hay ${ya.length === 1 ? "un pedido" : ya.length + " pedidos"} para esa llegada. Lo de abajo ya lo descuenta.</div>` : ""}</div>
+    ${ya.length ? `<div class="notice ok" style="margin:8px 0 0">Ya hay ${ya.length === 1 ? "un pedido" : ya.length + " pedidos"} para esa llegada. Lo de abajo ya lo descuenta.</div>` : ""}${aciertoHTML(c)}</div>
   ${sem.length ? sem.map(filaCompra).join("") : `<p class="muted small">No hay productos de ${esc(c.cats.join(", "))} con control de inventario.</p>`}
   ${sem.length ? `<div class="card"><div class="row" style="padding-top:0"><div><b>${elegidas.length} productos · ${paq} ${paq === 1 ? "paquete" : "paquetes"} (${sum(elegidas, r => r.comprar)} unidades)</b><div class="small muted">${costo ? "Costo estimado " + fmt(costo) : "Sin costo registrado"}</div></div></div><button class="btn pri xl wide" data-act="generarPedido" data-v="semanal" ${elegidas.length ? "" : "disabled"}>${ic("compras", 20)} GENERAR PEDIDO DEL ${esc(DOW[dowOf(L.llega)].toUpperCase())}</button></div>` : ""}`;
 }
