@@ -129,7 +129,7 @@ function hojaBase(wb, nombre, titulo, ctx, ncols, freeze) {
   const ws = wb.addWorksheet(nombreHoja(nombre), {properties: {tabColor: {argb: XC.verde}}, views: [{state: freeze ? "frozen" : "normal", ySplit: freeze || 0, showGridLines: false}],
     pageSetup: {paperSize: 9, orientation: ncols > 8 ? "landscape" : "portrait", fitToPage: true, fitToWidth: 1, fitToHeight: 0, margins: {left: .4, right: .4, top: .5, bottom: .6, header: .25, footer: .25}},
     headerFooter: {oddFooter: "&L&8OLI · Software propiedad de VP Visual Project · Creado por Víctor Palacio&R&8Página &P de &N", oddHeader: "&R&8" + titulo.replace(/&/g, "&&")}});
-  try { if (wb._logo == null) wb._logo = wb.addImage({base64: logoPNG(), extension: "png"}); ws.addImage(wb._logo, {tl: {col: 0.1, row: 0.15}, ext: {width: 74, height: 31}}); } catch (e) { ws.getCell(1, 1).value = "OLI"; ws.getCell(1, 1).font = {bold: true, size: 20, color: {argb: XC.verde}}; }
+  try { if (wb._logo == null) wb._logo = wb.addImage({base64: logoPNG(), extension: "png"}); ws.addImage(wb._logo, {tl: {col: 0.1, row: 0.15}, ext: {width: wb._logoW || 74, height: 31}}); } catch (e) { ws.getCell(1, 1).value = "OLI"; ws.getCell(1, 1).font = {bold: true, size: 20, color: {argb: XC.verde}}; }
   const span = Math.max(4, ncols);
   ws.getRow(1).height = 30; ws.mergeCells(1, 2, 1, span); const t = ws.getCell(1, 2); t.value = titulo; t.font = {bold: true, size: 15, color: {argb: XC.tinta}}; t.alignment = {vertical: "middle"};
   ws.mergeCells(2, 1, 2, span); const p = ws.getCell(2, 1); p.value = "Periodo: " + periodoDoc(ctx.a, ctx.b) + "   ·   " + negocioNombre(); p.font = {bold: true, size: 10.5, color: {argb: XC.verdeO}};
@@ -159,15 +159,6 @@ function hojaTabla(wb, nombre, titulo, cols, rows, ctx, o = {}) {
   ws.pageSetup.printTitlesRow = HR + ":" + HR; ws._oli = {HR, r0, r1, totRow, cols};
   return ws;
 }
-// rango de una columna de una hoja de detalle (se calcula antes de crear la hoja: encabezado en la fila 5, datos desde la 6)
-const rango = (h, k) => { const i = h.cols.findIndex(c => c.k === k || c.id === k), L = colL(i + 1), r0 = 6, r1 = Math.max(r0, 5 + h.n); return `'${h.nombre}'!$${L}$${r0}:$${L}$${r1}`; };
-// tarjeta de indicador en hojas de resumen
-function tarjeta(ws, r, c, etiqueta, valor, nf, nota) {
-  ws.mergeCells(r, c, r, c + 1); ws.mergeCells(r + 1, c, r + 1, c + 1); const l = ws.getCell(r, c), v = ws.getCell(r + 1, c);
-  l.value = etiqueta; l.font = {bold: true, size: 9, color: {argb: XC.gris}}; l.fill = {type: "pattern", pattern: "solid", fgColor: {argb: XC.crema}}; l.border = {top: {style: "thin", color: {argb: XC.borde}}, left: {style: "thin", color: {argb: XC.borde}}, right: {style: "thin", color: {argb: XC.borde}}};
-  v.value = valor; if (nf) v.numFmt = nf; v.font = {bold: true, size: 17, color: {argb: XC.verdeO}}; v.fill = {type: "pattern", pattern: "solid", fgColor: {argb: XC.crema}}; v.alignment = {horizontal: "left", vertical: "middle"}; v.border = {bottom: {style: "thin", color: {argb: XC.borde}}, left: {style: "thin", color: {argb: XC.borde}}, right: {style: "thin", color: {argb: XC.borde}}};
-  ws.getRow(r + 1).height = 28; if (nota) { const n = ws.getCell(r + 2, c); n.value = nota; n.font = {size: 8, italic: true, color: {argb: XC.gris}}; }
-}
 function seccion(ws, r, txt, span = 8) { ws.mergeCells(r, 1, r, span); const c = ws.getCell(r, 1); c.value = txt.toUpperCase(); c.font = {bold: true, size: 11, color: {argb: XC.verde}}; c.border = {bottom: {style: "thin", color: {argb: XC.verde}}}; ws.getRow(r).height = 20; }
 function lineaTexto(ws, r, txt, o = {}) { ws.mergeCells(r, 1, r, o.span || 8); const c = ws.getCell(r, 1); c.value = txt; c.font = Object.assign({size: 10, color: {argb: o.color || XC.tinta}}, o.font || {}); c.alignment = {wrapText: true, vertical: "top"}; if (o.h) ws.getRow(r).height = o.h; return r + 1; }
 function imagen(wb, ws, png, col, row, w, h) { const id = wb.addImage({base64: png, extension: "png"}); ws.addImage(id, {tl: {col, row}, ext: {width: w, height: h}}); }
@@ -195,66 +186,12 @@ const COLS = {
 const NOTA_COSTOS = "El costo de ventas usa el costo registrado de cada producto en la fecha de la venta. Si un producto no tiene costo, se indica y no se inventa.";
 const NOTA_FILTRO = d => d.filtrado ? "Informe filtrado (" + filtrosTxt(d.F) + "). Los gastos generales no se reparten por producto, caja o empleado." : "";
 
-// hoja de resumen ejecutivo con fórmulas que leen las hojas de detalle
-function hojaResumen(wb, d, hojas, titulo) {
-  const ws = hojaBase(wb, "Resumen ejecutivo", titulo, d, 8, 0); for (let i = 1; i <= 8; i++) ws.getColumn(i).width = 17;
-  seccion(ws, 5, "Resumen ejecutivo");
-  const V = hojas.ventas, R = hojas.rent, G = hojas.gastos;
-  const fVentas = V ? `SUMIFS(${rango(V, "total")},${rango(V, "estado")},"Confirmada")` : null, fCosto = R ? `SUM(${rango(R, "costo")})` : null, fGastos = G && d.gastosOp != null ? `SUMIFS(${rango(G, "total")},${rango(G, "categoria")},"<>${BASE_COSTO}")` : null;
-  tarjeta(ws, 6, 1, "VENTAS", fVentas ? {formula: fVentas, result: d.tot} : d.tot, XF.money);
-  tarjeta(ws, 6, 3, "COSTO DE VENTAS", fCosto ? {formula: fCosto, result: d.costo} : d.costo, XF.money, d.sinCosto ? "Faltan costos en " + d.sinCosto + " líneas" : "");
-  tarjeta(ws, 6, 5, "UTILIDAD BRUTA", {formula: "A7-C7", result: d.bruta}, XF.money);
-  tarjeta(ws, 6, 7, "GASTOS", d.gastosOp == null ? "No aplica con filtro" : fGastos ? {formula: fGastos, result: d.gastosOp} : d.gastosOp, XF.money, "Sin materia prima (ya está en el costo)");
-  tarjeta(ws, 10, 1, "UTILIDAD ESTIMADA", d.util == null ? "–" : {formula: "E7-G7", result: d.util}, XF.money);
-  tarjeta(ws, 10, 3, "MARGEN", d.util == null || !d.tot ? "–" : {formula: "IF(A7=0,0,A11/A7)", result: d.margen}, XF.pct);
-  tarjeta(ws, 10, 5, "NÚMERO DE VENTAS", d.n, XF.int);
-  tarjeta(ws, 10, 7, "TICKET PROMEDIO", {formula: "IF(E11=0,0,A7/E11)", result: d.ticket}, XF.money);
-  tarjeta(ws, 14, 1, "UNIDADES VENDIDAS", d.uds, XF.num); tarjeta(ws, 14, 3, "DESCUENTOS", d.desc, XF.money); tarjeta(ws, 14, 5, "VENTAS ANULADAS", d.anuladas, XF.int, d.anuladas ? fmt(d.anuladoTot) + " no se suman" : ""); tarjeta(ws, 14, 7, "MARGEN BRUTO", {formula: "IF(A7=0,0,E7/A7)", result: d.margenBruto || 0}, XF.pct);
-  let y = 18; seccion(ws, y++, "Control de integridad");
-  const inc = d.integ.length; y = lineaTexto(ws, y, inc ? "EL INFORME TIENE " + inc + (inc === 1 ? " INCONSISTENCIA" : " INCONSISTENCIAS") + " (detalle en la hoja Integridad)" : "Sin inconsistencias detectadas en el periodo.", {font: {bold: true, size: 11}, color: inc ? XC.rojo : XC.verdeO});
-  for (const c of d.control) y = lineaTexto(ws, y, (c.ok ? "✓ " : "✗ ") + c.t + (c.ok ? "" : " — diferencia " + fmt(c.x - c.y)), {color: c.ok ? XC.verdeO : XC.rojo});
-  if (d.filtrado) y = lineaTexto(ws, y, NOTA_FILTRO(d), {color: XC.gris, font: {italic: true, size: 9}});
-  y++; seccion(ws, y++, "Gráficos");
-  try {
-    const serie = d.dias.map(x => ({l: diaEje(x.fecha), v: x.ventas, v2: x.bruta}));
-    imagen(wb, ws, grafico("barras", serie, {titulo: "Ventas y utilidad bruta por día", v2: true, leyenda: ["Ventas", "Utilidad bruta"]}), 0, y, 560, 262);
-    let ac = 0; const acum = d.dias.map(x => ({l: diaEje(x.fecha), v: (ac += x.ventas)}));
-    imagen(wb, ws, grafico("linea", acum, {titulo: "Evolución de ventas (acumulado)"}), 4.4, y, 560, 262);
-    y += 15;
-    const tp = d.rent.slice().sort((p, q) => q.ventas - p.ventas).slice(0, 8).map(r => ({l: r.producto, v: r.ventas}));
-    imagen(wb, ws, grafico("hbar", tp, {titulo: "Productos que más venden", h: 380}), 0, y, 560, 262);
-    const cs = d.cats.slice(0, 6); if (d.cats.length > 6) cs.push({n: "Otras", v: sum(d.cats.slice(6), c => c.v)});
-    imagen(wb, ws, grafico("dona", cs.map(c => ({l: c.n, v: c.v})), {titulo: "Ventas por categoría"}), 4.4, y, 560, 262);
-    y += 15;
-  } catch (e) { y = lineaTexto(ws, y, "No se pudieron dibujar los gráficos en este equipo.", {color: XC.gris}); }
-  seccion(ws, y++, "Lo más importante");
-  const masV = top5(d.rent, "unidades", 3).map(r => r.producto + " (" + fmtN(r.unidades, 0) + ")").join(", "), masR = d.rent.filter(r => r.costoOk).slice(0, 3).map(r => r.producto + " (" + fmt(r.bruta) + ")").join(", ");
-  y = lineaTexto(ws, y, "Más vendidos: " + (masV || "—")); y = lineaTexto(ws, y, "Más rentables: " + (masR || "—"));
-  if (d.metodos.length) y = lineaTexto(ws, y, "Medios de pago: " + d.metodos.map(m => m.n + " " + fmt(m.v) + " (" + pct(d.tot ? m.v / d.tot : 0) + ")").join(" · "));
-  const ag = d.inv.filter(r => r.estado === "AGOTADO").map(r => r.producto); y = lineaTexto(ws, y, (d.b < S.today ? "Agotados al " + d.b : "Agotados hoy") + ": " + (ag.length ? ag.join(", ") : "ninguno"));
-  if (d.rec.length) y = lineaTexto(ws, y, "Comprar: " + d.rec.slice(0, 5).map(r => r.cantidad + " " + r.producto).join(", "));
-  y++; y = lineaTexto(ws, y, NOTA_COSTOS, {color: XC.gris, font: {italic: true, size: 9}, h: 26});
-  lineaTexto(ws, y, "OLI · Software propiedad de VP Visual Project · Creado por Víctor Palacio", {color: XC.gris, font: {size: 8}});
-  return ws;
-}
 function hojaIntegridad(wb, d) {
   const rows = d.integ.map(x => ({sev: x.sev === "bad" ? "Alto" : "Medio", t: x.t, n: x.n, d: x.d})).concat(d.control.map(c => ({sev: c.ok ? "OK" : "Alto", t: "Control: " + c.t, n: c.ok ? 0 : 1, d: c.ok ? "Cuadra" : "Diferencia " + fmt(c.x - c.y)})));
   return hojaTabla(wb, "Integridad", "Control de integridad", [{h: "Severidad", k: "sev", estado: 1}, {h: "Validación", k: "t"}, {h: "Cantidad", k: "n", t: "int"}, {h: "Detalle", k: "d"}], rows, d, {notas: [d.integ.length ? "EL INFORME TIENE " + d.integ.length + (d.integ.length === 1 ? " INCONSISTENCIA." : " INCONSISTENCIAS.") : "Sin inconsistencias detectadas."]});
 }
-async function excelGerencial(d) {
-  await lib("ExcelJS"); const wb = nuevoLibro(), titulo = "Informe gerencial";
-  hojaResumen(wb, d, {ventas: {nombre: "Ventas", cols: COLS.ventas, n: d.ventas.length}, rent: {nombre: "Rentabilidad", cols: COLS.rent, n: d.rent.length}, gastos: {nombre: "Gastos", cols: COLS.gastos, n: d.gastos.length}}, titulo);
-  hojaTabla(wb, "Ventas", "Detalle de ventas", COLS.ventas, d.ventas, d, {notas: [NOTA_FILTRO(d)].filter(Boolean)});
-  hojaTabla(wb, "Por día", "Ventas por día", COLS.dias, d.dias, d);
-  hojaTabla(wb, "Rentabilidad", "Rentabilidad por producto", COLS.rent, d.rent, d, {notas: [NOTA_COSTOS, "Ordenado de más a menos rentable. Usa los filtros del encabezado para ordenar por unidades, margen o ventas."]});
-  hojaTabla(wb, "Inventario", "Inventario", COLS.inventario, d.inv, d, {leyenda: ["NORMAL", "BAJO", "AGOTADO", "RIESGO", "SIN CONTAR"], notas: ["Inventario inicial = final − entradas + salidas − ajustes. Valor a costo actual."]});
-  hojaTabla(wb, "Compras recomendadas", "Recomendación de compra", COLS.recomendacion, d.rec, d, {notas: ["Recomendación = demanda estimada (7 días) + seguridad − inventario − pedidos pendientes. OLI recomienda; tú decides."]});
-  hojaTabla(wb, "Cajas", "Cajas", COLS.cajas, d.cajas, d);
-  hojaTabla(wb, "Gastos", "Gastos", COLS.gastos, d.gastos, d, {notas: ["Los gastos de la categoría “" + BASE_COSTO + "” no se restan otra vez: ya están en el costo de ventas."]});
-  hojaTabla(wb, "Mermas", "Mermas", COLS.mermas, d.mermas, d);
-  hojaIntegridad(wb, d);
-  return xlsxBlob(wb);
-}
+// el informe gerencial ahora es el informe financiero (81): resumen del negocio primero y después todo el detalle
+async function excelGerencial(d) { return excelFinanciero(d); }
 // Excel por módulo
 const MODULOS = {
   ventas: {t: "Ventas", hojas: d => [["Detalle de ventas", COLS.ventas, d.ventas, {notas: [NOTA_FILTRO(d)].filter(Boolean)}], ["Por día", COLS.dias, d.dias], ["Por medio de pago", [{h: "Medio de pago", k: "n"}, {h: "Ventas", k: "v", t: "money", tot: 1}, {h: "Participación", f: r => d.tot ? r.v / d.tot : 0, t: "pct"}], d.metodos], ["Por empleado", [{h: "Empleado", k: "n"}, {h: "Ventas", k: "v", t: "money", tot: 1}], d.empleados]]},
@@ -483,15 +420,15 @@ async function zipContador(d, conGerencia) {
     hojaTabla(wb, "Conciliación", "Conciliación contable", [{h: "Comparación", k: "n"}, {h: "Valor A", k: "x", t: "money"}, {h: "Valor B", k: "y", t: "money"}, {h: "Diferencia", k: "dif", t: "money", neg: 1}, {h: "Estado", f: c => c.y == null ? "REQUIERE CONTADOR" : c.ok ? "OK" : "REVISAR", estado: 1}, {h: "Nota", k: "nota"}], d.conc, d);
     hojaIntegridad(wb, d); zip.file("15_RESUMEN_CONTABLE.xlsx", await wb.xlsx.writeBuffer()); }
   zip.file("PDF_RESUMEN_CONTABLE.pdf", await pdfContador(d));
-  if (conGerencia) { zip.file("00_INFORME_GERENCIAL.xlsx", await excelGerencial(d)); zip.file("00_INFORME_EMPRESARIAL.pdf", await pdfEmpresarial(d)); }
+  if (conGerencia) { zip.file("00_INFORME_FINANCIERO.xlsx", await excelGerencial(d)); zip.file("00_INFORME_EMPRESARIAL.pdf", await pdfEmpresarial(d)); }
   zip.file("LEEME.txt", ["OLI · Paquete para el contador", "Periodo: " + periodoDoc(d.a, d.b), "Negocio: " + negocioNombre(), "Generado: " + generadoTxt(), "", "Contenido: 01_VENTAS … 15_RESUMEN_CONTABLE (Excel) y PDF_RESUMEN_CONTABLE.pdf.", d.integ.length ? "ATENCIÓN: EL INFORME TIENE " + d.integ.length + " INCONSISTENCIAS (ver 15_RESUMEN_CONTABLE → Integridad)." : "Sin inconsistencias detectadas.", "", AVISO_TRIB, "", "OLI · Software propiedad de VP Visual Project · Creado por Víctor Palacio"].join("\r\n"));
   return zip.generateAsync({type: "blob", compression: "DEFLATE", compressionOptions: {level: 6}});
 }
 
 /* ---------- acciones de descarga ---------- */
-const NOMBRES = {gerencial: "OLI_Informe_Gerencial", empresarial: "OLI_Informe_Empresarial", dueno: "OLI_Informe_Dueno", contador: "OLI_Resumen_Contable", zip: "OLI_CONTABILIDAD"};
+const NOMBRES = {gerencial: "OLI_Informe_Financiero", empresarial: "OLI_Informe_Empresarial", dueno: "OLI_Informe_Dueno", contador: "OLI_Resumen_Contable", zip: "OLI_CONTABILIDAD"};
 async function generar(tipo, a, b, F) {
-  exigirAdmin(); const d = datosInforme(a, b, ["zip", "contador", "impuestos", "terceros", "auditoria"].includes(tipo) ? {} : F), et = etiquetaPeriodo(a, b);   // lo contable va sin filtros
+  exigirAdmin(); const d = datosInforme(a, b, ["zip", "contador", "impuestos", "terceros", "auditoria", "gerencial"].includes(tipo) ? {} : F), et = etiquetaPeriodo(a, b);   // lo contable va sin filtros
   let blob, nombre;
   if (tipo === "gerencial") { blob = await excelGerencial(d); nombre = NOMBRES.gerencial + "_" + et + ".xlsx"; }
   else if (tipo === "empresarial") { blob = await pdfEmpresarial(d); nombre = NOMBRES.empresarial + "_" + et + ".pdf"; }

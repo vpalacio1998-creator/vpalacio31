@@ -24,7 +24,7 @@ function controlesInforme() {
 }
 const BOTON_INF = (tipo, txt, cls = "pri") => { const g = S.generando === tipo; return `<button class="btn ${cls}" data-act="generar" data-v="${tipo}" ${S.generando ? "disabled" : ""} aria-busy="${g}">${g ? '<span class="spin" aria-hidden="true"></span> Generando…' : ic("descargar", 18) + " " + txt}</button>`; };
 const INFORMES = [
-  {t: "gerencial", n: "Informe gerencial", f: "Excel", d: "Resumen ejecutivo con gráficos, ventas, rentabilidad, inventario, compras, caja, gastos y mermas.", b: "DESCARGAR INFORME GERENCIAL"},
+  {t: "gerencial", n: "Informe financiero", f: "Excel", d: "Al abrirlo: cómo va el negocio en una hoja (ventas, costo, utilidad, gastos, punto de equilibrio, alertas y gráficos). Después el análisis y todo el detalle. Siempre del negocio completo (sin filtros).", b: "DESCARGAR INFORME FINANCIERO"},
   {t: "empresarial", n: "Informe empresarial", f: "PDF", d: "Documento completo de 14 secciones para presentar: ventas, rentabilidad, inventario, tendencias y recomendaciones.", b: "DESCARGAR PDF"},
   {t: "dueno", n: "Informe del dueño", f: "PDF", d: "Dos páginas: cuánto vendí, cuánto gané, qué se agotó, qué comprar y qué hacer.", b: "DESCARGAR PDF"},
   {t: "zip", n: "Paquete para el contador", f: "ZIP", d: "15 archivos Excel (ventas, compras, gastos, caja, inventario, impuestos, terceros, auditoría…) y el resumen contable en PDF.", b: "GENERAR PAQUETE"}
